@@ -220,3 +220,44 @@ describe('Business Centers por usuário', () => {
     assert.equal(fake.callsTo('/campaign/create/')[0].token, OTHER_TOKEN, 'usa o token do dono da BC');
   });
 });
+
+describe('Contas de anúncio: de qual Business Center cada uma é', () => {
+  let ctx;
+  let fake;
+  before(async () => {
+    fake = createFakeTiktok();
+    ctx = await startTestServer({ limits: LIMITS, config: tiktokTestConfig(), fetchFn: fake.fetchFn });
+  });
+  after(() => ctx.stop());
+
+  it('cada conta traz a BC de origem (nome, ID, tipo de conexão, visibilidade); ordenadas por BC e nome; sem token', async () => {
+    const admin = await loginAdmin(ctx);
+    const { client } = await createUser(ctx, { approve: true });
+    fake.state.bcs = { 111: ['9001', '9002'], 222: ['9101'], 333: ['9201', '9202'] };
+    assert.equal((await admin.post('/api/tiktok/business-centers', { name: 'Loja Matriz', bcId: '111', accessToken: GOOD_TOKEN, shared: true })).status, 201);
+    assert.equal((await client.post('/api/tiktok/business-centers', { name: 'Agência Bia', bcId: '222', accessToken: OTHER_TOKEN })).status, 201);
+    // conexão por link da usuária (sem ID de BC)
+    fake.grantAuthCode('code-contas-xxxxxxxxxx', { advertisers: ['9301'] });
+    const start = (await client.post('/api/tiktok/connect', { name: 'Conta por Link' })).json;
+    const state = new URL(start.url).searchParams.get('state');
+    await ctx.client().get(`/api/tiktok/callback?auth_code=code-contas-xxxxxxxxxx&state=${encodeURIComponent(state)}`);
+
+    const res = await client.get('/api/tiktok/advertisers');
+    assert.equal(res.status, 200);
+    const rows = res.json.advertisers.map((a) => [a.id, a.businessCenterName, a.businessCenterBcId, a.businessCenterAuthType, a.businessCenterShared, a.businessCenterOwned]);
+    assert.deepEqual(rows, [
+      ['9101', 'Agência Bia', '222', 'token', false, true],
+      ['9301', 'Conta por Link', null, 'oauth', false, true],
+      ['9001', 'Loja Matriz', '111', 'token', true, false],
+      ['9002', 'Loja Matriz', '111', 'token', true, false],
+    ]);
+    assert.ok(res.json.advertisers.every((a) => a.businessCenterStatus === 'active' && a.currency));
+    assert.ok(!res.text.includes(GOOD_TOKEN) && !res.text.includes(OTHER_TOKEN) && !/access_token/.test(res.text));
+  });
+
+  it('outro usuário não vê contas nem BCs privadas alheias', async () => {
+    const { client } = await createUser(ctx, { approve: true });
+    const ids = (await client.get('/api/tiktok/advertisers')).json.advertisers.map((a) => a.id);
+    assert.deepEqual(ids, ['9001', '9002'], 'só as compartilhadas pelo admin');
+  });
+});

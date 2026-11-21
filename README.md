@@ -63,7 +63,10 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
    - **Por token (avançado):** informa o **ID da BC** e um **token de acesso** da Marketing API. O servidor valida o token no TikTok
      antes de gravar e sincroniza as contas de anúncio. Fica disponível em “Prefiro colar um token” e é o caminho usado quando o app
      do TikTok não está configurado.
-2. **Cada usuário enxerga e usa apenas as próprias BCs** (Início, TikTok Ads e publicação de campanhas). Nunca vê as de outros.
+2. **Contas TikTok** tem duas sub-abas: **Business Centers** (as conexões) e **Contas de anúncio** (todas as contas disponíveis, cada uma com
+   a Business Center de origem, tipo de conexão, moeda, fuso e status; com busca por nome/ID e filtro por BC). Em conexões por link o
+   TikTok não informa o ID da BC, então a origem é o nome da conexão.
+   **Cada usuário enxerga e usa apenas as próprias BCs** (Início, TikTok Ads e publicação de campanhas). Nunca vê as de outros.
 3. **Compartilhamento:** somente o admin pode marcar uma BC como "compartilhada com a equipe" (em Conectar/Editar). BCs
    compartilhadas aparecem para todos como somente leitura. As BCs que existiam antes desta mudança ficaram compartilhadas.
 4. **Gerenciar** (editar, trocar token, sincronizar, remover) cabe ao dono e ao admin. O admin supervisiona todas as BCs (com o

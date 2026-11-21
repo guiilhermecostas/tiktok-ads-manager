@@ -132,7 +132,8 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
     /** Contas de anúncio das BCs visíveis para o usuário. */
     async advertisers(userId) {
       const { rows } = await db.query(
-        `SELECT a.advertiser_id, a.name, a.currency, a.timezone, bc.id AS bc_row_id, bc.name AS bc_name, bc.status AS bc_status
+        `SELECT a.advertiser_id, a.name, a.currency, a.timezone, bc.id AS bc_row_id, bc.name AS bc_name, bc.status AS bc_status,
+                bc.bc_id AS bc_external_id, bc.auth_type AS bc_auth_type, bc.shared AS bc_shared, (bc.owner_id = $1) AS bc_owned
            FROM tiktok_advertisers a JOIN tiktok_business_centers bc ON bc.id = a.business_center_id
           WHERE bc.owner_id = $1 OR bc.shared
           ORDER BY lower(bc.name), lower(a.name)`,
@@ -146,6 +147,10 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
         businessCenterId: r.bc_row_id,
         businessCenterName: r.bc_name,
         businessCenterStatus: r.bc_status,
+        businessCenterBcId: r.bc_external_id ?? null, // ID da BC no TikTok (conexão por link não tem)
+        businessCenterAuthType: r.bc_auth_type,
+        businessCenterShared: r.bc_shared === true,
+        businessCenterOwned: r.bc_owned === true,
       }));
     },
     /** Se a mesma conta existir em mais de uma BC visível, prefere a do próprio usuário. */

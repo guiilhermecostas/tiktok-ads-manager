@@ -3,6 +3,7 @@ import { h, icon } from '../dom.js';
 import { formatDate } from '../format.js';
 import { state } from '../state.js';
 import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, toast } from '../ui.js';
+import { accountsTabs } from './accounts-tabs.js';
 import { connectByLink } from './connect-link.js';
 import { pageHeader } from './layout.js';
 
@@ -144,6 +145,7 @@ export async function businessCentersView() {
         'div',
         null,
         header,
+        accountsTabs('/business-centers'),
         notice,
         h(
           'div',
@@ -190,6 +192,7 @@ export async function businessCentersView() {
       'div',
       null,
       header,
+      accountsTabs('/business-centers'),
       notice,
       h('div', { class: 'card table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, heads.map((t) => h('th', { scope: 'col' }, t)))), h('tbody', null, rows))),
       admin ? h('p', { class: 'muted section-note' }, 'Como administrador você vê as Business Centers de todos os usuários e pode compartilhar uma BC com a equipe em Editar. Os dados de BCs privadas de outros usuários não aparecem nas suas telas.') : null,
