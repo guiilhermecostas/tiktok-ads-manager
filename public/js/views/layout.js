@@ -192,8 +192,7 @@ export function renderLayout(ctx, currentPath, content) {
   const fab = h(
     'button',
     { type: 'button', class: 'fab', 'aria-label': 'Publicar campanha', title: 'Publicar campanha', onClick: () => openCampaignWizard(ctx) },
-    h('span', { class: 'fab__icon', 'aria-hidden': 'true' }, icon('megaphone', 20)),
-    h('span', { class: 'fab__label' }, 'Publicar campanha'),
+    'Publicar campanha',
   );
 
   shell.append(sidebar, workspace, fab);
