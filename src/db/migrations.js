@@ -1,0 +1,242 @@
+/**
+ * Migrações do PostgreSQL (Supabase). Registradas na tabela `schema_migrations`; cada uma roda uma única vez,
+ * em ordem, dentro de UMA transação com trava (várias instâncias subindo juntas não se atropelam).
+ * NUNCA edite uma migração já aplicada: crie uma nova com a próxima versão.
+ *
+ * SEGURANÇA (Supabase): o Supabase expõe o schema `public` por uma API REST pública (chave `anon`).
+ * Por isso TODA tabela nasce com RLS ligado e SEM políticas (nega tudo) e sem nenhum privilégio para
+ * `anon`, `authenticated` e `service_role`. O sistema acessa o banco só pelo servidor, com a conexão Postgres.
+ *
+ * ISOLAMENTO: as tabelas são criadas no schema padrão da conexão (DATABASE_SCHEMA, ex.: `tiktok_ads`), que NÃO é exposto
+ * pela API REST do Supabase e não mistura com outros sistemas do mesmo projeto.
+ */
+const APP_TABLES = ['users', 'sessions', 'campaigns', 'tiktok_business_centers', 'tiktok_advertisers'];
+
+// Tabelas com coluna `id` de identidade (têm sequência própria). pg_get_serial_sequence falha em tabela sem `id`.
+const IDENTITY_TABLES = ['users', 'campaigns', 'tiktok_business_centers'];
+
+/**
+ * SQL de proteção de tabelas do app (use em TODA migração que cria tabela):
+ *  - RLS ligado e sem políticas = ninguém passa pela API REST do Supabase;
+ *  - nenhum privilégio para as funções da API (anon, authenticated, service_role) nas NOSSAS tabelas e sequências
+ *    (nunca em "todas as do schema": o banco pode ser compartilhado com outro sistema).
+ * Se um dia a chave service_role vazar, estas tabelas continuam inacessíveis pela API REST.
+ */
+function protectTables({ rls, revoke, identity }) {
+  return `
+      ${rls.map((t) => `ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY;`).join('\n      ')}
+
+      DO $$
+      DECLARE
+        api_role TEXT;
+        tbl TEXT;
+        seq TEXT;
+      BEGIN
+        FOREACH api_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = api_role) THEN
+            EXECUTE format('REVOKE ALL ON TABLE ${revoke.join(', ')} FROM %I', api_role);
+            FOREACH tbl IN ARRAY ARRAY[${identity.length ? identity.map((t) => `'${t}'`).join(', ') : ''}]::text[] LOOP
+              seq := pg_get_serial_sequence(tbl, 'id');
+              IF seq IS NOT NULL THEN
+                EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM %I', seq, api_role);
+              END IF;
+            END LOOP;
+          END IF;
+        END LOOP;
+      END $$;`;
+}
+
+export const MIGRATIONS = [
+  {
+    version: 1,
+    description: 'Esquema inicial (usuários, sessões, campanhas, Business Centers do TikTok) + RLS',
+    sql: `
+      CREATE TABLE users (
+        id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        email         TEXT        NOT NULL,
+        name          TEXT        NOT NULL,
+        company       TEXT,
+        password_hash TEXT        NOT NULL,
+        role          TEXT        NOT NULL DEFAULT 'user'    CHECK (role IN ('user','admin')),
+        status        TEXT        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','blocked')),
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        reviewed_at   TIMESTAMPTZ,
+        reviewed_by   INTEGER REFERENCES users(id) ON DELETE SET NULL
+      );
+      CREATE UNIQUE INDEX users_email_lower_key ON users (lower(email));
+      CREATE INDEX idx_users_status ON users (status);
+
+      CREATE TABLE sessions (
+        token_hash TEXT        PRIMARY KEY,
+        user_id    INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        csrf_token TEXT        NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX idx_sessions_user ON sessions (user_id);
+      CREATE INDEX idx_sessions_expires ON sessions (expires_at);
+
+      CREATE TABLE campaigns (
+        id                 INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id            INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name               TEXT        NOT NULL,
+        objective          TEXT        NOT NULL,
+        daily_budget       INTEGER     NOT NULL CHECK (daily_budget >= 0),
+        status             TEXT        NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','paused')),
+        config             JSONB,
+        advertiser_id      TEXT,
+        tiktok_campaign_id TEXT,
+        tiktok_adgroup_id  TEXT,
+        tiktok_ad_id       TEXT,
+        publish_error      TEXT,
+        published_at       TIMESTAMPTZ,
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX idx_campaigns_user ON campaigns (user_id);
+
+      -- Business Centers pertencem a um usuário; "shared" libera a leitura para toda a equipe (só admin define).
+      -- O token fica CRIPTOGRAFADO pela aplicação (AES-256-GCM) antes de chegar aqui.
+      CREATE TABLE tiktok_business_centers (
+        id             INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        owner_id       INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        bc_id          TEXT        NOT NULL,
+        name           TEXT        NOT NULL,
+        access_token   TEXT        NOT NULL,
+        shared         BOOLEAN     NOT NULL DEFAULT false,
+        status         TEXT        NOT NULL DEFAULT 'active' CHECK (status IN ('active','error')),
+        last_error     TEXT,
+        last_synced_at TIMESTAMPTZ,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (owner_id, bc_id)
+      );
+      CREATE INDEX idx_tiktok_bc_owner ON tiktok_business_centers (owner_id);
+
+      CREATE TABLE tiktok_advertisers (
+        business_center_id INTEGER NOT NULL REFERENCES tiktok_business_centers(id) ON DELETE CASCADE,
+        advertiser_id      TEXT    NOT NULL,
+        name               TEXT    NOT NULL,
+        currency           TEXT,
+        timezone           TEXT,
+        PRIMARY KEY (business_center_id, advertiser_id)
+      );
+      CREATE INDEX idx_tiktok_adv_id ON tiktok_advertisers (advertiser_id);
+
+      ${protectTables({ rls: APP_TABLES, revoke: [...APP_TABLES, 'schema_migrations'], identity: IDENTITY_TABLES })}
+    `,
+  },
+  {
+    version: 2,
+    description: 'Biblioteca de criativos por usuário (imagens e vídeos) e envios ao TikTok por conta de anúncio',
+    sql: `
+      -- Arquivo guardado pelo sistema (source = 'upload') OU referência a um criativo que já existe na conta do TikTok (source = 'tiktok').
+      -- Só o servidor lê/grava; o arquivo em si fica no armazenamento (storage_key), nunca no banco.
+      CREATE TABLE creatives (
+        id                INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id           INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name              TEXT        NOT NULL,
+        kind              TEXT        NOT NULL CHECK (kind IN ('image', 'video')),
+        source            TEXT        NOT NULL DEFAULT 'upload' CHECK (source IN ('upload', 'tiktok')),
+        original_filename TEXT,
+        mime_type         TEXT,
+        size_bytes        BIGINT      CHECK (size_bytes >= 0),
+        sha256            TEXT,
+        md5               TEXT,
+        storage_key       TEXT,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CHECK (
+          (source = 'upload' AND storage_key IS NOT NULL AND sha256 IS NOT NULL AND md5 IS NOT NULL AND mime_type IS NOT NULL AND size_bytes IS NOT NULL)
+          OR (source = 'tiktok' AND storage_key IS NULL)
+        )
+      );
+      CREATE INDEX idx_creatives_user ON creatives (user_id, created_at DESC, id DESC);
+      -- O mesmo arquivo não entra duas vezes na biblioteca do mesmo usuário.
+      CREATE UNIQUE INDEX creatives_user_sha256_key ON creatives (user_id, sha256) WHERE sha256 IS NOT NULL;
+
+      -- ID que o TikTok deu ao criativo em cada conta de anúncio (evita reenviar o mesmo arquivo).
+      CREATE TABLE creative_tiktok_assets (
+        creative_id   INTEGER     NOT NULL REFERENCES creatives(id) ON DELETE CASCADE,
+        advertiser_id TEXT        NOT NULL,
+        tiktok_id     TEXT        NOT NULL,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (creative_id, advertiser_id)
+      );
+
+      ${protectTables({ rls: ['creatives', 'creative_tiktok_assets'], revoke: ['creatives', 'creative_tiktok_assets'], identity: ['creatives'] })}
+    `,
+  },
+  {
+    version: 3,
+    description: 'Conexão com o TikTok por link de autorização (OAuth): tipo da conexão e tentativas de autorização',
+    sql: `
+      -- Conexão por link: o token vem da autorização do TikTok e as contas de anúncio autorizadas definem o acesso.
+      -- Nesse caso NÃO existe ID de Business Center informado pelo usuário (bc_id fica vazio).
+      ALTER TABLE tiktok_business_centers ALTER COLUMN bc_id DROP NOT NULL;
+      ALTER TABLE tiktok_business_centers ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'token' CHECK (auth_type IN ('token', 'oauth'));
+      ALTER TABLE tiktok_business_centers ADD CONSTRAINT tiktok_bc_auth_coherence CHECK (auth_type = 'oauth' OR bc_id IS NOT NULL);
+
+      -- Cada link gerado é uma "tentativa": o state (aleatório, uso único, 15 min) é guardado só como hash; o attempt_id
+      -- (público para o dono) serve para a tela acompanhar o resultado sem conhecer o state.
+      CREATE TABLE tiktok_oauth_attempts (
+        attempt_id    TEXT        PRIMARY KEY,
+        state_hash    TEXT        NOT NULL UNIQUE,
+        user_id       INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name          TEXT        NOT NULL,
+        status        TEXT        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'connected', 'denied', 'error')),
+        connection_id INTEGER     REFERENCES tiktok_business_centers(id) ON DELETE SET NULL,
+        message       TEXT,
+        expires_at    TIMESTAMPTZ NOT NULL,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX idx_tiktok_oauth_user ON tiktok_oauth_attempts (user_id, created_at DESC);
+
+      ${protectTables({ rls: ['tiktok_oauth_attempts'], revoke: ['tiktok_oauth_attempts'], identity: [] })}
+    `,
+  },
+];
+
+const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)
+
+/** Aplica as migrações pendentes. Segura para várias instâncias subindo ao mesmo tempo. */
+export async function runMigrations(db, migrations = MIGRATIONS) {
+  try {
+    await db.transaction(async (tx) => {
+      // Trava de escopo da transação: funciona também atrás do pooler em modo "transaction".
+      await tx.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_LOCK_KEY]);
+      await tx.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+        version     INTEGER     PRIMARY KEY,
+        description TEXT        NOT NULL,
+        applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+      await tx.exec('ALTER TABLE schema_migrations ENABLE ROW LEVEL SECURITY');
+      const { rows } = await tx.query('SELECT version FROM schema_migrations');
+      const applied = new Set(rows.map((r) => r.version));
+      for (const migration of [...migrations].sort((a, b) => a.version - b.version)) {
+        if (applied.has(migration.version)) continue;
+        await tx.exec(migration.sql);
+        await tx.query('INSERT INTO schema_migrations (version, description) VALUES ($1, $2)', [migration.version, migration.description]);
+      }
+    });
+  } catch (err) {
+    throw new Error(`Falha ao aplicar as migrações do banco: ${err.message}`, { cause: err });
+  }
+}
+
+/**
+ * Lista as tabelas do app SEM RLS: as do schema atual cujo dono é o usuário da conexão (ou seja, criadas por este sistema).
+ * Toda tabela nova precisa ligar a RLS (veja o aviso acima); esta checagem impede que um esquecimento exponha dados
+ * pela API REST do Supabase. Tabelas de outros donos/schemas (outro sistema no mesmo banco) não são da conta deste app.
+ */
+export async function findTablesWithoutRls(db) {
+  const { rows } = await db.query(
+    `SELECT c.relname AS table_name
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = current_schema()
+        AND c.relkind IN ('r', 'p')
+        AND NOT c.relrowsecurity
+        AND pg_get_userbyid(c.relowner) = current_user
+      ORDER BY c.relname`,
+  );
+  return rows.map((r) => r.table_name);
+}

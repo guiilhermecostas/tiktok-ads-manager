@@ -1,0 +1,359 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { openDatabase } from '../src/db/index.js';
+import { MIGRATIONS, findTablesWithoutRls, runMigrations } from '../src/db/migrations.js';
+import { createPgliteDatabase } from '../src/db/adapters/pglite.js';
+import { all, one } from './helpers.js';
+
+const EXPECTED_TABLES = ['campaigns', 'creative_tiktok_assets', 'creatives', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users'];
+const config = { url: null, sslCaPath: null, poolMax: 1, devDataDir: null, requireRls: true };
+const silent = { info() {}, warn() {}, error() {} };
+
+async function freshDb() {
+  return createPgliteDatabase();
+}
+
+describe('migrações (PostgreSQL)', () => {
+  it('cria todas as tabelas, registra a versão e é idempotente', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await runMigrations(db); // segunda vez: não faz nada nem falha
+      await runMigrations(db);
+      const tables = (await all(db, "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename")).map((t) => t.tablename);
+      assert.deepEqual(tables, [...EXPECTED_TABLES, 'schema_migrations'].sort());
+      const applied = await all(db, 'SELECT version FROM schema_migrations ORDER BY version');
+      assert.deepEqual(applied.map((r) => r.version), MIGRATIONS.map((m) => m.version));
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('as versões são sequenciais, únicas e têm descrição', () => {
+    assert.deepEqual(MIGRATIONS.map((m) => m.version), MIGRATIONS.map((_, i) => i + 1));
+    assert.ok(MIGRATIONS.every((m) => m.description && m.sql.length > 10));
+  });
+
+  it('migração que falha desfaz TUDO (nem a tabela de controle registra a versão)', async () => {
+    const db = await freshDb();
+    try {
+      const broken = [{ version: 1, description: 'quebrada', sql: 'CREATE TABLE a (id int); CREATE TABLE b (id int, id int);' }];
+      await assert.rejects(() => runMigrations(db, broken), /Falha ao aplicar as migrações/);
+      const tables = (await all(db, "SELECT tablename FROM pg_tables WHERE schemaname = 'public'")).map((t) => t.tablename);
+      assert.ok(!tables.includes('a'), 'a primeira instrução também foi desfeita');
+      assert.ok(!tables.includes('schema_migrations'));
+      await runMigrations(db); // e o banco continua utilizável depois da falha
+      assert.ok((await findTablesWithoutRls(db)).length === 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('migrações novas são aplicadas em ordem sobre um banco já migrado', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      const next = [...MIGRATIONS, { version: MIGRATIONS.length + 1, description: 'teste', sql: 'ALTER TABLE users ADD COLUMN phone TEXT;' }];
+      await runMigrations(db, next);
+      assert.ok((await all(db, "SELECT column_name FROM information_schema.columns WHERE table_name = 'users'")).some((c) => c.column_name === 'phone'));
+      assert.equal((await one(db, 'SELECT MAX(version)::int AS v FROM schema_migrations')).v, MIGRATIONS.length + 1);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('restrições do esquema', () => {
+  it('e-mail é único sem diferenciar maiúsculas; status/role/objetivos inválidos são recusados pelo banco', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('Ana@Example.com', 'Ana', 'x')");
+      await assert.rejects(() => db.query("INSERT INTO users (email, name, password_hash) VALUES ('ana@example.COM', 'Outra', 'x')"), (e) => e.code === '23505');
+      await assert.rejects(() => db.query("INSERT INTO users (email, name, password_hash, status) VALUES ('b@example.com', 'B', 'x', 'superuser')"), (e) => e.code === '23514');
+      await assert.rejects(() => db.query("INSERT INTO users (email, name, password_hash, role) VALUES ('c@example.com', 'C', 'x', 'root')"), (e) => e.code === '23514');
+      await assert.rejects(() => db.query("INSERT INTO campaigns (user_id, name, objective, daily_budget) VALUES (1, 'x', 'TRAFFIC', -1)"), (e) => e.code === '23514');
+      await assert.rejects(() => db.query("INSERT INTO campaigns (user_id, name, objective, daily_budget) VALUES (999, 'x', 'TRAFFIC', 1)"), (e) => e.code === '23503', 'FK');
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('chave estrangeira em cascata: remover usuário apaga sessões, campanhas e Business Centers', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')");
+      await db.query("INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at) VALUES ('h', 1, 'c', now() + interval '1 day')");
+      await db.query("INSERT INTO campaigns (user_id, name, objective, daily_budget, config) VALUES (1, 'x', 'TRAFFIC', 1, '{\"a\":1}'::jsonb)");
+      await db.query("INSERT INTO tiktok_business_centers (owner_id, bc_id, name, access_token) VALUES (1, '111', 'BC', 'v1.x')");
+      await db.query("INSERT INTO tiktok_advertisers (business_center_id, advertiser_id, name) VALUES (1, '9', 'Conta')");
+      assert.deepEqual((await one(db, 'SELECT config FROM campaigns')).config, { a: 1 }, 'jsonb volta como objeto');
+      await db.query('DELETE FROM users WHERE id = 1');
+      for (const table of ['sessions', 'campaigns', 'tiktok_business_centers', 'tiktok_advertisers']) {
+        assert.equal((await one(db, `SELECT COUNT(*)::int AS c FROM ${table}`)).c, 0, table);
+      }
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('unicidade da BC é por (dono, bc_id)', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x'), ('b@example.com', 'B', 'x')");
+      await db.query("INSERT INTO tiktok_business_centers (owner_id, bc_id, name, access_token) VALUES (1, '111', 'BC', 'v1.x'), (2, '111', 'BC', 'v1.y')");
+      await assert.rejects(() => db.query("INSERT INTO tiktok_business_centers (owner_id, bc_id, name, access_token) VALUES (1, '111', 'Dup', 'v1.z')"), (e) => e.code === '23505');
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('conexão por link: restrições do esquema (migração v3)', () => {
+  it('BC por token exige bc_id, por link não; tentativas com state único, status válido e cascata', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x'), ('b@example.com', 'B', 'x')");
+      // padrão continua 'token' (dados existentes não mudam) e exige o bc_id
+      await db.query("INSERT INTO tiktok_business_centers (owner_id, bc_id, name, access_token) VALUES (1, '111', 'BC', 'v1.x')");
+      assert.equal((await one(db, 'SELECT auth_type FROM tiktok_business_centers')).auth_type, 'token');
+      await assert.rejects(() => db.query("INSERT INTO tiktok_business_centers (owner_id, name, access_token) VALUES (1, 'sem id', 'v1.x')"), (e) => e.code === '23514', 'token manual sem bc_id');
+      await assert.rejects(() => db.query("INSERT INTO tiktok_business_centers (owner_id, bc_id, name, access_token, auth_type) VALUES (1, '9', 'x', 'v1.x', 'magia')"), (e) => e.code === '23514', 'auth_type inválido');
+      // por link: sem bc_id; várias do mesmo dono (bc_id NULL não colide no UNIQUE)
+      await db.query("INSERT INTO tiktok_business_centers (owner_id, name, access_token, auth_type) VALUES (1, 'L1', 'v1.a', 'oauth'), (1, 'L2', 'v1.b', 'oauth')");
+      assert.equal((await one(db, "SELECT COUNT(*)::int c FROM tiktok_business_centers WHERE auth_type = 'oauth'")).c, 2);
+
+      const attempt = (id, hash, status = 'pending', user = 1) => db.query("INSERT INTO tiktok_oauth_attempts (attempt_id, state_hash, user_id, name, status, expires_at) VALUES ($1, $2, $3, 'n', $4, now() + interval '15 minutes')", [id, hash, user, status]);
+      await attempt('a'.repeat(32), 'h1');
+      await assert.rejects(() => attempt('b'.repeat(32), 'h1'), (e) => e.code === '23505', 'state único');
+      await assert.rejects(() => attempt('a'.repeat(32), 'h2'), (e) => e.code === '23505', 'attempt_id único');
+      await assert.rejects(() => attempt('c'.repeat(32), 'h3', 'hackeado'), (e) => e.code === '23514', 'status');
+      await assert.rejects(() => attempt('d'.repeat(32), 'h4', 'pending', 999), (e) => e.code === '23503', 'FK do usuário');
+      await attempt('e'.repeat(32), 'h5', 'pending', 2);
+      // apagar a conexão não apaga a tentativa (só desfaz o vínculo); apagar o usuário apaga tudo dele
+      const bc = (await one(db, "SELECT id FROM tiktok_business_centers WHERE name = 'L1'")).id;
+      await db.query('UPDATE tiktok_oauth_attempts SET connection_id = $1 WHERE attempt_id = $2', [bc, 'a'.repeat(32)]);
+      await db.query('DELETE FROM tiktok_business_centers WHERE id = $1', [bc]);
+      assert.equal((await one(db, "SELECT connection_id FROM tiktok_oauth_attempts WHERE attempt_id = $1", ['a'.repeat(32)])).connection_id, null);
+      await db.query('DELETE FROM users WHERE id = 1');
+      assert.equal((await one(db, 'SELECT COUNT(*)::int c FROM tiktok_oauth_attempts')).c, 1, 'só as do usuário removido');
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('biblioteca de criativos: restrições do esquema (migração v2)', () => {
+  it('tipos, coerência arquivo/referência, duplicidade por usuário e cascatas', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x'), ('b@example.com', 'B', 'x')");
+      const upload = (user, sha, extra = '') => db.query(`INSERT INTO creatives (user_id, name, kind, source, mime_type, size_bytes, sha256, md5, storage_key ${extra}) VALUES ($1, 'c', 'image', 'upload', 'image/png', 10, $2, 'md5', '1/${'a'.repeat(32)}.png')`, [user, sha]);
+      await upload(1, 'h1');
+      // mesmo arquivo: bloqueado para o mesmo usuário, permitido para outro
+      await assert.rejects(() => upload(1, 'h1'), (e) => e.code === '23505');
+      await upload(2, 'h1');
+      // CHECKs
+      await assert.rejects(() => db.query("INSERT INTO creatives (user_id, name, kind, source) VALUES (1, 'x', 'audio', 'tiktok')"), (e) => e.code === '23514', 'kind');
+      await assert.rejects(() => db.query("INSERT INTO creatives (user_id, name, kind, source) VALUES (1, 'x', 'image', 'ftp')"), (e) => e.code === '23514', 'source');
+      await assert.rejects(() => db.query("INSERT INTO creatives (user_id, name, kind, source) VALUES (1, 'x', 'image', 'upload')"), (e) => e.code === '23514', 'upload exige arquivo, hashes, tipo e tamanho');
+      await assert.rejects(() => db.query("INSERT INTO creatives (user_id, name, kind, source, storage_key) VALUES (1, 'x', 'image', 'tiktok', '1/x.png')"), (e) => e.code === '23514', 'referência do TikTok não guarda arquivo');
+      await assert.rejects(() => db.query("INSERT INTO creatives (user_id, name, kind, source, mime_type, size_bytes, sha256, md5, storage_key) VALUES (1, 'x', 'image', 'upload', 'image/png', -1, 'h9', 'm', 'k')"), (e) => e.code === '23514', 'tamanho negativo');
+      await assert.rejects(() => db.query("INSERT INTO creatives (user_id, name, kind, source) VALUES (999, 'x', 'image', 'tiktok')"), (e) => e.code === '23503', 'FK do usuário');
+      // referência do TikTok (sem hash) pode repetir
+      await db.query("INSERT INTO creatives (user_id, name, kind, source) VALUES (1, 'r1', 'video', 'tiktok'), (1, 'r2', 'video', 'tiktok')");
+      // vínculos por conta de anúncio
+      await db.query("INSERT INTO creative_tiktok_assets (creative_id, advertiser_id, tiktok_id) VALUES (1, '9001', 'v1'), (1, '9002', 'v2')");
+      await assert.rejects(() => db.query("INSERT INTO creative_tiktok_assets (creative_id, advertiser_id, tiktok_id) VALUES (1, '9001', 'v3')"), (e) => e.code === '23505', 'PK (criativo, conta)');
+      await assert.rejects(() => db.query("INSERT INTO creative_tiktok_assets (creative_id, advertiser_id, tiktok_id) VALUES (999, '9001', 'v')"), (e) => e.code === '23503');
+      // cascatas: criativo -> vínculos; usuário -> criativos -> vínculos
+      await db.query('DELETE FROM creatives WHERE id = 1');
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM creative_tiktok_assets')).c, 0);
+      await db.query("INSERT INTO creative_tiktok_assets (creative_id, advertiser_id, tiktok_id) SELECT id, '9001', 'v' FROM creatives WHERE user_id = 1 LIMIT 1");
+      await db.query('DELETE FROM users WHERE id = 1');
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM creatives WHERE user_id = 1')).c, 0);
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM creative_tiktok_assets')).c, 0);
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM creatives WHERE user_id = 2')).c, 1, 'só os dados do usuário removido');
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('tamanhos de arquivo grandes (bigint) voltam como número', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')");
+      await db.query("INSERT INTO creatives (user_id, name, kind, source, mime_type, size_bytes, sha256, md5, storage_key) VALUES (1, 'grande', 'video', 'upload', 'video/mp4', 5368709120, 'h', 'm', '1/" + 'b'.repeat(32) + ".mp4')");
+      const row = await one(db, 'SELECT size_bytes, COALESCE(SUM(size_bytes), 0)::bigint AS total FROM creatives GROUP BY size_bytes');
+      assert.equal(typeof row.size_bytes, 'number');
+      assert.equal(row.size_bytes, 5 * 1024 ** 3, '5 GB passa do limite do int4');
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('segurança do Supabase: RLS e privilégios das chaves públicas', () => {
+  it('toda tabela nasce com RLS ligado e sem políticas', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      assert.deepEqual(await findTablesWithoutRls(db), []);
+      const policies = await all(db, "SELECT tablename FROM pg_policies WHERE schemaname = 'public'");
+      assert.deepEqual(policies, [], 'sem políticas = nega tudo para quem não é dono');
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('simulando o Supabase: anon, authenticated e service_role não recebem NENHUM privilégio', async () => {
+    const db = await freshDb();
+    try {
+      // O Supabase cria estes papéis e concede privilégios por padrão em tabelas novas do schema public.
+      await db.exec(`
+        CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+      `);
+      await runMigrations(db);
+      for (const role of ['anon', 'authenticated', 'service_role']) {
+        for (const table of [...EXPECTED_TABLES, 'schema_migrations']) {
+          for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+            const { allowed } = await one(db, 'SELECT has_table_privilege($1, $2, $3) AS allowed', [role, `public.${table}`, privilege]);
+            assert.equal(allowed, false, `${role} não deveria ter ${privilege} em ${table}`);
+          }
+        }
+      }
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('detecta tabela criada sem RLS (impede que um esquecimento exponha dados pela API REST)', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.exec('CREATE TABLE esquecida (id int)');
+      assert.deepEqual(await findTablesWithoutRls(db), ['esquecida']);
+      await db.exec('ALTER TABLE esquecida ENABLE ROW LEVEL SECURITY');
+      assert.deepEqual(await findTablesWithoutRls(db), []);
+    } finally {
+      await db.close();
+    }
+
+  });
+
+  it('openDatabase entrega um banco migrado e protegido', async () => {
+    const db = await openDatabase(config, { log: silent });
+    try {
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM users')).c, 0);
+      assert.deepEqual(await findTablesWithoutRls(db), []);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('isolamento em banco COMPARTILHADO com outro sistema (schema próprio)', () => {
+  const SIMULATE_SUPABASE = `
+    CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+    -- "Outro sistema" que já vive no schema public: tabela SEM RLS e com sequência, acessível às funções da API.
+    CREATE TABLE public.outro_sistema_pedidos (id SERIAL PRIMARY KEY, valor INT);
+    CREATE TABLE public.outro_sistema_pagamentos (id SERIAL PRIMARY KEY, valor INT);
+    GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+    GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+    -- Para o pior caso, os privilégios padrão também valeriam no nosso schema (o app precisa revogá-los).
+    CREATE SCHEMA tiktok_ads;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA tiktok_ads GRANT ALL ON TABLES TO anon, authenticated, service_role;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA tiktok_ads GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+  `;
+
+  async function privilegeSnapshot(db) {
+    const out = [];
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      for (const table of ['outro_sistema_pedidos', 'outro_sistema_pagamentos']) {
+        for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+          out.push([role, table, privilege, (await one(db, 'SELECT has_table_privilege($1, $2, $3) AS ok', [role, `public.${table}`, privilege])).ok]);
+        }
+      }
+      for (const seq of ['outro_sistema_pedidos_id_seq', 'outro_sistema_pagamentos_id_seq']) {
+        out.push([role, seq, 'USAGE', (await one(db, 'SELECT has_sequence_privilege($1, $2, $3) AS ok', [role, `public.${seq}`, 'USAGE'])).ok]);
+      }
+    }
+    return out;
+  }
+
+  it('as tabelas do app nascem SÓ no schema próprio e o public do outro sistema não é tocado', async () => {
+    const db = await createPgliteDatabase();
+    try {
+      await db.exec(SIMULATE_SUPABASE);
+      const before = await privilegeSnapshot(db);
+      assert.ok(before.every(([, , , ok]) => ok === true), 'pré-condição: o outro sistema tem privilégios para as funções da API');
+
+      await db.exec('SET search_path TO tiktok_ads'); // o que DATABASE_SCHEMA faz em cada conexão
+      await runMigrations(db);
+
+      const where = async (schema) => (await all(db, 'SELECT tablename FROM pg_tables WHERE schemaname = $1 ORDER BY tablename', [schema])).map((t) => t.tablename);
+      assert.deepEqual(await where('tiktok_ads'), [...EXPECTED_TABLES, 'schema_migrations'].sort());
+      assert.deepEqual(await where('public'), ['outro_sistema_pagamentos', 'outro_sistema_pedidos'], 'nenhuma tabela nossa no public');
+
+      assert.deepEqual(await privilegeSnapshot(db), before, 'privilégios do outro sistema (tabelas E sequências) continuam EXATAMENTE como estavam');
+      assert.equal((await one(db, 'SELECT relrowsecurity FROM pg_class WHERE oid = $1::regclass', ['public.outro_sistema_pedidos'])).relrowsecurity, false, 'não ligamos RLS em tabela alheia');
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('as NOSSAS tabelas e sequências ficam sem privilégio para as funções da API (mesmo com privilégios padrão)', async () => {
+    const db = await createPgliteDatabase();
+    try {
+      await db.exec(SIMULATE_SUPABASE);
+      await db.exec('SET search_path TO tiktok_ads');
+      await runMigrations(db);
+      for (const role of ['anon', 'authenticated', 'service_role']) {
+        for (const table of [...EXPECTED_TABLES, 'schema_migrations']) {
+          for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+            assert.equal((await one(db, 'SELECT has_table_privilege($1, $2, $3) AS ok', [role, `tiktok_ads.${table}`, privilege])).ok, false, `${role} ${privilege} ${table}`);
+          }
+        }
+        for (const seq of ['users_id_seq', 'campaigns_id_seq', 'tiktok_business_centers_id_seq', 'creatives_id_seq']) {
+          assert.equal((await one(db, 'SELECT has_sequence_privilege($1, $2, $3) AS ok', [role, `tiktok_ads.${seq}`, 'USAGE'])).ok, false, `${role} USAGE ${seq}`);
+        }
+      }
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('a checagem de RLS ignora tabelas do outro sistema (não bloqueia a subida do servidor) mas pega as do app', async () => {
+    const db = await createPgliteDatabase({ schema: 'tiktok_ads' });
+    try {
+      await db.exec('CREATE TABLE public.outro_sistema_sem_rls (id int)');
+      await runMigrations(db);
+      assert.deepEqual(await findTablesWithoutRls(db), [], 'a tabela alheia sem RLS não é problema deste app');
+      await db.exec('CREATE TABLE tabela_do_app_esquecida (id int)');
+      assert.deepEqual(await findTablesWithoutRls(db), ['tabela_do_app_esquecida'], 'esquecimento nosso continua sendo detectado');
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('openDatabase com DATABASE_SCHEMA migra no schema configurado e passa na checagem de produção', async () => {
+    const db = await openDatabase({ ...config, schema: 'tiktok_ads' }, { log: silent });
+    try {
+      const { schema } = await one(db, 'SELECT current_schema() AS schema');
+      assert.equal(schema, 'tiktok_ads');
+      assert.equal((await one(db, "SELECT COUNT(*)::int AS c FROM pg_tables WHERE schemaname = 'public'")).c, 0);
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM users')).c, 0);
+    } finally {
+      await db.close();
+    }
+  });
+});

@@ -1,0 +1,149 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import express from 'express';
+import helmet from 'helmet';
+import { createAdminRouter } from './modules/admin/admin.routes.js';
+import { createAuthRouter } from './modules/auth/auth.routes.js';
+import { createAuthService } from './modules/auth/auth.service.js';
+import { createSessionsRepository } from './modules/auth/sessions.repository.js';
+import { createCampaignsRepository } from './modules/campaigns/campaigns.repository.js';
+import { createCampaignsRouter } from './modules/campaigns/campaigns.routes.js';
+import { createLocalCreativeStorage } from './modules/creatives/creative-storage.js';
+import { createCreativesRepository } from './modules/creatives/creatives.repository.js';
+import { createCreativesRouter } from './modules/creatives/creatives.routes.js';
+import { createCreativesService } from './modules/creatives/creatives.service.js';
+import { createTiktokClient } from './modules/tiktok/tiktok.client.js';
+import { createBusinessCentersRepository } from './modules/tiktok/business-centers.repository.js';
+import { createOauthAttemptsRepository } from './modules/tiktok/oauth-attempts.repository.js';
+import { createTiktokCallbackRouter, createTiktokRouter } from './modules/tiktok/tiktok.routes.js';
+import { createTiktokService } from './modules/tiktok/tiktok.service.js';
+import { createUsersRepository } from './modules/users/users.repository.js';
+import { apiNotFound, errorHandler } from './middleware/errors.js';
+import { requireAdmin, requireApproved, requireAuth, sameOriginOnly } from './middleware/guards.js';
+import { loadSession } from './middleware/session.js';
+
+const ROOT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
+const SHARED_DIR = path.join(ROOT_DIR, 'shared');
+
+/**
+ * Monta a aplicação Express. Recebe dependências (config, db, log) para facilitar testes.
+ */
+export function createApp({ config, db, log = console, limits, fetchFn }) {
+  const users = createUsersRepository(db);
+  const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
+  const campaigns = createCampaignsRepository(db);
+  const authService = createAuthService({ users, sessions, config });
+  const tiktokClient = createTiktokClient({ config, fetchFn });
+  // Sem TOKEN_ENCRYPTION_KEY a chave é nula: o serviço recusa cadastros (ensureConfigured) e nada é gravado.
+  const businessCenters = createBusinessCentersRepository(db, { encryptionKey: config.tiktok.encryptionKey });
+  const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, config, log });
+  const creativeStorage = createLocalCreativeStorage({ dir: config.creatives.dir });
+  const creativesService = createCreativesService({ repo: createCreativesRepository(db), storage: creativeStorage, tiktok: tiktokService, config, log });
+
+  const app = express();
+  app.set('trust proxy', config.trustProxy ?? 0); // 0: ignora X-Forwarded-*; N: confia nos N proxies à frente (IP real do cliente)
+  app.disable('x-powered-by');
+
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          'default-src': ["'self'"],
+          'script-src': ["'self'"],
+          'style-src': ["'self'"],
+          'img-src': ["'self'", 'data:'],
+          'connect-src': ["'self'"],
+          'object-src': ["'none'"],
+          'base-uri': ["'self'"],
+          'form-action': ["'self'"],
+          'frame-ancestors': ["'none'"],
+          // Em http://localhost isso quebraria o carregamento dos recursos.
+          'upgrade-insecure-requests': config.isProduction ? [] : null,
+        },
+      },
+      frameguard: { action: 'deny' }, // coerente com frame-ancestors 'none' (navegadores antigos)
+      strictTransportSecurity: config.isProduction,
+      referrerPolicy: { policy: 'no-referrer' },
+    }),
+  );
+
+  // ---------- API ----------
+  const api = express.Router();
+  api.use((_req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+  });
+  // A configuração completa de uma campanha é maior que os demais corpos; o parser abaixo (10 kb) vale para o restante da API.
+  api.use('/campaigns', express.json({ limit: '64kb' }));
+  api.use(express.json({ limit: '10kb' }));
+  api.use(sameOriginOnly);
+
+  // Saúde para monitoramento/hospedagem: público e mínimo (não revela nada além de "ok"/"indisponível").
+  api.get('/health', async (_req, res) => {
+    try {
+      await db.query('SELECT 1');
+      res.json({ status: 'ok' });
+    } catch (err) {
+      log.error('[health] banco indisponível:', err.code ?? err.message);
+      res.status(503).json({ status: 'unavailable' });
+    }
+  });
+
+  api.use(loadSession({ sessions, config }));
+
+  const authRouter = createAuthRouter({ authService, sessions, config, limits });
+  api.use('/auth', authRouter);
+
+  // Retorno da autorização do TikTok: público (vem de outro site/aba), protegido pelo `state` de uso único.
+  const tiktokCallbackRouter = createTiktokCallbackRouter({ service: tiktokService, limits });
+  api.use('/tiktok', tiktokCallbackRouter);
+
+  // Tudo abaixo exige sessão + conta aprovada. Contas pendentes NÃO passam daqui.
+  const protectedApi = express.Router();
+  protectedApi.use(requireAuth, requireApproved);
+  const campaignsRouter = createCampaignsRouter({ campaigns, tiktok: tiktokService, creatives: creativesService, limits });
+  protectedApi.use('/campaigns', campaignsRouter);
+  const tiktokRouter = createTiktokRouter({ service: tiktokService, limits });
+  protectedApi.use('/tiktok', tiktokRouter);
+  const creativesRouter = createCreativesRouter({ service: creativesService, limits });
+  protectedApi.use('/creatives', creativesRouter);
+  protectedApi.use('/admin', requireAdmin, createAdminRouter({ users, sessions }));
+  api.use(protectedApi);
+
+  api.use(apiNotFound);
+  app.use('/api', api);
+
+  // ---------- Front-end estático (SPA) ----------
+  app.use(
+    express.static(PUBLIC_DIR, {
+      index: false,
+      dotfiles: 'ignore',
+      setHeaders: (res) => res.set('Cache-Control', config.isProduction ? 'public, max-age=300' : 'no-cache'),
+    }),
+  );
+  // Regras de campanha compartilhadas com o servidor (somente leitura, sem dados sensíveis).
+  app.use('/shared', express.static(SHARED_DIR, { index: false, dotfiles: 'ignore', setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
+  // Qualquer rota de navegação devolve o shell da SPA; o acesso aos dados é protegido pela API.
+  app.get(/^\/(?!api\/)[^.]*$/, (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+  });
+
+  app.use(errorHandler(log));
+
+  return {
+    app,
+    authService,
+    sessions,
+    creativeStorage,
+    close: () => {
+      authRouter.stop();
+      tiktokRouter.stop();
+      tiktokCallbackRouter.stop();
+      creativesRouter.stop();
+      campaignsRouter.stop();
+    },
+  };
+}

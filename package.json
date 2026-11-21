@@ -1,0 +1,33 @@
+{
+  "name": "tiktok-ads-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plataforma de gestão da operação de TikTok Ads com aprovação de contas (PostgreSQL/Supabase).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --watch --env-file-if-exists=.env src/server.js",
+    "test": "NODE_ENV=test node --test --test-concurrency=1 \"tests/**/*.test.js\"",
+    "lint": "eslint .",
+    "check": "npm run lint && npm test",
+    "test:live": "TIKTOK_LIVE_CONTRACT=1 node --test tests/live/contract.live.js",
+    "import:sqlite": "node --env-file-if-exists=.env scripts/import-sqlite.js",
+    "db:check": "node --env-file-if-exists=.env scripts/db.js check",
+    "db:migrate": "node --env-file-if-exists=.env scripts/db.js migrate",
+    "test:db-live": "DATABASE_LIVE=1 node --env-file-if-exists=.env --test tests/live/database.live.js"
+  },
+  "dependencies": {
+    "express": "5.3.0",
+    "helmet": "8.3.0",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.17",
+    "@eslint/js": "10.0.1",
+    "eslint": "10.15.0",
+    "globals": "17.14.0"
+  }
+}

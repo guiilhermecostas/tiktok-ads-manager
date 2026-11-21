@@ -1,0 +1,202 @@
+import { post } from '../api.js';
+import { h, icon } from '../dom.js';
+import { state } from '../state.js';
+
+const NAV = [
+  { path: '/', label: 'Início', icon: 'home' },
+  { path: '/campaigns', label: 'Campanhas', icon: 'megaphone' },
+  { path: '/creatives', label: 'Criativos', icon: 'image' },
+  { path: '/tiktok', label: 'TikTok Ads', icon: 'chart' },
+  { path: '/business-centers', label: 'Contas TikTok', icon: 'building' },
+  { path: '/admin', label: 'Administração', icon: 'shield', adminOnly: true, section: 'Gestão' },
+];
+
+const COLLAPSE_KEY = 'tt.sidebar.collapsed';
+const readCollapsed = () => {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+function initials(name) {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join('');
+}
+
+// Atalho ⌘K / Ctrl+K para focar a busca (registrado uma única vez).
+document.addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    const input = document.getElementById('nav-search');
+    if (input) {
+      event.preventDefault();
+      input.focus();
+      input.select();
+    }
+  }
+});
+
+/**
+ * Shell do painel no estilo Shopify Admin:
+ * lateral escura (busca + navegação + conta) e área de trabalho em painel branco arredondado.
+ */
+export function renderLayout(ctx, currentPath, content) {
+  const { user } = state;
+  const isActive = (itemPath) => currentPath === itemPath || (itemPath !== '/' && currentPath.startsWith(`${itemPath}/`));
+  const visibleItems = NAV.filter((item) => !item.adminOnly || user.role === 'admin');
+
+  async function logout() {
+    try {
+      await post('/auth/logout');
+    } catch {
+      /* mesmo com erro, limpamos a sessão local */
+    }
+    await ctx.refreshSession();
+  }
+
+  // ----- navegação + busca -----
+  const navEntries = [];
+  const navChildren = [];
+  let lastSection = null;
+  for (const item of visibleItems) {
+    if (item.section && item.section !== lastSection) {
+      const label = h('p', { class: 'nav-section' }, item.section);
+      navChildren.push(label);
+      navEntries.push({ node: label, label: '' });
+    }
+    lastSection = item.section ?? lastSection;
+    const link = h(
+      'a',
+      {
+        href: item.path,
+        'data-link': true,
+        title: item.label,
+        class: `nav-item${isActive(item.path) ? ' is-active' : ''}`,
+        'aria-current': isActive(item.path) ? 'page' : null,
+      },
+      icon(item.icon),
+      h('span', { class: 'nav-item__label' }, item.label),
+    );
+    navChildren.push(link);
+    navEntries.push({ node: link, label: item.label.toLowerCase(), path: item.path });
+  }
+  const noResults = h('p', { class: 'nav-empty', hidden: true }, 'Nenhum resultado');
+  navChildren.push(noResults);
+
+  function applyFilter(term) {
+    const query = term.trim().toLowerCase();
+    let matches = 0;
+    for (const entry of navEntries) {
+      if (!entry.path) {
+        entry.node.hidden = query !== '';
+        continue;
+      }
+      const match = !query || entry.label.includes(query);
+      entry.node.hidden = !match;
+      if (match) matches += 1;
+    }
+    noResults.hidden = matches > 0;
+  }
+
+  const search = h('input', {
+    id: 'nav-search',
+    class: 'search__input',
+    type: 'search',
+    placeholder: 'Pesquisar',
+    autocomplete: 'off',
+    'aria-label': 'Pesquisar no menu',
+    maxlength: 40,
+    onInput: (e) => applyFilter(e.target.value),
+    onKeydown: (e) => {
+      if (e.key === 'Escape') {
+        e.target.value = '';
+        applyFilter('');
+        e.target.blur();
+      }
+      if (e.key === 'Enter') {
+        const first = navEntries.find((entry) => entry.path && !entry.node.hidden);
+        if (first) {
+          e.target.value = '';
+          applyFilter('');
+          ctx.navigate(first.path);
+        }
+      }
+    },
+  });
+
+  const shell = h('div', { class: `shell${readCollapsed() ? ' is-collapsed' : ''}` });
+
+  const toggle = h(
+    'button',
+    {
+      type: 'button',
+      class: 'sidebar__toggle',
+      'aria-label': 'Recolher ou expandir menu',
+      onClick: () => {
+        const collapsed = shell.classList.toggle('is-collapsed');
+        try {
+          localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
+        } catch {
+          /* armazenamento indisponível */
+        }
+      },
+    },
+    icon('panel', 18),
+  );
+
+  const sidebar = h(
+    'aside',
+    { class: 'sidebar' },
+    h(
+      'div',
+      { class: 'sidebar__top' },
+      h('a', { href: '/', 'data-link': true, class: 'sidebar__logo', 'aria-label': 'Ir para o início' }, h('img', { class: 'sidebar__logo-img', src: '/tiktokas.png', alt: 'TikTok Ads Manager', width: 32, height: 32, decoding: 'async' })),
+      toggle,
+    ),
+    h('label', { class: 'search' }, icon('search', 16), search, h('kbd', { class: 'search__kbd' }, '⌘K')),
+    h('nav', { class: 'nav', 'aria-label': 'Navegação principal' }, navChildren),
+    h(
+      'div',
+      { class: 'sidebar__bottom' },
+      h(
+        'div',
+        { class: 'account' },
+        h('span', { class: 'avatar', 'aria-hidden': 'true' }, initials(user.name)),
+        h('div', { class: 'account__text' }, h('span', { class: 'account__name' }, user.name), h('span', { class: 'account__sub' }, user.role === 'admin' ? user.email : (user.company ?? user.email))),
+      ),
+      h('button', { type: 'button', class: 'logout', title: 'Sair', onClick: logout }, icon('logout', 18), h('span', { class: 'logout__label' }, 'Sair')),
+    ),
+  );
+
+  const workspace = h(
+    'div',
+    { class: 'workspace' },
+    h(
+      'div',
+      { class: 'frame' },
+      h(
+        'header',
+        { class: 'appbar' },
+        h('span', { class: 'appbar__title' }, 'TikTok Ads Manager'),
+      ),
+      h('main', { class: 'main', id: 'main' }, content),
+    ),
+  );
+
+  shell.append(sidebar, workspace);
+  return shell;
+}
+
+export function pageHeader(title, subtitle, actions) {
+  return h(
+    'div',
+    { class: 'page-header' },
+    h('div', null, h('h1', { class: 'page-title' }, title), subtitle ? h('p', { class: 'muted' }, subtitle) : null),
+    actions ? h('div', { class: 'page-header__actions' }, actions) : null,
+  );
+}

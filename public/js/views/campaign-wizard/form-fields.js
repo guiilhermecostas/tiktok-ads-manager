@@ -1,0 +1,278 @@
+import { OBJECTIVES, fieldsOfStep, getOptions, getPath, isRequired, isVisible } from '/shared/campaign-spec.js';
+import { h } from '../../dom.js';
+import { centsToInput, parseMoneyToCents } from '../../format.js';
+import { creativeThumb } from '../creatives/thumb.js';
+
+let uid = 0;
+const nextId = () => `wz-${++uid}`;
+
+/**
+ * Renderiza os campos de uma etapa a partir da especificação compartilhada.
+ * ctx: { config, errors, advertisers, readOnly, set(path, value, { rerender }), moneyText }
+ * Todo texto entra no DOM como nó de texto (sem innerHTML).
+ */
+export function renderStepForm(stepId, ctx) {
+  const entries = fieldsOfStep(stepId).filter(({ field }) => isVisible(field, ctx.config));
+  // O seletor de objetivo vem primeiro na etapa 1.
+  entries.sort((a, b) => Number(b.field.type === 'objective') - Number(a.field.type === 'objective'));
+
+  const groups = [];
+  for (const entry of entries) {
+    const title = entry.field.type === 'objective' ? 'O que você quer alcançar?' : (entry.field.group ?? entry.field.label);
+    let group = groups.find((g) => g.title === title);
+    if (!group) groups.push((group = { title, entries: [] }));
+    group.entries.push(entry);
+  }
+
+  return h(
+    'div',
+    { class: 'wizard-form' },
+    groups.map((group) =>
+      h(
+        'section',
+        { class: 'form-section' },
+        h('h3', { class: 'form-section__title' }, group.title),
+        h('div', { class: 'form-grid' }, group.entries.map((entry) => renderField(entry, ctx))),
+      ),
+    ),
+  );
+}
+
+function renderField({ section, field }, ctx) {
+  const path = `${section}.${field.key}`;
+  const value = getPath(ctx.config, path);
+  const error = ctx.errors[path];
+  const required = isRequired(field, ctx.config);
+  const wide = ['objective', 'enumList', 'stringList', 'creative', 'creativeList'].includes(field.type) || field.multiline || field.type === 'url';
+  const id = nextId();
+  const describedBy = [error ? `${id}-err` : null, field.help ? `${id}-help` : null].filter(Boolean).join(' ') || null;
+  const disabled = ctx.readOnly;
+
+  let control;
+  switch (field.type) {
+    case 'objective':
+      return objectiveCards(field, value, path, ctx, error);
+    case 'enum':
+      control = enumControl(field, value, path, ctx, { id, describedBy, error, disabled });
+      break;
+    case 'enumList':
+      control = checkGroup(field, value ?? [], path, ctx, { disabled });
+      break;
+    case 'bool':
+      control = h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: value === true, disabled, onChange: (e) => ctx.set(path, e.target.checked ? true : undefined) }), h('span', null, field.label));
+      return wrapper({ path, field, id, wide: false, error, describedBy, control, hideLabel: true, required: false });
+    case 'creative':
+    case 'creativeList':
+      control = creativeControl(field, value, path, ctx, { disabled });
+      break;
+    case 'advertiser':
+      control = advertiserSelect(field, value, path, ctx, { id, describedBy, error, disabled });
+      break;
+    case 'money':
+      control = moneyInput(path, value, ctx, { id, describedBy, error, disabled });
+      break;
+    case 'int':
+      control = h('input', {
+        id, class: `input${error ? ' input--error' : ''}`, type: 'number', min: field.min, max: field.max, step: 1, disabled,
+        value: value ?? '', 'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy,
+        onInput: (e) => ctx.set(path, e.target.value === '' ? undefined : Number(e.target.value)),
+      });
+      break;
+    case 'datetime':
+      control = h('input', { id, class: `input${error ? ' input--error' : ''}`, type: 'datetime-local', disabled, value: value ?? '', 'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy, onInput: (e) => ctx.set(path, e.target.value || undefined) });
+      break;
+    case 'stringList':
+      control = h('textarea', {
+        id, class: `input input--area${error ? ' input--error' : ''}`, rows: 3, disabled, value: (value ?? []).join('\n'),
+        'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy,
+        onInput: (e) => ctx.set(path, e.target.value.split(/[\n,;]+/).map((v) => v.trim()).filter(Boolean)),
+      });
+      break;
+    case 'url':
+      control = h('input', { id, class: `input${error ? ' input--error' : ''}`, type: 'text', inputmode: 'url', autocomplete: 'off', spellcheck: 'false', maxlength: field.max, disabled, value: value ?? '', placeholder: 'https://', 'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy, onInput: (e) => ctx.set(path, e.target.value || undefined) });
+      break;
+    default: {
+      // string
+      const props = {
+        id, class: `input${error ? ' input--error' : ''}`, maxlength: field.max, disabled, value: value ?? '', placeholder: field.placeholder,
+        autocomplete: 'off', 'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy,
+        onInput: (e) => ctx.set(path, e.target.value === '' ? undefined : e.target.value),
+      };
+      control = field.multiline ? h('textarea', { ...props, class: `${props.class} input--area`, rows: 3 }) : h('input', { ...props, type: 'text' });
+    }
+  }
+  return wrapper({ path, field, id, wide, error, describedBy, control, required });
+}
+
+function wrapper({ path, field, id, wide, error, control, required, hideLabel = false }) {
+  return h(
+    'div',
+    { class: `field${wide ? ' field--wide' : ''}`, 'data-path': path },
+    hideLabel ? null : h('label', { for: id, class: 'field__label' }, field.label, required ? h('span', { class: 'req', 'aria-hidden': 'true' }, ' *') : null),
+    control,
+    field.help ? h('p', { id: `${id}-help`, class: 'field__hint' }, field.help) : null,
+    error ? h('p', { id: `${id}-err`, class: 'field__error', role: 'alert' }, error) : null,
+  );
+}
+
+function objectiveCards(field, value, path, ctx, error) {
+  const cards = getOptions(field, ctx.config).map(({ value: optionValue }) => {
+    const meta = OBJECTIVE_META[optionValue];
+    return h(
+      'label',
+      { class: `objective-card${value === optionValue ? ' is-selected' : ''}` },
+      h('input', { type: 'radio', name: 'objective', value: optionValue, checked: value === optionValue, disabled: ctx.readOnly, onChange: () => ctx.set(path, optionValue, { rerender: true }) }),
+      h('span', { class: 'objective-card__title' }, OBJECTIVES.find((o) => o.value === optionValue).label),
+      h('span', { class: 'objective-card__text' }, meta),
+    );
+  });
+  return h(
+    'div',
+    { class: 'field field--wide', 'data-path': path },
+    h('div', { class: 'objective-grid', role: 'radiogroup', 'aria-label': field.label }, cards),
+    error ? h('p', { class: 'field__error', role: 'alert' }, error) : null,
+  );
+}
+const OBJECTIVE_META = Object.fromEntries(OBJECTIVES.map((o) => [o.value, o.description]));
+
+function enumControl(field, initialValue, path, ctx, { id, describedBy, error, disabled }) {
+  let value = initialValue;
+  const options = getOptions(field, ctx.config);
+  if (!options.length) {
+    return h('p', { class: 'field__hint' }, field.optionsBy ? 'Escolha o objetivo na primeira etapa para ver as opções.' : 'Sem opções disponíveis.');
+  }
+  // Única opção válida (ex.: oCPM para conversões): já vem selecionada, sem exigir clique.
+  if (options.length === 1 && value === undefined && !disabled) {
+    value = options[0].value;
+    ctx.set(path, value);
+  }
+  if (options.length <= 3) {
+    const name = nextId();
+    return h(
+      'div',
+      { class: 'choice-list', role: 'radiogroup', 'aria-label': field.label },
+      options.map((o) =>
+        h('label', { class: `choice${value === o.value ? ' is-selected' : ''}` }, h('input', { type: 'radio', name, value: o.value, checked: value === o.value, disabled, onChange: () => ctx.set(path, o.value, { rerender: true }) }), h('span', null, o.label)),
+      ),
+    );
+  }
+  const select = h(
+    'select',
+    { id, class: `input${error ? ' input--error' : ''}`, disabled, 'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy, onChange: (e) => ctx.set(path, e.target.value || undefined, { rerender: true }) },
+    h('option', { value: '' }, field.required || isRequired(field, ctx.config) ? 'Selecione…' : '— Nenhum —'),
+    options.map((o) => h('option', { value: o.value }, o.label)),
+  );
+  select.value = value ?? '';
+  return select;
+}
+
+function checkGroup(field, selected, path, ctx, { disabled }) {
+  const options = getOptions(field, ctx.config);
+  return h(
+    'div',
+    { class: 'check-grid', role: 'group', 'aria-label': field.label },
+    options.map((o) =>
+      h(
+        'label',
+        { class: 'check' },
+        h('input', {
+          type: 'checkbox', value: o.value, checked: selected.includes(o.value), disabled,
+          onChange: (e) => {
+            const current = new Set(getPath(ctx.config, path) ?? []);
+            if (e.target.checked) current.add(o.value);
+            else current.delete(o.value);
+            ctx.set(path, [...current].sort((a, b) => options.findIndex((x) => x.value === a) - options.findIndex((x) => x.value === b)));
+          },
+        }),
+        h('span', null, o.label),
+      ),
+    ),
+  );
+}
+
+function advertiserSelect(field, value, path, ctx, { id, describedBy, error, disabled }) {
+  const usable = ctx.advertisers.filter((a) => a.businessCenterStatus === 'active');
+  const select = h(
+    'select',
+    { id, class: `input${error ? ' input--error' : ''}`, disabled, 'aria-describedby': describedBy, onChange: (e) => ctx.set(path, e.target.value || undefined) },
+    h('option', { value: '' }, usable.length ? 'Sem conta (salvar só como rascunho)' : 'Nenhuma conta disponível'),
+    usable.map((a) => h('option', { value: a.id }, `${a.businessCenterName} · ${a.name}`)),
+  );
+  // Mantém a conta já salva visível mesmo que a BC tenha saído do ar.
+  if (value && !usable.some((a) => a.id === value)) select.append(h('option', { value }, `Conta ${value} (indisponível)`));
+  select.value = value ?? '';
+  return select;
+}
+
+function moneyInput(path, value, ctx, { id, describedBy, error, disabled }) {
+  const shown = ctx.moneyText[path] ?? (value === undefined ? '' : centsToInput(value));
+  return h(
+    'div',
+    { class: 'money' },
+    h('span', { class: 'money__prefix' }, 'R$'),
+    h('input', {
+      id, class: `input${error ? ' input--error' : ''}`, type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: '0,00', disabled, value: shown,
+      'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy,
+      onInput: (e) => {
+        ctx.moneyText[path] = e.target.value;
+        ctx.set(path, e.target.value.trim() === '' ? undefined : (parseMoneyToCents(e.target.value) ?? undefined));
+      },
+      onBlur: (e) => {
+        const cents = parseMoneyToCents(e.target.value);
+        if (cents !== null) {
+          delete ctx.moneyText[path];
+          e.target.value = centsToInput(cents);
+        }
+      },
+    }),
+  );
+}
+
+/**
+ * Escolha de criativos da biblioteca: mostra miniatura e nome do que foi escolhido e abre o seletor.
+ * No carrossel a ORDEM importa, então há botões para subir/descer.
+ */
+function creativeControl(field, value, path, ctx, { disabled }) {
+  const multiple = field.type === 'creativeList';
+  const ids = multiple ? (value ?? []) : value === undefined ? [] : [value];
+  const kindText = field.creativeKind === 'video' ? 'vídeo' : 'imagem';
+  const commit = (next) => ctx.set(path, multiple ? (next.length ? next : undefined) : next[0], { rerender: true });
+
+  async function open() {
+    const picked = await ctx.pickCreatives({
+      kind: field.creativeKind,
+      multiple,
+      max: field.maxItems ?? 1,
+      selected: ids,
+      title: multiple ? `Escolher imagens (até ${field.maxItems ?? 10})` : `Escolher ${kindText}`,
+    });
+    if (picked !== null) commit(picked);
+  }
+  const move = (index, delta) => {
+    const next = [...ids];
+    [next[index], next[index + delta]] = [next[index + delta], next[index]];
+    commit(next);
+  };
+
+  const rows = ids.map((id, index) => {
+    const creative = ctx.creatives.get(id);
+    return h(
+      'li',
+      { class: 'creative-field__item' },
+      creative ? creativeThumb(creative) : h('div', { class: 'thumb thumb--missing' }, '?'),
+      h('div', { class: 'creative-field__text' }, h('strong', null, creative ? creative.name : `Criativo #${id}`), creative ? null : h('span', { class: 'muted' }, 'Não encontrado na biblioteca: remova ou escolha outro.')),
+      disabled
+        ? null
+        : h(
+            'div',
+            { class: 'creative-field__actions' },
+            multiple && ids.length > 1 ? h('button', { type: 'button', class: 'icon-btn', title: 'Mover para cima', 'aria-label': 'Mover para cima', disabled: index === 0, onClick: () => move(index, -1) }, '↑') : null,
+            multiple && ids.length > 1 ? h('button', { type: 'button', class: 'icon-btn', title: 'Mover para baixo', 'aria-label': 'Mover para baixo', disabled: index === ids.length - 1, onClick: () => move(index, 1) }, '↓') : null,
+            h('button', { type: 'button', class: 'icon-btn icon-btn--danger', title: 'Remover', 'aria-label': 'Remover', onClick: () => commit(ids.filter((x) => x !== id)) }, '✕'),
+          ),
+    );
+  });
+
+  const label = !ids.length ? `Escolher ${kindText}${multiple ? 's' : ''} da biblioteca` : multiple ? 'Adicionar ou trocar' : 'Trocar';
+  return h('div', { class: 'creative-field' }, rows.length ? h('ul', { class: 'creative-field__list' }, rows) : null, disabled ? null : h('button', { type: 'button', class: 'btn btn--secondary', onClick: open }, label));
+}

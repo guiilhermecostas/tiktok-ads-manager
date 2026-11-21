@@ -1,0 +1,44 @@
+# Blueprint do Render. Segredos (sync: false) são preenchidos no painel do Render, nunca neste arquivo.
+services:
+  - type: web
+    name: tiktok-ads-manager
+    runtime: node
+    plan: starter            # disco persistente exige plano pago (o plano free apaga os arquivos a cada deploy)
+    region: ohio
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: criativos
+      mountPath: /var/data
+      sizeGB: 10
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: TRUST_PROXY          # Render coloca 1 proxy reverso na frente do app
+        value: "1"
+      - key: DATABASE_SCHEMA
+        value: tiktok_ads
+      - key: DATABASE_SSL_CA_PATH
+        value: certs/supabase-ca.crt
+      - key: CREATIVES_DIR
+        value: /var/data/creatives
+      - key: ADMIN_EMAIL
+        value: contato.guilhermecostas@gmail.com
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: TIKTOK_APP_ID
+        sync: false
+      - key: TIKTOK_APP_SECRET
+        sync: false
+      - key: TIKTOK_REDIRECT_URI
+        sync: false
