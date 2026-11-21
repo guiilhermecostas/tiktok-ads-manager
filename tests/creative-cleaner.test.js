@@ -266,17 +266,19 @@ describe('limpeza de criativos (FFmpeg real)', () => {
 });
 
 describe('autoverificação do FFmpeg na inicialização', () => {
-  it('informa a versão quando o FFmpeg executa e erro claro (sem lançar) quando não existe ou não roda', async () => {
+  it('roda uma limpeza de teste completa (vídeo e imagem) e informa a versão; erro claro, sem lançar, se não existe ou não roda', async () => {
     const dir = tempDir('selfcheck-');
     try {
       const good = await createCreativeCleaner({ ffmpegPath, tmpDir: dir, log: silent }).selfCheck();
       assert.equal(good.ok, true);
       assert.match(good.version, /^\d/);
+      assert.deepEqual(fs.readdirSync(dir), [], 'a autoverificação não deixa arquivos');
       const none = await createCreativeCleaner({ ffmpegPath: null, tmpDir: dir, log: silent }).selfCheck();
       assert.equal(none.ok, false);
       assert.match(none.error, /FFmpeg/);
       const missing = await createCreativeCleaner({ ffmpegPath: path.join(dir, 'nao-existe'), tmpDir: dir, log: silent }).selfCheck();
-      assert.deepEqual([missing.ok, /não executou/.test(missing.error)], [false, true]);
+      assert.equal(missing.ok, false);
+      assert.match(missing.error, /FFmpeg não conseguiu/);
       const notBinary = path.join(dir, 'falso');
       fs.writeFileSync(notBinary, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
       assert.equal((await createCreativeCleaner({ ffmpegPath: notBinary, tmpDir: dir, log: silent }).selfCheck()).ok, false, 'binário que sai com erro');

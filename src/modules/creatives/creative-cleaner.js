@@ -226,14 +226,34 @@ export function createCreativeCleaner({ ffmpegPath, tmpDir, concurrency = 1, tim
       }
     },
 
-    /** Confere se o FFmpeg executa (na inicialização do servidor): { ok, version } ou { ok: false, error }. Nunca lança. */
+    /**
+     * Autoverificação (na subida do servidor): confere se o FFmpeg executa E se consegue fazer a limpeza completa, rodando o
+     * mesmo processo em um vídeo (com áudio) e uma imagem minúsculos gerados na hora. Cobre diferenças entre binários/plataformas
+     * (codificador, filtros e filtro de bitstream). Retorna { ok, version } ou { ok: false, error }. Nunca lança.
+     */
     async selfCheck() {
       if (!ffmpegPath) return { ok: false, error: 'FFmpeg não encontrado (instale as dependências ou defina FFMPEG_PATH).' };
+      const files = [];
+      const results = [];
       try {
         const info = await runFfmpeg(ffmpegPath, ['-hide_banner', '-nostdin', '-version'], { timeoutMs: 15_000 });
-        return { ok: true, version: /ffmpeg version (\S+)/.exec(info)?.[1] ?? 'desconhecida' };
+        const version = /ffmpeg version (\S+)/.exec(info)?.[1] ?? 'desconhecida';
+        await fsp.mkdir(tmpDir, { recursive: true, mode: 0o700 });
+        const id = randomBytes(6).toString('hex');
+        const sample = async (name, kind, ext, source) => {
+          const file = path.join(tmpDir, `selfcheck-${id}-${name}`);
+          files.push(file);
+          await runFfmpeg(ffmpegPath, ['-hide_banner', '-nostdin', '-loglevel', 'error', '-y', ...source, file], { timeoutMs: 30_000 });
+          const result = await this.clean({ inputPath: file, kind, ext, maxOutputBytes: 5 * 1024 * 1024, name: 'autoverificação' });
+          results.push(result);
+        };
+        await sample('v.mp4', 'video', 'mp4', ['-f', 'lavfi', '-i', 'color=c=gray:s=64x64:d=0.5:r=25', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-f', 'mp4']);
+        await sample('i.png', 'image', 'png', ['-f', 'lavfi', '-i', 'color=c=gray:s=64x64:d=1', '-frames:v', '1', '-f', 'image2']);
+        return { ok: true, version };
       } catch (err) {
-        return { ok: false, error: `FFmpeg não executou (${err.code ?? 'erro'}).` };
+        return { ok: false, error: `FFmpeg não conseguiu fazer a limpeza de teste (${err.code ?? err.status ?? 'erro'}: ${String(err.message).slice(0, 160)}).` };
+      } finally {
+        await Promise.all([...results.map((r) => r.discard()), ...files.map((f) => fsp.rm(f, { force: true }))]).catch(() => {});
       }
     },
 
