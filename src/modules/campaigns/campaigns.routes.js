@@ -183,7 +183,7 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
       try {
         // Criativos primeiro: se o envio de algum arquivo falhar, NADA foi criado no TikTok ainda.
         await assertCreativesOwned(req.user, config);
-        const assets = await creatives.resolveForPublish({ actor: req.user, advertiserId, config });
+        const assets = await creatives.resolveForPublish({ actor: req.user, campaignId: id, advertiserId, config });
         await tiktok.publishCampaign({
           actor: req.user,
           advertiserId,

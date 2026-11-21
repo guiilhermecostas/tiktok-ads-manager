@@ -1,4 +1,6 @@
+import fs from 'node:fs';
 import path from 'node:path';
+import ffmpegStatic from 'ffmpeg-static';
 import { parseEncryptionKey } from './lib/crypto.js';
 
 function parsePort(value) {
@@ -69,9 +71,31 @@ function megabytes(name, fallback, max) {
   return value * MB;
 }
 
-/** Biblioteca de criativos: onde os arquivos ficam e os limites de envio. */
+/** Inteiro de uma variável de ambiente, com padrão e limites. */
+function integer(name, fallback, min, max) {
+  const raw = process.env[name];
+  const value = raw === undefined || raw === '' ? fallback : Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) throw new Error(`${name} inválido (inteiro de ${min} a ${max}).`);
+  return value;
+}
+
+/** Binário do FFmpeg usado na limpeza dos criativos: o do pacote `ffmpeg-static` ou o informado em FFMPEG_PATH. */
+function resolveFfmpegPath() {
+  const custom = (process.env.FFMPEG_PATH ?? '').trim();
+  if (!custom) return ffmpegStatic ?? null;
+  if (!path.isAbsolute(custom) || !fs.existsSync(custom)) throw new Error('FFMPEG_PATH inválido (use o caminho absoluto de um arquivo existente).');
+  return custom;
+}
+
+/** Biblioteca de criativos: onde os arquivos ficam, os limites de envio e a limpeza feita a cada publicação. */
 function loadCreativesConfig() {
   return {
+    cleaning: {
+      ffmpegPath: resolveFfmpegPath(),
+      concurrency: integer('CREATIVES_CLEAN_CONCURRENCY', 1, 1, 4), // limpezas ao mesmo tempo (CPU compartilhada)
+      timeoutMs: integer('CREATIVES_CLEAN_TIMEOUT_MIN', 20, 1, 120) * 60_000,
+      threads: integer('CREATIVES_CLEAN_THREADS', 2, 1, 8), // threads do codificador (limita CPU e memória)
+    },
     dir: path.resolve(process.env.CREATIVES_DIR ?? path.join(process.cwd(), 'data', 'creatives')),
     maxImageBytes: megabytes('CREATIVES_MAX_IMAGE_MB', 10, 50),
     maxVideoBytes: megabytes('CREATIVES_MAX_VIDEO_MB', 200, 1024),

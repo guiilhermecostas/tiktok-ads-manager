@@ -8,6 +8,7 @@ import { createAuthService } from './modules/auth/auth.service.js';
 import { createSessionsRepository } from './modules/auth/sessions.repository.js';
 import { createCampaignsRepository } from './modules/campaigns/campaigns.repository.js';
 import { createCampaignsRouter } from './modules/campaigns/campaigns.routes.js';
+import { createCreativeCleaner } from './modules/creatives/creative-cleaner.js';
 import { createLocalCreativeStorage } from './modules/creatives/creative-storage.js';
 import { createCreativesRepository } from './modules/creatives/creatives.repository.js';
 import { createCreativesRouter } from './modules/creatives/creatives.routes.js';
@@ -29,7 +30,7 @@ const SHARED_DIR = path.join(ROOT_DIR, 'shared');
 /**
  * Monta a aplicação Express. Recebe dependências (config, db, log) para facilitar testes.
  */
-export function createApp({ config, db, log = console, limits, fetchFn }) {
+export function createApp({ config, db, log = console, limits, fetchFn, cleaner }) {
   const users = createUsersRepository(db);
   const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
   const campaigns = createCampaignsRepository(db);
@@ -39,7 +40,10 @@ export function createApp({ config, db, log = console, limits, fetchFn }) {
   const businessCenters = createBusinessCentersRepository(db, { encryptionKey: config.tiktok.encryptionKey });
   const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, config, log });
   const creativeStorage = createLocalCreativeStorage({ dir: config.creatives.dir });
-  const creativesService = createCreativesService({ repo: createCreativesRepository(db), storage: creativeStorage, tiktok: tiktokService, config, log });
+  // Limpeza dos criativos a cada publicação (metadados, hash e cantos). `cleaner` pode ser injetado nos testes.
+  const cleaning = config.creatives.cleaning ?? {};
+  const creativeCleaner = cleaner ?? createCreativeCleaner({ ffmpegPath: cleaning.ffmpegPath ?? null, tmpDir: creativeStorage.tmpDir, concurrency: cleaning.concurrency, timeoutMs: cleaning.timeoutMs, threads: cleaning.threads, log });
+  const creativesService = createCreativesService({ repo: createCreativesRepository(db), storage: creativeStorage, cleaner: creativeCleaner, tiktok: tiktokService, config, log });
 
   const app = express();
   app.set('trust proxy', config.trustProxy ?? 0); // 0: ignora X-Forwarded-*; N: confia nos N proxies à frente (IP real do cliente)
@@ -138,6 +142,7 @@ export function createApp({ config, db, log = console, limits, fetchFn }) {
     authService,
     sessions,
     creativeStorage,
+    creativeCleaner,
     close: () => {
       authRouter.stop();
       tiktokRouter.stop();

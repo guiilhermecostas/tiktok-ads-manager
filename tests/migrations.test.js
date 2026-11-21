@@ -5,7 +5,7 @@ import { MIGRATIONS, findTablesWithoutRls, runMigrations } from '../src/db/migra
 import { createPgliteDatabase } from '../src/db/adapters/pglite.js';
 import { all, one } from './helpers.js';
 
-const EXPECTED_TABLES = ['campaign_publications', 'campaigns', 'creative_tiktok_assets', 'creatives', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users'];
+const EXPECTED_TABLES = ['campaign_creative_assets', 'campaign_publications', 'campaigns', 'creative_tiktok_assets', 'creatives', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users'];
 const config = { url: null, sslCaPath: null, poolMax: 1, devDataDir: null, requireRls: true };
 const silent = { info() {}, warn() {}, error() {} };
 
@@ -195,6 +195,32 @@ describe('publicações por conta de anúncio (migração v4)', () => {
       await assert.rejects(() => db.query("INSERT INTO campaign_publications (campaign_id, advertiser_id) VALUES (404, '9003')"), (e) => e.code === '23503');
       await db.query('DELETE FROM campaigns WHERE id = 1');
       assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM campaign_publications')).c, 0);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('versões limpas dos criativos por campanha e conta (migração v5)', () => {
+  it('uma versão por (campanha, criativo, conta); conta só com dígitos; cascata ao apagar campanha ou criativo', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')");
+      await db.query("INSERT INTO campaigns (user_id, name, objective, daily_budget) VALUES (1, 'c1', 'TRAFFIC', 0), (1, 'c2', 'TRAFFIC', 0)");
+      await db.query("INSERT INTO creatives (user_id, name, kind, source) VALUES (1, 'v1', 'video', 'tiktok'), (1, 'v2', 'video', 'tiktok')");
+      const insert = (campaign, creative, advertiser, hash = 'h') => db.query('INSERT INTO campaign_creative_assets (campaign_id, creative_id, advertiser_id, tiktok_id, variant_sha256) VALUES ($1, $2, $3, $4, $5)', [campaign, creative, advertiser, 'tt-id', hash]);
+      await insert(1, 1, '9001', 'a');
+      await insert(1, 1, '9002', 'b'); // mesma campanha e criativo em OUTRA conta: outra versão
+      await insert(2, 1, '9001', 'c'); // OUTRA campanha na mesma conta: outra versão
+      await assert.rejects(() => insert(1, 1, '9001', 'd'), (e) => e.code === '23505', 'uma versão por (campanha, criativo, conta)');
+      for (const bad of ['', 'abc', '9 1', "9001'; --", '9'.repeat(25)]) await assert.rejects(() => insert(1, 2, bad), (e) => e.code === '23514', bad);
+      await assert.rejects(() => insert(404, 1, '9001'), (e) => e.code === '23503');
+      await assert.rejects(() => insert(1, 404, '9001'), (e) => e.code === '23503');
+      await db.query('DELETE FROM campaigns WHERE id = 2');
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM campaign_creative_assets')).c, 2, 'apagar a campanha apaga as versões dela');
+      await db.query('DELETE FROM creatives WHERE id = 1');
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM campaign_creative_assets')).c, 0, 'apagar o criativo apaga as versões dele');
     } finally {
       await db.close();
     }

@@ -31,6 +31,7 @@ export function createLocalCreativeStorage({ dir }) {
 
   return {
     base,
+    tmpDir, // pasta privada para arquivos em processamento (envios e versões limpas)
 
     /** Cria as pastas e apaga temporários abandonados (ex.: queda do servidor no meio de um envio). */
     async init() {

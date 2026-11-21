@@ -109,7 +109,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
 
   function statusChip(account) {
     const result = results.get(account.id);
-    if (result?.state === 'running') return h('span', { class: 'targets__state targets__state--running' }, h('span', { class: 'spinner' }), 'Publicando…');
+    if (result?.state === 'running') return h('span', { class: 'targets__state targets__state--running' }, h('span', { class: 'spinner' }), 'Preparando criativos e publicando…');
     if (result?.state === 'done') return h('span', { class: 'targets__state targets__state--done' }, '✓ Publicada (pausada)');
     if (result?.state === 'failed') return h('span', { class: 'targets__state targets__state--failed' }, '✗ Falhou');
     const publication = publicationOf(account.id);
@@ -249,6 +249,12 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     { class: 'card card--pad targets' },
     h('h3', { class: 'card__title' }, 'Publicar em'),
     h('p', { class: 'muted' }, 'Escolha uma ou mais contas de anúncio, de qualquer Business Center. A campanha é criada PAUSADA em cada uma: nada gasta até você ativar no TikTok.'),
+    h(
+      'p',
+      { class: 'targets__note' },
+      h('strong', null, 'Criativos blindados: '),
+      'em cada conta, vídeos e imagens são refeitos do zero, sem metadados e com hash novo, e os cantos dos primeiros e dos últimos 0,1 s do vídeo recebem pixels de cores próximas. Cada conta e cada campanha enviam uma versão diferente. Por isso a publicação pode levar um pouco mais.',
+    ),
     searchRow,
     list,
     summary,

@@ -234,6 +234,29 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['campaign_publications'], revoke: ['campaign_publications'], identity: ['campaign_publications'] })}
     `,
   },
+  {
+    version: 5,
+    description: 'Criativos limpos e únicos por campanha e conta de anúncio',
+    sql: `
+      -- A cada publicação, cada criativo (vídeo ou imagem) é refeito sem metadados e com os cantos levemente alterados, e essa
+      -- versão ÚNICA é enviada ao TikTok. Aqui fica o ID que o TikTok deu a ela, por (campanha, criativo, conta): uma nova
+      -- tentativa da MESMA campanha na MESMA conta reaproveita o envio; outra campanha ou outra conta gera outra versão.
+      -- variant_sha256 é o hash do arquivo realmente enviado (auditoria: nunca coincide com o original nem com outra versão).
+      CREATE TABLE campaign_creative_assets (
+        campaign_id    INTEGER     NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+        creative_id    INTEGER     NOT NULL REFERENCES creatives(id) ON DELETE CASCADE,
+        advertiser_id  TEXT        NOT NULL CHECK (advertiser_id ~ '^[0-9]{1,24}$'),
+        tiktok_id      TEXT        NOT NULL,
+        variant_sha256 TEXT        NOT NULL,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (campaign_id, creative_id, advertiser_id)
+      );
+
+      COMMENT ON TABLE creative_tiktok_assets IS 'Só criativos que JÁ existiam no TikTok (referência por ID). Arquivos da biblioteca ficam em campaign_creative_assets.';
+
+      ${protectTables({ rls: ['campaign_creative_assets'], revoke: ['campaign_creative_assets'], identity: [] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

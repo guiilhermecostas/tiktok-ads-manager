@@ -513,4 +513,5 @@ body.modal-open { overflow: hidden; }
 .targets__adjust { margin-top: 10px; padding: 14px; border: 1px dashed #c9cccf; border-radius: 10px; background: #fff; display: flex; flex-direction: column; gap: 10px; }
 .targets__summary { margin: 14px 0 6px; font-weight: 600; }
 .targets__empty { padding: 14px; margin: 0; }
+.targets__note { margin: 10px 0 0; padding: 10px 12px; font-size: 13px; color: var(--muted); background: #f6f6f7; border-left: 3px solid var(--tt-cyan); border-radius: 8px; }
 

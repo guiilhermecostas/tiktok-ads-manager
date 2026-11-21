@@ -109,8 +109,17 @@ Segurança dos tokens: AES-256-GCM no banco, nunca enviados ao navegador nem reg
   configuráveis por `CREATIVES_*`) e, no assistente de campanha, **seleciona** do que já está armazenado. Também é possível registrar um
   criativo que já está na conta do TikTok (por ID).
 - Envio com barra de progresso, miniaturas, pré-visualização, busca, filtros (imagens/vídeos), renomear e excluir. Arquivo repetido não duplica.
-- Ao publicar, o sistema envia os arquivos escolhidos para a conta de anúncio no TikTok (uma vez por conta; o ID fica em cache) e
-  usa os IDs devolvidos.
+- Ao publicar, o sistema envia a versão limpa dos arquivos escolhidos para a conta de anúncio no TikTok e usa os IDs devolvidos.
+- **Criativos blindados:** a cada publicação, em **cada conta de anúncio e em cada campanha**, vídeos e imagens passam por uma limpeza e o
+  que vai ao TikTok é uma versão **nova e única** (o arquivo da biblioteca nunca é alterado). A limpeza (`src/modules/creatives/creative-cleaner.js`,
+  FFmpeg) descarta metadados e o hash original, refaz a mídia por completo (vídeo decodificado e recodificado quadro a quadro em
+  H.264/AAC; imagem recodificada) e altera os 4 cantos com cores muito próximas (variação de 3 a 7 níveis em 255): nos **primeiros e nos
+  últimos 0,1 s** do vídeo, e na imagem inteira. O sorteio é novo a cada execução, então a mesma campanha em 3 contas envia 3 versões
+  diferentes. O hash da versão enviada fica em `campaign_creative_assets` (auditoria); uma nova tentativa da mesma campanha na mesma
+  conta reaproveita o envio. Se a limpeza falhar (arquivo corrompido ou sem FFmpeg), a publicação é recusada: o original nunca é enviado.
+  O FFmpeg roda sem shell, com formato de entrada fixo, só protocolo `file`, tempo e tamanho máximos e no máximo
+  `CREATIVES_CLEAN_CONCURRENCY` processos por vez. Vídeos grandes pedem CPU/memória: em planos pequenos a publicação de cada conta pode demorar.
+  Criativos que já existiam no TikTok (referência por ID) não têm arquivo e, por isso, não passam pela limpeza.
 - Segurança: o tipo é conferido pelo **conteúdo** do arquivo (não pela extensão), o envio é em fluxo com limite de tamanho, os arquivos
   recebem nome aleatório fora da pasta pública e só o dono os acessa (de outro usuário responde 404); são servidos com `nosniff` e CSP restrita.
 - Os arquivos ficam em disco no servidor (`CREATIVES_DIR`, padrão `data/creatives`): inclua essa pasta no backup. O armazenamento está

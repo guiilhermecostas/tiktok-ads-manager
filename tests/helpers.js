@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import ffmpegPath from 'ffmpeg-static';
 import { loadConfig } from '../src/config.js';
+import { createCreativeCleaner } from '../src/modules/creatives/creative-cleaner.js';
+import { createStubCleaner } from './stub-cleaner.js';
 import { createApp } from '../src/app.js';
 import { openDatabase } from '../src/db/index.js';
 
@@ -35,7 +38,11 @@ async function truncateAll(db) {
 }
 
 /** Sobe a aplicação em porta efêmera com um banco Postgres (PGlite) limpo. */
-export async function startTestServer({ limits, config: overrides, fetchFn, isolated = false, creatives } = {}) {
+/**
+ * `cleaner`: por padrão um limpador FALSO (os testes usam mídia de mentira); `'real'` usa o FFmpeg de verdade;
+ * também aceita um objeto com o mesmo contrato.
+ */
+export async function startTestServer({ limits, config: overrides, fetchFn, isolated = false, creatives, cleaner } = {}) {
   const MB = 1024 * 1024;
   const creativesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'creatives-test-'));
   const config = loadConfig({
@@ -53,7 +60,9 @@ export async function startTestServer({ limits, config: overrides, fetchFn, isol
     db = await sharedDatabase();
     await truncateAll(db);
   }
-  const built = createApp({ config, db, log: silentLog, limits, fetchFn });
+  const tmpDir = path.join(creativesDir, '.tmp');
+  const chosenCleaner = cleaner === 'real' ? createCreativeCleaner({ ffmpegPath, tmpDir, concurrency: 2, log: silentLog }) : (cleaner ?? createStubCleaner());
+  const built = createApp({ config, db, log: silentLog, limits, fetchFn, cleaner: chosenCleaner });
   await built.authService.ensureAdmin(silentLog);
   await built.creativeStorage.init();
 
@@ -67,6 +76,7 @@ export async function startTestServer({ limits, config: overrides, fetchFn, isol
     db,
     config,
     creativesDir,
+    cleaner: chosenCleaner,
     ...built,
     client: () => createClient(baseUrl),
     async stop() {

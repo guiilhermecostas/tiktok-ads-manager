@@ -83,3 +83,37 @@ describe('config: proxy reverso (TRUST_PROXY)', () => {
     for (const bad of ['-1', '6', '1.5', 'true', 'abc', '1e1']) assert.throws(() => trust(bad), /TRUST_PROXY/, bad);
   });
 });
+
+describe('config: limpeza dos criativos (FFmpeg)', () => {
+  const KEYS_CLEAN = ['CREATIVES_CLEAN_CONCURRENCY', 'CREATIVES_CLEAN_TIMEOUT_MIN', 'CREATIVES_CLEAN_THREADS', 'FFMPEG_PATH'];
+  const withClean = (env, fn) => {
+    const previous = Object.fromEntries(KEYS_CLEAN.map((k) => [k, process.env[k]]));
+    for (const k of KEYS_CLEAN) delete process.env[k];
+    Object.assign(process.env, env);
+    try {
+      return fn();
+    } finally {
+      for (const k of KEYS_CLEAN) {
+        if (previous[k] === undefined) delete process.env[k];
+        else process.env[k] = previous[k];
+      }
+    }
+  };
+  const cleaning = (env) => withClean(env, () => loadConfig({ adminPassword: 'x' }).creatives.cleaning);
+
+  it('padrões: binário do pacote ffmpeg-static, 1 limpeza por vez, 20 min e 2 threads', () => {
+    const c = cleaning({});
+    assert.ok(typeof c.ffmpegPath === 'string' && c.ffmpegPath.length > 0, 'o binário empacotado existe');
+    assert.deepEqual([c.concurrency, c.timeoutMs, c.threads], [1, 20 * 60_000, 2]);
+  });
+
+  it('valida os limites e o caminho do binário', () => {
+    for (const [name, value] of [['CREATIVES_CLEAN_CONCURRENCY', '0'], ['CREATIVES_CLEAN_CONCURRENCY', '9'], ['CREATIVES_CLEAN_TIMEOUT_MIN', '0'], ['CREATIVES_CLEAN_THREADS', 'abc'], ['CREATIVES_CLEAN_THREADS', '1.5']]) {
+      assert.throws(() => cleaning({ [name]: value }), new RegExp(name), `${name}=${value}`);
+    }
+    assert.equal(cleaning({ CREATIVES_CLEAN_CONCURRENCY: '3' }).concurrency, 3);
+    assert.throws(() => cleaning({ FFMPEG_PATH: 'ffmpeg' }), /FFMPEG_PATH/, 'caminho relativo');
+    assert.throws(() => cleaning({ FFMPEG_PATH: '/nao/existe/ffmpeg' }), /FFMPEG_PATH/, 'arquivo inexistente');
+    assert.equal(cleaning({ FFMPEG_PATH: process.execPath }).ffmpegPath, process.execPath, 'caminho absoluto existente é aceito');
+  });
+});

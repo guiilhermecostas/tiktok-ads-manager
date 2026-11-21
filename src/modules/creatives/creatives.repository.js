@@ -102,7 +102,23 @@ export function createCreativesRepository(db) {
       return rows[0] ?? null;
     },
 
-    // ---- IDs que o TikTok deu a cada criativo, por conta de anúncio ----
+    // ---- Versão limpa enviada ao TikTok, por (campanha, criativo, conta de anúncio) ----
+    async findCampaignAsset(campaignId, creativeId, advertiserId) {
+      const { rows } = await db.query(
+        'SELECT tiktok_id FROM campaign_creative_assets WHERE campaign_id = $1 AND creative_id = $2 AND advertiser_id = $3',
+        [campaignId, creativeId, advertiserId],
+      );
+      return rows[0]?.tiktok_id ?? null;
+    },
+    async saveCampaignAsset({ campaignId, creativeId, advertiserId, tiktokId, variantSha256 }) {
+      await db.query(
+        `INSERT INTO campaign_creative_assets (campaign_id, creative_id, advertiser_id, tiktok_id, variant_sha256) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (campaign_id, creative_id, advertiser_id) DO UPDATE SET tiktok_id = EXCLUDED.tiktok_id, variant_sha256 = EXCLUDED.variant_sha256`,
+        [campaignId, creativeId, advertiserId, tiktokId, variantSha256],
+      );
+    },
+
+    // ---- Criativos que JÁ existiam no TikTok (referência por ID), por conta de anúncio ----
     async findAsset(creativeId, advertiserId) {
       const { rows } = await db.query('SELECT tiktok_id FROM creative_tiktok_assets WHERE creative_id = $1 AND advertiser_id = $2', [creativeId, advertiserId]);
       return rows[0]?.tiktok_id ?? null;

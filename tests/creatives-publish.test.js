@@ -4,6 +4,7 @@ import { completeConfig } from './campaign-fixtures.js';
 import { GOOD_TOKEN, OTHER_TOKEN, createFakeTiktok, tiktokTestConfig } from './fake-tiktok.js';
 import { all, createUser, loginAdmin, one, startTestServer } from './helpers.js';
 import { mp4Bytes, pngBytes, uploadedId } from './media-fixtures.js';
+import { STUB_EXTRA_BYTES } from './stub-cleaner.js';
 
 const LIMITS = { register: 1000, loginIp: 1000, loginAccount: 1000, tiktokRead: 1000, tiktokWrite: 1000, campaignPublish: 1000, creativesRead: 5000, creativesWrite: 5000 };
 
@@ -113,31 +114,59 @@ describe('Criativos nas campanhas: validação ao salvar e envio ao TikTok na pu
       const row = await one(ctx.db, 'SELECT md5, size_bytes FROM creatives WHERE id = $1', [video]);
       assert.equal(upload.token, GOOD_TOKEN, 'usa o token da BC dona da conta');
       assert.equal(upload.method, 'POST');
-      assert.deepEqual({ ...upload.body }, { advertiser_id: '9001', upload_type: 'UPLOAD_BY_FILE', video_signature: row.md5, file_name: `${video}.mp4`, video_file: { fileName: `${video}.mp4`, size: bytes.length } });
-      const mapped = await one(ctx.db, 'SELECT tiktok_id FROM creative_tiktok_assets WHERE creative_id = $1 AND advertiser_id = $2', [video, '9001']);
+      // O que vai ao TikTok é a versão LIMPA (única), nunca o arquivo original: outra assinatura, outro tamanho e nome aleatório.
+      assert.deepEqual(Object.keys(upload.body).sort(), ['advertiser_id', 'file_name', 'upload_type', 'video_file', 'video_signature']);
+      assert.equal(upload.body.advertiser_id, '9001');
+      assert.equal(upload.body.upload_type, 'UPLOAD_BY_FILE');
+      assert.notEqual(upload.body.video_signature, row.md5, 'a assinatura é a do arquivo limpo, não a do original');
+      assert.match(upload.body.file_name, /^[a-f0-9]{16}\.mp4$/);
+      assert.notEqual(upload.body.file_name, `${video}.mp4`, 'o nome original não é enviado');
+      assert.equal(upload.body.video_file.size, bytes.length + STUB_EXTRA_BYTES);
+      const mapped = await one(ctx.db, 'SELECT tiktok_id, variant_sha256 FROM campaign_creative_assets WHERE campaign_id = $1 AND creative_id = $2 AND advertiser_id = $3', [id, video, '9001']);
       assert.match(mapped.tiktok_id, /^v10033g5000video\d+$/);
+      assert.match(mapped.variant_sha256, /^[a-f0-9]{64}$/);
+      assert.notEqual(mapped.variant_sha256, (await one(ctx.db, 'SELECT sha256 FROM creatives WHERE id = $1', [video])).sha256, 'hash da versão enviada difere do original');
       assert.equal(fake.callsTo('/ad/create/')[0].body.creatives[0].video_id, mapped.tiktok_id, 'o anúncio usa o ID que o TikTok devolveu');
       assert.ok(!('video_creative_id' in fake.callsTo('/ad/create/')[0].body.creatives[0]));
     });
 
-    it('REAPROVEITA o envio: mesma conta não reenvia; outra conta de anúncio envia de novo', async () => {
+    it('CADA campanha e CADA conta recebem a SUA versão limpa do criativo (nada é reaproveitado entre campanhas ou contas)', async () => {
       const { client } = await newUser();
       const video = await uploadedId(client, { type: 'mp4' });
       const first = await draft(client, { campaign: { name: 'Primeira' }, ad: { videoCreativeId: video } });
       const second = await draft(client, { campaign: { name: 'Segunda' }, ad: { videoCreativeId: video } });
-      const other = await draft(client, { campaign: { name: 'Outra conta' }, ad: { videoCreativeId: video } });
       reset();
-      assert.equal((await publish(client, first.id)).status, 200);
-      assert.equal((await publish(client, second.id)).status, 200);
-      assert.equal(fake.callsTo('/file/video/ad/upload/').length, 1, 'segundo uso na mesma conta não reenvia');
-      const [ad1, ad2] = fake.callsTo('/ad/create/');
-      assert.equal(ad1.body.creatives[0].video_id, ad2.body.creatives[0].video_id);
+      assert.equal((await publish(client, first.id, '9001')).status, 200);
+      assert.equal((await publish(client, first.id, '9002')).status, 200, 'a MESMA campanha em outra conta');
+      assert.equal((await publish(client, second.id, '9001')).status, 200, 'OUTRA campanha na mesma conta de antes');
 
-      assert.equal((await publish(client, other.id, '9002')).status, 200);
-      assert.equal(fake.callsTo('/file/video/ad/upload/').length, 2, 'conta diferente = envio novo');
-      assert.equal(fake.callsTo('/file/video/ad/upload/')[1].body.advertiser_id, '9002');
-      const assets = await all(ctx.db, 'SELECT advertiser_id FROM creative_tiktok_assets WHERE creative_id = $1 ORDER BY advertiser_id', [video]);
-      assert.deepEqual(assets.map((a) => a.advertiser_id), ['9001', '9002']);
+      const uploads = fake.callsTo('/file/video/ad/upload/');
+      assert.equal(uploads.length, 3, 'três publicações = três envios, cada um com a sua versão');
+      assert.deepEqual(uploads.map((u) => u.body.advertiser_id), ['9001', '9002', '9001']);
+      assert.equal(new Set(uploads.map((u) => u.body.video_signature)).size, 3, 'assinaturas (hash) todas diferentes');
+      assert.equal(new Set(uploads.map((u) => u.body.file_name)).size, 3, 'nomes de arquivo todos diferentes');
+      const adIds = fake.callsTo('/ad/create/').map((c) => c.body.creatives[0].video_id);
+      assert.equal(new Set(adIds).size, 3, 'cada anúncio usa o ID da própria versão');
+
+      const rows = await all(ctx.db, 'SELECT campaign_id, advertiser_id, variant_sha256 FROM campaign_creative_assets WHERE creative_id = $1 ORDER BY campaign_id, advertiser_id', [video]);
+      assert.deepEqual(rows.map((r) => [r.campaign_id, r.advertiser_id]), [[first.id, '9001'], [first.id, '9002'], [second.id, '9001']]);
+      assert.equal(new Set(rows.map((r) => r.variant_sha256)).size, 3, 'hashes das versões enviadas todos diferentes');
+    });
+
+    it('nova tentativa da MESMA campanha na MESMA conta reaproveita a versão já enviada (não reenvia nem gera outra)', async () => {
+      const { client } = await newUser();
+      const video = await uploadedId(client, { type: 'mp4' });
+      const { id } = await draft(client, { ad: { videoCreativeId: video } });
+      reset();
+      fake.state.failForAdvertiser.set('9001', 'ad');
+      assert.equal((await publish(client, id, '9001')).status, 502, 'o anúncio falha depois do envio do vídeo');
+      assert.equal(fake.callsTo('/file/video/ad/upload/').length, 1);
+      const sentBefore = (await one(ctx.db, 'SELECT tiktok_id, variant_sha256 FROM campaign_creative_assets WHERE campaign_id = $1', [id]));
+      fake.state.failForAdvertiser.clear();
+      assert.equal((await publish(client, id, '9001')).status, 200);
+      assert.equal(fake.callsTo('/file/video/ad/upload/').length, 1, 'nenhum novo envio na retomada');
+      assert.equal(fake.callsTo('/ad/create/').at(-1).body.creatives[0].video_id, sentBefore.tiktok_id);
+      assert.equal((await one(ctx.db, 'SELECT COUNT(*)::int AS c FROM campaign_creative_assets WHERE campaign_id = $1', [id])).c, 1);
     });
 
     it('imagem única, carrossel (ordem preservada) e capa de vídeo', async () => {
@@ -151,22 +180,24 @@ describe('Criativos nas campanhas: validação ao salvar e envio ao TikTok na pu
       assert.equal((await publish(client, carousel.id)).status, 200);
       assert.equal(fake.callsTo('/file/image/ad/upload/').length, 3);
       assert.equal(fake.callsTo('/file/video/ad/upload/').length, 0);
-      const ids = new Map((await all(ctx.db, 'SELECT creative_id, tiktok_id FROM creative_tiktok_assets')).map((r) => [r.creative_id, r.tiktok_id]));
+      const ids = new Map((await all(ctx.db, 'SELECT creative_id, tiktok_id FROM campaign_creative_assets WHERE campaign_id = $1', [carousel.id])).map((r) => [r.creative_id, r.tiktok_id]));
       const carouselAd = fake.callsTo('/ad/create/')[0].body.creatives[0];
       assert.deepEqual(carouselAd.image_ids, [ids.get(i3), ids.get(i1), ids.get(i2)], 'mesma ordem escolhida');
       assert.ok(!('video_id' in carouselAd));
       const imageUpload = fake.callsTo('/file/image/ad/upload/')[0].body;
       assert.deepEqual(Object.keys(imageUpload).sort(), ['advertiser_id', 'file_name', 'image_file', 'image_signature', 'upload_type']);
-      assert.match(imageUpload.file_name, /^\d+\.(png|jpg)$/);
+      assert.match(imageUpload.file_name, /^[a-f0-9]{16}\.(png|jpg)$/);
 
       assert.equal((await publish(client, single.id)).status, 200);
-      assert.equal(fake.callsTo('/file/image/ad/upload/').length, 3, 'imagem já enviada não é reenviada');
-      assert.deepEqual(fake.callsTo('/ad/create/')[1].body.creatives[0].image_ids, [ids.get(i1)]);
+      assert.equal(fake.callsTo('/file/image/ad/upload/').length, 4, 'outra campanha com a mesma imagem envia uma versão NOVA');
+      const singleIds = fake.callsTo('/ad/create/')[1].body.creatives[0].image_ids;
+      assert.equal(singleIds.length, 1);
+      assert.notEqual(singleIds[0], ids.get(i1), 'não reaproveita o ID da versão enviada pela outra campanha');
 
       assert.equal((await publish(client, withCover.id)).status, 200);
       const coverAd = fake.callsTo('/ad/create/')[2].body.creatives[0];
       assert.equal(fake.callsTo('/file/video/ad/upload/').length, 1);
-      assert.equal(fake.callsTo('/file/image/ad/upload/').length, 4, 'a capa é uma imagem enviada à parte');
+      assert.equal(fake.callsTo('/file/image/ad/upload/').length, 5, 'a capa é uma imagem enviada à parte (também limpa)');
       assert.equal(coverAd.image_ids.length, 1);
       assert.match(coverAd.video_id, /^v10033g5000video/);
     });
@@ -184,30 +215,32 @@ describe('Criativos nas campanhas: validação ao salvar e envio ao TikTok na pu
       const detail = (await client.get(`/api/campaigns/${id}`)).json.campaign;
       assert.equal(detail.publish.status, 'none');
       assert.match(detail.publish.error, /Video file is invalid/);
-      assert.equal((await one(ctx.db, 'SELECT COUNT(*)::int AS c FROM creative_tiktok_assets WHERE creative_id = $1', [video])).c, 0);
+      assert.equal((await one(ctx.db, 'SELECT COUNT(*)::int AS c FROM campaign_creative_assets WHERE creative_id = $1', [video])).c, 0, 'nada foi registrado como enviado');
 
       fake.state.failUpload.clear();
       assert.equal((await publish(client, id)).status, 200);
       assert.equal((await client.get(`/api/campaigns/${id}`)).json.campaign.publish.error, null);
     });
 
-    it('envio que falha na 2ª imagem: a 1ª (já enviada antes) é reaproveitada e a nova tentativa envia só o que faltou', async () => {
+    it('envio que falha na 2ª imagem: a 1ª (já enviada) é reaproveitada e a nova tentativa envia só o que faltou', async () => {
       const { client } = await newUser();
       const first = await uploadedId(client, { type: 'png' });
       const second = await uploadedId(client, { type: 'png' });
       const { id } = await draft(client, { ad: { format: 'CAROUSEL_ADS', videoCreativeId: undefined, imageCreativeIds: [first, second] } });
-      // a 1ª imagem já foi enviada à conta 9001 em uma publicação anterior
-      await ctx.db.query("INSERT INTO creative_tiktok_assets (creative_id, advertiser_id, tiktok_id) VALUES ($1, '9001', 'ad-site-i18n/anterior1')", [first]);
       reset();
-      fake.state.failUpload.add('image');
+      fake.state.uploadCalls = {};
+      fake.state.failUploadOnCall = { image: 2 };
       const failed = await publish(client, id);
       assert.equal(failed.status, 502);
-      assert.equal(fake.callsTo('/file/image/ad/upload/').length, 1, 'só a 2ª tentou enviar; a 1ª já tinha ID');
+      assert.equal(fake.callsTo('/file/image/ad/upload/').length, 2, 'a 1ª enviou; a 2ª falhou');
       assert.deepEqual(creatingCalls(), [], 'nada criado no TikTok');
-      fake.state.failUpload.clear();
+      const sent = await all(ctx.db, 'SELECT creative_id, tiktok_id FROM campaign_creative_assets WHERE campaign_id = $1', [id]);
+      assert.deepEqual(sent.map((r) => r.creative_id), [first], 'só a 1ª ficou registrada');
+
+      fake.state.failUploadOnCall = {};
       assert.equal((await publish(client, id)).status, 200);
-      assert.equal(fake.callsTo('/ad/create/')[0].body.creatives[0].image_ids[0], 'ad-site-i18n/anterior1');
-      assert.equal(fake.callsTo('/file/image/ad/upload/').length, 2, 'na 2ª tentativa só a 2ª imagem foi enviada');
+      assert.equal(fake.callsTo('/file/image/ad/upload/').length, 3, 'na 2ª tentativa só a 2ª imagem foi enviada');
+      assert.equal(fake.callsTo('/ad/create/')[0].body.creatives[0].image_ids[0], sent[0].tiktok_id, 'a 1ª imagem usa o envio anterior');
     });
 
     it('token da BC revogado durante o envio: 409 de reautorização e BC marcada com erro', async () => {
@@ -283,24 +316,26 @@ describe('Criativos nas campanhas: validação ao salvar e envio ao TikTok na pu
       assert.equal((await client.get(`/api/campaigns/${id}`)).json.campaign.publish.status, 'published');
     });
 
-    it('publicações simultâneas que usam o mesmo criativo funcionam (cada uma recebe um ID válido)', async () => {
+    it('publicações simultâneas de campanhas que usam o mesmo criativo funcionam (cada uma recebe a sua versão)', async () => {
       const { client } = await newUser();
       const video = await uploadedId(client, { type: 'mp4' });
       const drafts = await Promise.all([1, 2, 3].map((n) => draft(client, { campaign: { name: `Paralela ${n}` }, ad: { videoCreativeId: video } })));
       reset();
       const results = await Promise.all(drafts.map((d) => publish(client, d.id)));
       assert.ok(results.every((r) => r.status === 200), results.map((r) => r.status).join());
-      assert.equal((await one(ctx.db, 'SELECT COUNT(*)::int AS c FROM creative_tiktok_assets WHERE creative_id = $1', [video])).c, 1, 'um único vínculo por conta');
+      const rows = await all(ctx.db, 'SELECT variant_sha256 FROM campaign_creative_assets WHERE creative_id = $1', [video]);
+      assert.equal(rows.length, 3, 'uma versão por campanha');
+      assert.equal(new Set(rows.map((r) => r.variant_sha256)).size, 3, 'todas diferentes');
     });
   });
 
-  it('o tamanho do arquivo no TikTok simulado corresponde ao que a biblioteca guardou (transmissão do disco, sem corromper)', async () => {
+  it('o arquivo enviado ao TikTok chega inteiro (transmissão do disco, sem corromper)', async () => {
     const { client } = await newUser();
     const bytes = pngBytes('integridade', 50_000);
     const image = await uploadedId(client, { bytes, type: 'png' });
     const { id } = await draft(client, { ad: { format: 'SINGLE_IMAGE', videoCreativeId: undefined, imageCreativeIds: [image] } });
     reset();
     assert.equal((await publish(client, id)).status, 200);
-    assert.equal(fake.callsTo('/file/image/ad/upload/')[0].body.image_file.size, bytes.length);
+    assert.equal(fake.callsTo('/file/image/ad/upload/')[0].body.image_file.size, bytes.length + STUB_EXTRA_BYTES, 'o arquivo é transmitido do disco, inteiro');
   });
 });

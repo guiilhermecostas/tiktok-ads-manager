@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { collectCreativeRefs } from '../../../shared/campaign-spec.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest, notFound } from '../../lib/http-error.js';
@@ -6,11 +7,14 @@ import { DECLARED_TYPES, MIME_BY_EXT, sniffCreativeType } from './creative-types
 /** ID de mídia do TikTok (ex.: "v10033g50000…", "ad-site-i18n/2020/abc"): sem "..", sem "//", começa/termina alfanumérico. */
 const MEDIA_ID_RE = /^(?!.*(?:\.\.|\/\/))[A-Za-z0-9][\w\-./:]{2,198}[A-Za-z0-9]$/;
 
+/** Teto do arquivo LIMPO enviado ao TikTok (limites do próprio TikTok; a recodificação pode aumentar o arquivo). */
+const CLEAN_OUTPUT_MAX_BYTES = { video: 500 * 1024 * 1024, image: 10 * 1024 * 1024 };
+
 /**
  * Regras de negócio da biblioteca de criativos.
  * Todo acesso é escopado ao usuário autenticado (`actor`): criativo de outro usuário é sempre "não encontrado".
  */
-export function createCreativesService({ repo, storage, tiktok, config, log = console }) {
+export function createCreativesService({ repo, storage, cleaner, tiktok, config, log = console }) {
   const limits = config.creatives;
   const maxBytesFor = (kind) => (kind === 'video' ? limits.maxVideoBytes : limits.maxImageBytes);
 
@@ -147,10 +151,13 @@ export function createCreativesService({ repo, storage, tiktok, config, log = co
 
     /**
      * Antes de criar qualquer coisa no TikTok: garante que cada criativo usado esteja na conta de anúncio.
-     * Reaproveita o ID de um envio anterior para a MESMA conta; senão envia o arquivo agora.
+     *  - Arquivo da biblioteca: é LIMPO e refeito (sem metadados e hash original, cantos do início e do fim alterados) e a
+     *    versão única é enviada. Isso acontece para CADA campanha e CADA conta de anúncio: a mesma campanha em 3 contas envia
+     *    3 versões diferentes. Uma nova tentativa da mesma campanha na mesma conta reaproveita o envio já feito.
+     *  - Criativo que já existia no TikTok (referência por ID): usa o ID guardado, só na conta a que ele pertence.
      * Retorna { videoId, coverImageId, imageIds } com os IDs do TikTok.
      */
-    async resolveForPublish({ actor, advertiserId, config: campaignConfig }) {
+    async resolveForPublish({ actor, campaignId, advertiserId, config: campaignConfig }) {
       const refs = collectCreativeRefs(campaignConfig);
       const rows = new Map((await repo.getManyInternal(actor.id, [...new Set(refs.map((r) => r.id))])).map((r) => [r.id, r]));
       const tiktokIdOf = new Map();
@@ -159,15 +166,34 @@ export function createCreativesService({ repo, storage, tiktok, config, log = co
         if (tiktokIdOf.has(ref.id)) continue;
         const row = rows.get(ref.id);
         if (!row) throw badRequest('Um dos criativos escolhidos não existe mais na sua biblioteca.', 'creative_missing');
-        let tiktokId = await repo.findAsset(row.id, advertiserId);
-        if (!tiktokId) {
-          if (!row.storage_key) {
+
+        if (!row.storage_key) {
+          const referenced = await repo.findAsset(row.id, advertiserId);
+          if (!referenced) {
             throw badRequest(`O criativo "${row.name}" pertence a outra conta de anúncio do TikTok. Escolha outro ou envie o arquivo para a biblioteca.`, 'creative_wrong_account');
           }
-          tiktokId = await tiktok.uploadCreative({
-            actor, advertiserId, kind: row.kind, filePath: storage.pathFor(row.storage_key), fileName: `${row.id}.${row.storage_key.split('.').pop()}`, md5: row.md5,
+          tiktokIdOf.set(row.id, referenced);
+          continue;
+        }
+
+        let tiktokId = await repo.findCampaignAsset(campaignId, row.id, advertiserId);
+        if (!tiktokId) {
+          const cleaned = await cleaner.clean({
+            inputPath: storage.pathFor(row.storage_key),
+            kind: row.kind,
+            ext: row.storage_key.split('.').pop(),
+            originalSha256: row.sha256,
+            maxOutputBytes: CLEAN_OUTPUT_MAX_BYTES[row.kind],
+            name: row.name,
           });
-          await repo.saveAsset(row.id, advertiserId, tiktokId);
+          try {
+            tiktokId = await tiktok.uploadCreative({
+              actor, advertiserId, kind: row.kind, filePath: cleaned.filePath, fileName: `${randomBytes(8).toString('hex')}.${cleaned.ext}`, md5: cleaned.md5,
+            });
+            await repo.saveCampaignAsset({ campaignId, creativeId: row.id, advertiserId, tiktokId, variantSha256: cleaned.sha256 });
+          } finally {
+            await cleaned.discard().catch((err) => log.error('[criativos] não foi possível apagar a versão limpa:', err.code ?? err.message));
+          }
         }
         tiktokIdOf.set(row.id, tiktokId);
       }

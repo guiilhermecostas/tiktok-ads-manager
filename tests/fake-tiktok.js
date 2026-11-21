@@ -30,6 +30,8 @@ export function createFakeTiktok() {
     failForAdvertiser: new Map(), // ID da conta -> nível ('campaign' | 'adGroup' | 'ad'): derruba a criação só nessa conta
     nextId: 7000,
     failUpload: new Set(), // 'image' | 'video'
+    failUploadOnCall: {}, // ex.: { image: 2 } derruba só a 2ª imagem enviada desde o último `uploadCalls = {}`
+    uploadCalls: {},
     createDelayMs: 0, // simula latência nas criações (testes de concorrência)
     manyCampaigns: 0, // >0: devolve essa quantidade de campanhas, paginadas
     // Autorização por link: auth_code -> { token, advertisers } (uso único, como no TikTok).
@@ -122,7 +124,8 @@ export function createFakeTiktok() {
         });
       }
       case '/file/image/ad/upload/':
-        if (state.failUpload.has('image')) return reply({}, 40002, 'Image file is invalid');
+        state.uploadCalls.image = (state.uploadCalls.image ?? 0) + 1;
+        if (state.failUpload.has('image') || state.failUploadOnCall.image === state.uploadCalls.image) return reply({}, 40002, 'Image file is invalid');
         return reply({ image_id: `ad-site-i18n/img${++state.nextId}`, width: 100, height: 100 });
       case '/file/video/ad/upload/':
         if (state.failUpload.has('video')) return reply({}, 40002, 'Video file is invalid');
