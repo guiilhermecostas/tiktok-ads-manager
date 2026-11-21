@@ -1,7 +1,6 @@
 /** Configuração completa e válida para um objetivo (base dos testes). */
 export function completeConfig(objective = 'TRAFFIC', over = {}) {
   const base = {
-    account: { advertiserId: '9001' },
     campaign: { name: 'Black Friday', objective },
     adGroup: {
       name: 'Grupo 1', locations: ['BR'], budgetMode: 'BUDGET_MODE_DAY', budget: 5000,

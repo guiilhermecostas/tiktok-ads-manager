@@ -5,7 +5,7 @@ import { MIGRATIONS, findTablesWithoutRls, runMigrations } from '../src/db/migra
 import { createPgliteDatabase } from '../src/db/adapters/pglite.js';
 import { all, one } from './helpers.js';
 
-const EXPECTED_TABLES = ['campaigns', 'creative_tiktok_assets', 'creatives', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users'];
+const EXPECTED_TABLES = ['campaign_publications', 'campaigns', 'creative_tiktok_assets', 'creatives', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users'];
 const config = { url: null, sslCaPath: null, poolMax: 1, devDataDir: null, requireRls: true };
 const silent = { info() {}, warn() {}, error() {} };
 
@@ -140,6 +140,61 @@ describe('conexão por link: restrições do esquema (migração v3)', () => {
       assert.equal((await one(db, "SELECT connection_id FROM tiktok_oauth_attempts WHERE attempt_id = $1", ['a'.repeat(32)])).connection_id, null);
       await db.query('DELETE FROM users WHERE id = 1');
       assert.equal((await one(db, 'SELECT COUNT(*)::int c FROM tiktok_oauth_attempts')).c, 1, 'só as do usuário removido');
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('publicações por conta de anúncio (migração v4)', () => {
+  it('preserva a publicação única que já existia: vira uma linha por (campanha, conta); rascunhos não geram linha', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db, MIGRATIONS.slice(0, 3)); // banco como estava antes da v4
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')");
+      const campaign = (name, advertiser, ids, error = null) => db.query(
+        `INSERT INTO campaigns (user_id, name, objective, daily_budget, config, advertiser_id, tiktok_campaign_id, tiktok_adgroup_id, tiktok_ad_id, publish_error, published_at)
+         VALUES (1, $1, 'TRAFFIC', 0, '{}'::jsonb, $2, $3, $4, $5, $6, $7)`,
+        [name, advertiser, ids[0] ?? null, ids[1] ?? null, ids[2] ?? null, error, ids[2] ? new Date('2026-11-05T10:00:00Z') : null],
+      );
+      await campaign('publicada', '9001', ['c1', 'g1', 'a1']);
+      await campaign('parcial', '9002', ['c2', 'g2'], 'Identity not found');
+      await campaign('falhou', '9003', [], 'Campaign name already exists');
+      await campaign('rascunho com conta', '9004', []);
+      await campaign('rascunho sem conta', null, []);
+      await campaign('conta malformada', 'abc', ['c9']);
+
+      await runMigrations(db); // aplica a v4
+      const rows = await all(db, 'SELECT c.name, p.advertiser_id, p.tiktok_campaign_id, p.tiktok_adgroup_id, p.tiktok_ad_id, p.error, p.published_at FROM campaign_publications p JOIN campaigns c ON c.id = p.campaign_id ORDER BY c.id');
+      assert.deepEqual(rows.map((r) => [r.name, r.advertiser_id, r.tiktok_campaign_id, r.tiktok_adgroup_id, r.tiktok_ad_id, r.error]), [
+        ['publicada', '9001', 'c1', 'g1', 'a1', null],
+        ['parcial', '9002', 'c2', 'g2', null, 'Identity not found'],
+        ['falhou', '9003', null, null, null, 'Campaign name already exists'],
+      ]);
+      assert.equal(rows[0].published_at.toISOString(), '2026-11-05T10:00:00.000Z');
+      // Nada foi apagado das colunas antigas (permite reverter o deploy).
+      assert.equal((await one(db, "SELECT tiktok_ad_id FROM campaigns WHERE name = 'publicada'")).tiktok_ad_id, 'a1');
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM campaigns')).c, 6);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('restrições: uma publicação por (campanha, conta), conta só com dígitos, FK com cascata', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')");
+      await db.query("INSERT INTO campaigns (user_id, name, objective, daily_budget) VALUES (1, 'c', 'TRAFFIC', 0)");
+      await db.query("INSERT INTO campaign_publications (campaign_id, advertiser_id, overrides) VALUES (1, '9001', '{\"adGroup\":{\"pixelId\":\"1\"}}'::jsonb), (1, '9002', NULL)");
+      assert.deepEqual((await one(db, "SELECT overrides FROM campaign_publications WHERE advertiser_id = '9001'")).overrides, { adGroup: { pixelId: '1' } }, 'jsonb volta como objeto');
+      await assert.rejects(() => db.query("INSERT INTO campaign_publications (campaign_id, advertiser_id) VALUES (1, '9001')"), (e) => e.code === '23505');
+      for (const bad of ['', 'abc', '12 34', "9001'; --", '9'.repeat(25)]) {
+        await assert.rejects(() => db.query('INSERT INTO campaign_publications (campaign_id, advertiser_id) VALUES (1, $1)', [bad]), (e) => e.code === '23514', bad);
+      }
+      await assert.rejects(() => db.query("INSERT INTO campaign_publications (campaign_id, advertiser_id) VALUES (404, '9003')"), (e) => e.code === '23503');
+      await db.query('DELETE FROM campaigns WHERE id = 1');
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM campaign_publications')).c, 0);
     } finally {
       await db.close();
     }

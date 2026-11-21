@@ -5,8 +5,12 @@
  * para montar o formulário passo a passo e validar na hora. Não depende de Node nem do DOM.
  *
  * Estrutura da configuração:
- *   { account: {…}, campaign: {…}, adGroup: {…}, ad: {…} }
+ *   { campaign: {…}, adGroup: {…}, ad: {…} }
  * espelhando a hierarquia do TikTok: Campanha → Grupo de anúncios → Anúncio.
+ *
+ * A CONTA de anúncio não faz parte da configuração: a mesma campanha pode ser publicada em várias contas (de várias
+ * Business Centers) na última etapa. Os campos marcados com `perAccount` (pixel, app, catálogo, formulário e identidade)
+ * são IDs que pertencem a uma conta específica e podem ser ajustados por conta no momento da publicação.
  *
  * Observação: as combinações de objetivo × meta de otimização × evento de cobrança seguem a estrutura
  * documentada da Marketing API; o TikTok faz a validação final no momento da publicação.
@@ -103,30 +107,23 @@ const WEB_LIKE = ['TRAFFIC', 'WEB_CONVERSIONS', 'LEAD_GENERATION', 'PRODUCT_SALE
 // Etapas do assistente
 // ---------------------------------------------------------------------------
 export const STEPS = [
-  { id: 'objective', title: 'Objetivo', description: 'Escolha a conta e o que você quer alcançar.' },
+  { id: 'objective', title: 'Objetivo', description: 'Escolha o que você quer alcançar.' },
   { id: 'campaign', title: 'Campanha', description: 'Nome e orçamento no nível da campanha.' },
   { id: 'adGroup', title: 'Grupo de anúncios', description: 'Público, posicionamentos, orçamento, agenda e lances.' },
   { id: 'ad', title: 'Anúncio', description: 'Identidade, criativo, texto e destino.' },
-  { id: 'review', title: 'Revisão', description: 'Confira tudo antes de salvar ou publicar.' },
+  { id: 'review', title: 'Revisão e publicação', description: 'Confira tudo e escolha em quais contas de anúncio publicar.' },
 ];
 
 // ---------------------------------------------------------------------------
 // Campos
 // Atributos: key, label, type, step, group, help, placeholder, default, required, requiredWhen,
-// showWhen, publishOnly, options | optionsBy {path,map}, min, max, maxItems, pattern, itemPattern, urlSchemes
+// showWhen, perAccount, options | optionsBy {path,map}, min, max, maxItems, pattern, itemPattern, urlSchemes
 // Condições (showWhen/requiredWhen): { 'caminho.do.campo': [valores aceitos] } — todas precisam bater (E).
 // ---------------------------------------------------------------------------
 const ID_PATTERN = /^\d{1,24}$/;
 const MEDIA_ID_PATTERN = /^[\w-]{4,100}$/;
 
 export const FIELDS = {
-  account: [
-    {
-      key: 'advertiserId', label: 'Conta de anúncio', type: 'advertiser', step: 'objective', publishOnly: true, pattern: ID_PATTERN,
-      help: 'Conta do TikTok (de uma Business Center cadastrada) onde a campanha será publicada. Opcional para salvar rascunho.',
-    },
-  ],
-
   campaign: [
     {
       key: 'objective', label: 'Objetivo da campanha', type: 'objective', step: 'objective', required: true,
@@ -163,22 +160,22 @@ export const FIELDS = {
     { key: 'name', label: 'Nome do grupo de anúncios', type: 'string', step: 'adGroup', required: true, min: 2, max: 100, group: 'Identificação' },
 
     // Específicos do objetivo
-    { key: 'pixelId', label: 'ID do Pixel do TikTok', type: 'string', step: 'adGroup', group: 'Conversão', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+    { key: 'pixelId', perAccount: true, label: 'ID do Pixel do TikTok', type: 'string', step: 'adGroup', group: 'Conversão', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'] }, requiredWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'] },
       help: 'Encontre em Gerenciador de Eventos → Pixel.' },
     { key: 'appPlatform', label: 'Plataforma do app', type: 'enum', step: 'adGroup', group: 'Aplicativo',
       options: [{ value: 'APP_ANDROID', label: 'Android' }, { value: 'APP_IOS', label: 'iOS' }],
       showWhen: { 'campaign.objective': ['APP_PROMOTION'] }, requiredWhen: { 'campaign.objective': ['APP_PROMOTION'] } },
-    { key: 'appId', label: 'ID do app', type: 'string', step: 'adGroup', group: 'Aplicativo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+    { key: 'appId', perAccount: true, label: 'ID do app', type: 'string', step: 'adGroup', group: 'Aplicativo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': ['APP_PROMOTION'] }, requiredWhen: { 'campaign.objective': ['APP_PROMOTION'] } },
-    { key: 'catalogId', label: 'ID do catálogo', type: 'string', step: 'adGroup', group: 'Catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+    { key: 'catalogId', perAccount: true, label: 'ID do catálogo', type: 'string', step: 'adGroup', group: 'Catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': ['PRODUCT_SALES'] }, requiredWhen: { 'campaign.objective': ['PRODUCT_SALES'] } },
-    { key: 'productSetId', label: 'ID do conjunto de produtos (opcional)', type: 'string', step: 'adGroup', group: 'Catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+    { key: 'productSetId', perAccount: true, label: 'ID do conjunto de produtos (opcional)', type: 'string', step: 'adGroup', group: 'Catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': ['PRODUCT_SALES'] } },
     { key: 'leadDestination', label: 'Destino dos leads', type: 'enum', step: 'adGroup', group: 'Leads', default: 'WEBSITE',
       options: [{ value: 'INSTANT_FORM', label: 'Formulário instantâneo do TikTok' }, { value: 'WEBSITE', label: 'Site' }],
       showWhen: { 'campaign.objective': ['LEAD_GENERATION'] } },
-    { key: 'leadFormId', label: 'ID da página/formulário instantâneo', type: 'string', step: 'adGroup', group: 'Leads', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+    { key: 'leadFormId', perAccount: true, label: 'ID da página/formulário instantâneo', type: 'string', step: 'adGroup', group: 'Leads', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': ['LEAD_GENERATION'], 'adGroup.leadDestination': ['INSTANT_FORM'] },
       requiredWhen: { 'campaign.objective': ['LEAD_GENERATION'], 'adGroup.leadDestination': ['INSTANT_FORM'] } },
 
@@ -248,12 +245,12 @@ export const FIELDS = {
     { key: 'name', label: 'Nome do anúncio', type: 'string', step: 'ad', required: true, min: 2, max: 100, group: 'Identificação' },
     { key: 'format', label: 'Formato', type: 'enum', step: 'ad', group: 'Criativo', default: 'SINGLE_VIDEO',
       options: [{ value: 'SINGLE_VIDEO', label: 'Vídeo único' }, { value: 'SINGLE_IMAGE', label: 'Imagem única' }, { value: 'CAROUSEL_ADS', label: 'Carrossel de imagens' }] },
-    { key: 'identityType', label: 'Tipo de identidade', type: 'enum', step: 'ad', group: 'Identidade', default: 'CUSTOMIZED_USER', required: true,
+    { key: 'identityType', perAccount: true, label: 'Tipo de identidade', type: 'enum', step: 'ad', group: 'Identidade', default: 'CUSTOMIZED_USER', required: true,
       options: [
         { value: 'CUSTOMIZED_USER', label: 'Identidade personalizada' }, { value: 'AUTH_CODE', label: 'Conta do TikTok (código de autorização)' },
         { value: 'TT_USER', label: 'Conta do TikTok vinculada' }, { value: 'BC_AUTH_TT', label: 'Conta do TikTok da Business Center' },
       ] },
-    { key: 'identityId', label: 'ID da identidade', type: 'string', step: 'ad', group: 'Identidade', required: true, pattern: MEDIA_ID_PATTERN, patternMessage: 'Use letras, números, _ ou - (4 a 100 caracteres).', max: 100 },
+    { key: 'identityId', perAccount: true, label: 'ID da identidade', type: 'string', step: 'ad', group: 'Identidade', required: true, pattern: MEDIA_ID_PATTERN, patternMessage: 'Use letras, números, _ ou - (4 a 100 caracteres).', max: 100 },
     { key: 'displayName', label: 'Nome exibido (identidade personalizada)', type: 'string', step: 'ad', group: 'Identidade', min: 1, max: 40, showWhen: { 'ad.identityType': ['CUSTOMIZED_USER'] } },
     // Criativos vêm da BIBLIOTECA do usuário (ids inteiros). No momento da publicação o servidor envia o arquivo ao TikTok
     // (ou reaproveita o envio anterior para a mesma conta de anúncio) e usa o ID que o TikTok devolver.
@@ -279,6 +276,9 @@ export const FIELDS = {
 };
 
 export const SECTION_KEYS = Object.keys(FIELDS);
+
+/** Campos que dependem da conta de anúncio (IDs do TikTok): podem receber valores próprios em cada conta na publicação. */
+export const ACCOUNT_FIELDS = SECTION_KEYS.flatMap((section) => FIELDS[section].filter((f) => f.perAccount).map((f) => `${section}.${f.key}`));
 
 // ---------------------------------------------------------------------------
 // Utilitários (puros)
@@ -371,10 +371,6 @@ function parseValue(field, raw, config) {
       if (field.pattern && !field.pattern.test(text)) return { error: field.patternMessage ?? 'Formato inválido.' };
       return { value: text };
     }
-    case 'advertiser': {
-      if (typeof raw !== 'string' || !field.pattern.test(raw.trim())) return { error: 'Conta de anúncio inválida.' };
-      return { value: raw.trim() };
-    }
     case 'int':
     case 'money': {
       if (typeof raw !== 'number' || !Number.isSafeInteger(raw)) return { error: 'Informe um número inteiro válido.' };
@@ -459,12 +455,11 @@ const CROSS_RULES = [
  * @param {unknown} raw  entrada não confiável
  * @param {object} [opts]
  * @param {boolean} [opts.requireComplete=false] exige os campos obrigatórios (rascunho = false)
- * @param {boolean} [opts.publish=false]         exige também campos "publishOnly" (conta de anúncio)
  * @param {string[]} [opts.steps]                limita os erros reportados a essas etapas
  * @returns {{ config: object, errors: {path:string, message:string}[] }}
  *   `config` contém apenas campos conhecidos, válidos e visíveis (o restante é descartado).
  */
-export function validateConfig(raw, { requireComplete = false, publish = false, steps } = {}) {
+export function validateConfig(raw, { requireComplete = false, steps } = {}) {
   const errors = [];
   const input = isPlainObject(raw) ? raw : {};
   if (raw !== undefined && !isPlainObject(raw)) errors.push({ path: '', message: 'Configuração inválida.' });
@@ -512,8 +507,7 @@ export function validateConfig(raw, { requireComplete = false, publish = false, 
     for (const field of FIELDS[section]) {
       const path = `${section}.${field.key}`;
       if (!isVisible(field, typed) || !isBlank(typed[section][field.key])) continue;
-      const needed = isRequired(field, typed) || (field.publishOnly && publish);
-      if (needed && (requireComplete || (field.publishOnly && publish))) errors.push({ path, message: 'Campo obrigatório.' });
+      if (requireComplete && isRequired(field, typed)) errors.push({ path, message: 'Campo obrigatório.' });
     }
   }
 
@@ -550,6 +544,43 @@ export function reconcileConfig(config) {
 /** Remove valores ocultos/obsoletos E inválidos (validação completa dos tipos). */
 export function pruneConfig(config) {
   return validateConfig(config).config;
+}
+
+/**
+ * Aplica ajustes POR CONTA sobre a configuração da campanha (publicar a mesma campanha em contas diferentes).
+ * `rawOverrides` = { adGroup: { pixelId: '…' }, ad: { identityId: '…' } }. Só os campos `perAccount` são aceitos; qualquer
+ * outro caminho é erro e NUNCA altera o resto da campanha. Valor vazio significa "sem ajuste" (vale o da campanha).
+ * O resultado (`config`) ainda precisa passar por validateConfig.
+ * @returns {{ config: object, overrides: object, errors: {path:string, message:string}[] }}  `overrides` já saneado
+ */
+export function applyAccountOverrides(base, rawOverrides) {
+  const config = {};
+  for (const section of SECTION_KEYS) config[section] = { ...(isPlainObject(base?.[section]) ? base[section] : {}) };
+  const overrides = {};
+  const errors = [];
+  if (rawOverrides === undefined || rawOverrides === null) return { config, overrides, errors };
+  if (!isPlainObject(rawOverrides)) return { config, overrides, errors: [{ path: 'overrides', message: 'Ajustes por conta inválidos.' }] };
+  for (const [section, values] of Object.entries(rawOverrides)) {
+    if (!isPlainObject(values)) {
+      errors.push({ path: `overrides.${section}`, message: 'Ajustes por conta inválidos.' });
+      continue;
+    }
+    for (const [key, value] of Object.entries(values)) {
+      const path = `${section}.${key}`;
+      if (!ACCOUNT_FIELDS.includes(path)) {
+        errors.push({ path: `overrides.${path}`, message: 'Este campo não pode ser ajustado por conta.' });
+        continue;
+      }
+      if (isBlank(value) || (typeof value === 'string' && !value.trim())) continue;
+      if (typeof value !== 'string') {
+        errors.push({ path, message: 'Texto inválido.' });
+        continue;
+      }
+      (overrides[section] ??= {})[key] = value.trim();
+      config[section][key] = value.trim();
+    }
+  }
+  return { config, overrides, errors };
 }
 
 // ---------------------------------------------------------------------------

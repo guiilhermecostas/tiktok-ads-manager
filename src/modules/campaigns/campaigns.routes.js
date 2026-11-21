@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { summarize, validateConfig } from '../../../shared/campaign-spec.js';
+import { applyAccountOverrides, summarize, validateConfig } from '../../../shared/campaign-spec.js';
 import { CAMPAIGN_OBJECTIVES, CAMPAIGN_STATUSES } from '../../db/constants.js';
 import { HttpError, badRequest, notFound, tooMany, validationError } from '../../lib/http-error.js';
 import { RateLimiter } from '../../lib/rate-limit.js';
@@ -24,13 +24,13 @@ function parseWizardCampaign(body, { lockedFrom } = {}) {
   const data = asObject(body);
   let incoming = data.config;
   if (lockedFrom) {
-    // Níveis já criados no TikTok não podem mais mudar (a publicação parcial é retomada, não refeita).
+    // O que já foi criado no TikTok (em qualquer conta) não pode mais mudar: a mesma configuração vale para todas as contas
+    // e a publicação parcial é retomada, não refeita.
+    const { locks } = lockedFrom.publish;
     incoming = { ...(typeof incoming === 'object' && incoming ? incoming : {}) };
-    if (lockedFrom.publish.campaignId) {
-      incoming.campaign = lockedFrom.config.campaign;
-      incoming.account = lockedFrom.config.account;
-    }
-    if (lockedFrom.publish.adGroupId) incoming.adGroup = lockedFrom.config.adGroup;
+    if (locks.campaign) incoming.campaign = lockedFrom.config.campaign;
+    if (locks.adGroup) incoming.adGroup = lockedFrom.config.adGroup;
+    if (locks.ad) incoming.ad = lockedFrom.config.ad;
   }
   const { config, errors } = validateConfig(incoming, { requireComplete: false });
   if (!config.campaign.objective) errors.push({ path: 'campaign.objective', message: 'Escolha o objetivo da campanha.' });
@@ -41,8 +41,21 @@ function parseWizardCampaign(body, { lockedFrom } = {}) {
     objective: summary.objective,
     dailyBudget: summary.dailyBudget,
     config,
-    advertiserId: config.account.advertiserId ?? null,
   };
+}
+
+const ADVERTISER_ID_RE = /^\d{1,24}$/;
+
+/**
+ * Ajustes por conta: o que vale para o grupo de anúncios fica travado depois que o grupo existe no TikTok
+ * (o servidor mantém o que foi usado na criação); o nível do anúncio ainda pode ser corrigido.
+ */
+function lockCreatedLevels(overrides, existing) {
+  if (!existing?.tiktokAdGroupId) return overrides;
+  const next = { ...overrides };
+  if (existing.overrides?.adGroup) next.adGroup = existing.overrides.adGroup;
+  else delete next.adGroup;
+  return next;
 }
 
 /**
@@ -51,7 +64,8 @@ function parseWizardCampaign(body, { lockedFrom } = {}) {
  */
 export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {} }) {
   const router = Router();
-  const publishLimiter = new RateLimiter({ max: limits.campaignPublish ?? 10, windowMs: 60 * 1000 });
+  // Cada conta de anúncio é uma chamada de publicação: o limite comporta lotes de várias contas.
+  const publishLimiter = new RateLimiter({ max: limits.campaignPublish ?? 30, windowMs: 60 * 1000 });
   // Campanhas com publicação em andamento (instância única). Evita criar itens duplicados no TikTok quando chegam
   // duas publicações simultâneas (duplo clique, duas abas) e impede editar/excluir no meio do processo.
   const publishing = new Set();
@@ -106,8 +120,8 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
       return;
     }
     if (!current.wizard) throw badRequest('Campanhas simples não podem ser convertidas pelo assistente.', 'legacy_campaign');
-    if (current.publish.status === 'published') {
-      throw new HttpError(409, 'Esta campanha já foi publicada no TikTok e não pode mais ser editada aqui.', 'already_published');
+    if (current.publish.locks.ad) {
+      throw new HttpError(409, 'Esta campanha já foi publicada no TikTok e não pode mais ser editada aqui. Para mudar o anúncio, crie uma nova campanha.', 'already_published');
     }
     const parsed = parseWizardCampaign(body, { lockedFrom: current });
     await assertCreativesOwned(req.user, parsed.config);
@@ -122,13 +136,18 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
   });
 
   /**
-   * Publica no TikTok (Campanha → Grupo de anúncios → Anúncio), sempre PAUSADA.
-   * Exige `confirm: true`. Se um nível falhar, os já criados ficam registrados e a próxima chamada retoma de onde parou.
+   * Publica a campanha no TikTok em UMA conta de anúncio (Campanha → Grupo de anúncios → Anúncio), sempre PAUSADA.
+   * Para várias contas, o cliente chama esta rota uma vez por conta: cada uma tem progresso, erro e retomada próprios,
+   * e a falha de uma não impede as outras. Corpo: { confirm: true, advertiserId, overrides? } — `overrides` são os IDs
+   * próprios daquela conta (pixel, app, catálogo, formulário, identidade).
    */
   router.post('/:id/publish', async (req, res) => {
     const limit = publishLimiter.consume(String(req.user.id));
     if (!limit.allowed) throw tooMany(limit.retryAfterSec);
-    if (asObject(req.body).confirm !== true) throw badRequest('Confirme a publicação.', 'confirmation_required');
+    const body = asObject(req.body);
+    if (body.confirm !== true) throw badRequest('Confirme a publicação.', 'confirmation_required');
+    const advertiserId = typeof body.advertiserId === 'string' ? body.advertiserId.trim() : '';
+    if (!ADVERTISER_ID_RE.test(advertiserId)) throw badRequest('Escolha a conta de anúncio onde publicar.', 'advertiser_required');
 
     const id = parseId(req.params.id);
     // A trava é adquirida ANTES de qualquer await (verificar + registrar no mesmo "tick"): o acesso ao banco é
@@ -140,50 +159,54 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
       const current = await campaigns.get(req.user.id, id);
       if (!current) throw notFound('Campanha não encontrada.');
       if (!current.wizard) throw badRequest('Somente campanhas criadas pelo assistente podem ser publicadas.', 'legacy_campaign');
-      if (current.publish.status === 'published') throw new HttpError(409, 'Esta campanha já foi publicada no TikTok.', 'already_published');
 
-      // Valida tudo de novo, no servidor, com todos os campos obrigatórios.
-      const { config, errors } = validateConfig(current.config, { requireComplete: true, publish: true });
+      // A conta precisa ser de uma Business Center do usuário (ou compartilhada com ele): 404 se não for.
+      await tiktok.assertAdvertiserAccess(req.user, advertiserId);
+      const existing = await campaigns.getPublication(req.user.id, id, advertiserId);
+      if (existing?.status === 'published') throw new HttpError(409, 'Esta campanha já foi publicada nesta conta de anúncio.', 'already_published');
+
+      // Configuração da campanha + ajustes desta conta, validada de novo no servidor com todos os campos obrigatórios.
+      const incoming = applyAccountOverrides(current.config, body.overrides);
+      if (incoming.errors.length) throw validationError(incoming.errors);
+      const overrides = lockCreatedLevels(incoming.overrides, existing);
+      const { config, errors } = validateConfig(applyAccountOverrides(current.config, overrides).config, { requireComplete: true });
       if (errors.length) throw validationError(errors);
 
-      const progress = { ...current.publish };
+      const progress = {
+        tiktokCampaignId: existing?.tiktokCampaignId ?? null,
+        tiktokAdGroupId: existing?.tiktokAdGroupId ?? null,
+        tiktokAdId: existing?.tiktokAdId ?? null,
+      };
       const persist = (extra) =>
-        campaigns.saveProgress(req.user.id, id, {
-          campaignId: progress.campaignId,
-          adGroupId: progress.adGroupId,
-          adId: progress.adId,
-          status: current.status,
-          ...extra,
-        });
+        campaigns.saveProgress(req.user.id, id, advertiserId, { overrides: Object.keys(overrides).length ? overrides : null, ...progress, ...extra });
 
       try {
         // Criativos primeiro: se o envio de algum arquivo falhar, NADA foi criado no TikTok ainda.
         await assertCreativesOwned(req.user, config);
-        const assets = await creatives.resolveForPublish({ actor: req.user, advertiserId: config.account.advertiserId, config });
+        const assets = await creatives.resolveForPublish({ actor: req.user, advertiserId, config });
         await tiktok.publishCampaign({
           actor: req.user,
-          advertiserId: config.account.advertiserId,
+          advertiserId,
           config,
           assets,
-          existing: progress,
+          existing: { campaignId: progress.tiktokCampaignId, adGroupId: progress.tiktokAdGroupId, adId: progress.tiktokAdId },
           onCreated: async (level, createdId) => {
-            progress[{ campaign: 'campaignId', adGroup: 'adGroupId', ad: 'adId' }[level]] = createdId;
+            progress[{ campaign: 'tiktokCampaignId', adGroup: 'tiktokAdGroupId', ad: 'tiktokAdId' }[level]] = createdId;
             await persist({ error: null }); // grava a cada nível para não perder o que já foi criado
           },
         });
       } catch (err) {
         const created = err.createdIds ?? {};
-        Object.assign(progress, {
-          campaignId: created.campaignId ?? progress.campaignId,
-          adGroupId: created.adGroupId ?? progress.adGroupId,
-          adId: created.adId ?? progress.adId,
-        });
+        progress.tiktokCampaignId = created.campaignId ?? progress.tiktokCampaignId;
+        progress.tiktokAdGroupId = created.adGroupId ?? progress.tiktokAdGroupId;
+        progress.tiktokAdId = created.adId ?? progress.tiktokAdId;
         await persist({ error: (err instanceof HttpError ? err.message : 'Falha inesperada ao publicar.').slice(0, 300) });
         throw err;
       }
 
-      // Tudo criado: a campanha local passa a "pausada" (é assim que nasce no TikTok).
-      res.json({ campaign: await persist({ error: null, publishedAt: new Date().toISOString(), status: 'paused' }) });
+      // Tudo criado nesta conta: a campanha local passa a "pausada" (é assim que nasce no TikTok).
+      const publication = await persist({ error: null, publishedAt: new Date().toISOString() });
+      res.json({ campaign: await campaigns.setStatus(req.user.id, id, 'paused'), publication });
     } finally {
       publishing.delete(key);
     }

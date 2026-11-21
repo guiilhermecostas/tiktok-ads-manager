@@ -43,9 +43,19 @@ export function field(label, inputProps = {}, { hint } = {}) {
 
 export const alertBox = (message, tone = 'danger') => h('div', { class: `alert alert--${tone}`, role: 'alert' }, message);
 
-/** Modal com foco preso, fechamento por Esc e clique no fundo. Retorna { close }. */
-export function openModal({ title, body, onClose, size }) {
+/** Pilha de pop-ups abertos: só o do TOPO reage ao teclado (ex.: confirmação aberta sobre o assistente). */
+const modalStack = [];
+
+/**
+ * Modal com foco preso, fechamento por Esc e (opcionalmente) clique no fundo. Retorna { close, requestClose }.
+ *  - `canClose()` (pode ser assíncrona) é consultada ao fechar pelo ✕, Esc ou clique no fundo; `false` mantém aberto
+ *    (ex.: alterações não salvas). `close()` fecha sempre.
+ *  - `dismissOnOverlay: false` impede fechar por um clique acidental fora da janela (formulários longos).
+ */
+export function openModal({ title, body, onClose, size, canClose, dismissOnOverlay = true }) {
   const previouslyFocused = document.activeElement;
+  const entry = {};
+  let closed = false;
   const dialog = h(
     'div',
     { class: `modal${size ? ` modal--${size}` : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
@@ -53,16 +63,23 @@ export function openModal({ title, body, onClose, size }) {
       'div',
       { class: 'modal__header' },
       h('h2', { class: 'modal__title' }, title),
-      h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Fechar', onClick: () => close() }, '✕'),
+      h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Fechar', onClick: () => requestClose() }, '✕'),
     ),
     body,
   );
-  const overlay = h('div', { class: 'overlay', onMousedown: (e) => e.target === overlay && close() }, dialog);
+  const overlay = h('div', { class: 'overlay', onMousedown: (e) => dismissOnOverlay && e.target === overlay && requestClose() }, dialog);
+
+  async function requestClose() {
+    if (closed) return;
+    if (canClose && (await canClose()) === false) return;
+    close();
+  }
 
   function onKey(event) {
-    if (event.key === 'Escape') return close();
+    if (modalStack.at(-1) !== entry) return; // há outro pop-up por cima: ele é quem responde
+    if (event.key === 'Escape') return requestClose();
     if (event.key !== 'Tab') return;
-    const focusable = [...dialog.querySelectorAll('button, input, select, textarea, a[href]')].filter((n) => !n.disabled);
+    const focusable = [...dialog.querySelectorAll('button, input, select, textarea, a[href]')].filter((n) => !n.disabled && !n.hidden && n.offsetParent !== null);
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -76,16 +93,22 @@ export function openModal({ title, body, onClose, size }) {
   }
 
   function close() {
+    if (closed) return;
+    closed = true;
     document.removeEventListener('keydown', onKey);
+    modalStack.splice(modalStack.indexOf(entry), 1);
+    if (!modalStack.length) document.body.classList.remove('modal-open');
     overlay.remove();
     previouslyFocused?.focus?.();
     onClose?.();
   }
 
+  modalStack.push(entry);
+  document.body.classList.add('modal-open');
   document.addEventListener('keydown', onKey);
   document.body.append(overlay);
   dialog.querySelector('input, select, textarea, button.btn')?.focus();
-  return { close };
+  return { close, requestClose };
 }
 
 export function confirmDialog({ title, message, confirmLabel = 'Confirmar', danger = false }) {

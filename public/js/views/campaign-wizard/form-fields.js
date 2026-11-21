@@ -1,4 +1,4 @@
-import { OBJECTIVES, fieldsOfStep, getOptions, getPath, isRequired, isVisible } from '/shared/campaign-spec.js';
+import { ACCOUNT_FIELDS, OBJECTIVES, fieldsOfStep, findField, getOptions, getPath, isRequired, isVisible } from '/shared/campaign-spec.js';
 import { h } from '../../dom.js';
 import { centsToInput, parseMoneyToCents } from '../../format.js';
 import { creativeThumb } from '../creatives/thumb.js';
@@ -8,7 +8,7 @@ const nextId = () => `wz-${++uid}`;
 
 /**
  * Renderiza os campos de uma etapa a partir da especificação compartilhada.
- * ctx: { config, errors, advertisers, readOnly, set(path, value, { rerender }), moneyText }
+ * ctx: { config, errors, readOnly, set(path, value, { rerender }), moneyText }
  * Todo texto entra no DOM como nó de texto (sem innerHTML).
  */
 export function renderStepForm(stepId, ctx) {
@@ -38,6 +38,18 @@ export function renderStepForm(stepId, ctx) {
   );
 }
 
+/**
+ * Só os campos que dependem da conta de anúncio (pixel, app, catálogo, formulário, identidade) que estão visíveis
+ * para a configuração atual. Usado nos ajustes por conta da publicação.
+ */
+export function renderAccountFields(ctx) {
+  const entries = ACCOUNT_FIELDS.map((path) => {
+    const [section, key] = path.split('.');
+    return { section, field: findField(section, key) };
+  }).filter(({ field }) => isVisible(field, ctx.config));
+  return h('div', { class: 'form-grid' }, entries.map((entry) => renderField(entry, ctx)));
+}
+
 function renderField({ section, field }, ctx) {
   const path = `${section}.${field.key}`;
   const value = getPath(ctx.config, path);
@@ -46,7 +58,7 @@ function renderField({ section, field }, ctx) {
   const wide = ['objective', 'enumList', 'stringList', 'creative', 'creativeList'].includes(field.type) || field.multiline || field.type === 'url';
   const id = nextId();
   const describedBy = [error ? `${id}-err` : null, field.help ? `${id}-help` : null].filter(Boolean).join(' ') || null;
-  const disabled = ctx.readOnly;
+  const disabled = typeof ctx.readOnly === 'function' ? ctx.readOnly(path) : ctx.readOnly; // por campo (ajustes por conta) ou geral
 
   let control;
   switch (field.type) {
@@ -64,9 +76,6 @@ function renderField({ section, field }, ctx) {
     case 'creative':
     case 'creativeList':
       control = creativeControl(field, value, path, ctx, { disabled });
-      break;
-    case 'advertiser':
-      control = advertiserSelect(field, value, path, ctx, { id, describedBy, error, disabled });
       break;
     case 'money':
       control = moneyInput(path, value, ctx, { id, describedBy, error, disabled });
@@ -188,20 +197,6 @@ function checkGroup(field, selected, path, ctx, { disabled }) {
       ),
     ),
   );
-}
-
-function advertiserSelect(field, value, path, ctx, { id, describedBy, error, disabled }) {
-  const usable = ctx.advertisers.filter((a) => a.businessCenterStatus === 'active');
-  const select = h(
-    'select',
-    { id, class: `input${error ? ' input--error' : ''}`, disabled, 'aria-describedby': describedBy, onChange: (e) => ctx.set(path, e.target.value || undefined) },
-    h('option', { value: '' }, usable.length ? 'Sem conta (salvar só como rascunho)' : 'Nenhuma conta disponível'),
-    usable.map((a) => h('option', { value: a.id }, `${a.businessCenterName} · ${a.name}`)),
-  );
-  // Mantém a conta já salva visível mesmo que a BC tenha saído do ar.
-  if (value && !usable.some((a) => a.id === value)) select.append(h('option', { value }, `Conta ${value} (indisponível)`));
-  select.value = value ?? '';
-  return select;
 }
 
 function moneyInput(path, value, ctx, { id, describedBy, error, disabled }) {

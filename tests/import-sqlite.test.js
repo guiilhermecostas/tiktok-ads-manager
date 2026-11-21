@@ -70,8 +70,12 @@ describe('importação SQLite -> PostgreSQL', () => {
 
       const wizard = await one(db, 'SELECT * FROM campaigns WHERE id = 9');
       assert.deepEqual(wizard.config, { campaign: { name: 'Assistente', objective: 'REACH' }, adGroup: { locations: ['BR'] } }, 'config vira jsonb');
-      assert.deepEqual([wizard.tiktok_campaign_id, wizard.publish_error, wizard.advertiser_id], ['7001', 'falhou', '9001']);
-      assert.equal(wizard.published_at.toISOString(), '2026-11-03T12:00:00.000Z');
+      // A publicação única do banco antigo vira uma linha em campaign_publications (uma por conta de anúncio).
+      const publications = await all(db, 'SELECT campaign_id, advertiser_id, tiktok_campaign_id, tiktok_ad_id, error, published_at FROM campaign_publications');
+      assert.equal(publications.length, 1);
+      assert.deepEqual([publications[0].campaign_id, publications[0].advertiser_id, publications[0].tiktok_campaign_id, publications[0].tiktok_ad_id, publications[0].error], [9, '9001', '7001', null, 'falhou']);
+      assert.equal(publications[0].published_at.toISOString(), '2026-11-03T12:00:00.000Z');
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM campaign_publications WHERE campaign_id <> 9')).c, 0, 'campanha sem publicação não gera linha');
       assert.equal((await one(db, 'SELECT config FROM campaigns WHERE id = 5')).config, null, 'campanha simples continua simples');
 
       const bcs = await all(db, 'SELECT id, owner_id, bc_id, shared, status, last_error, access_token FROM tiktok_business_centers ORDER BY id');

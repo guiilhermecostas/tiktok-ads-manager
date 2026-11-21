@@ -8,7 +8,7 @@ import { uploadedId } from './media-fixtures.js';
 import { createUser, loginAdmin, one, startTestServer } from './helpers.js';
 
 const LIMITS = { register: 1000, loginIp: 1000, loginAccount: 1000, tiktokRead: 1000, tiktokWrite: 1000, campaignPublish: 1000 };
-const valid = (objective = 'TRAFFIC', over) => validateConfig(completeConfig(objective, over), { requireComplete: true, publish: true }).config;
+const valid = (objective = 'TRAFFIC', over) => validateConfig(completeConfig(objective, over), { requireComplete: true }).config;
 
 describe('payloads da Marketing API', () => {
   it('campanha: pausada, orçamento em unidades e só campos presentes', () => {
@@ -151,7 +151,7 @@ describe('API de campanhas em formato assistente', () => {
     assert.equal((await ctx.client().post('/api/campaigns', body(completeConfig()))).status, 401);
     const pending = await createUser(ctx);
     assert.equal((await pending.client.post('/api/campaigns', body(completeConfig()))).status, 403);
-    assert.equal((await pending.client.post('/api/campaigns/1/publish', { confirm: true })).status, 403);
+    assert.equal((await pending.client.post('/api/campaigns/1/publish', { confirm: true, advertiserId: '9001' })).status, 403);
   });
 
   it('salva rascunho incompleto, devolve configuração normalizada e deriva o resumo', async () => {
@@ -168,7 +168,9 @@ describe('API de campanhas em formato assistente', () => {
     const full = await client.post('/api/campaigns', body(await mk(client, 'TRAFFIC')));
     assert.equal(full.json.campaign.name, 'Black Friday');
     assert.equal(full.json.campaign.dailyBudget, 5000);
-    assert.equal(full.json.campaign.advertiserId, '9001');
+    assert.deepEqual(full.json.campaign.publications, [], 'sem publicações até publicar');
+    assert.equal(full.json.campaign.advertiserId, undefined, 'a conta não faz mais parte da campanha');
+    assert.ok(!('account' in full.json.campaign.config), 'a configuração não tem mais a conta de anúncio');
   });
 
   it('lista sem a configuração completa e detalhe com ela', async () => {
@@ -230,7 +232,7 @@ describe('API de campanhas em formato assistente', () => {
     await reset();
     assert.equal((await b.client.get(`/api/campaigns/${id}`)).status, 404);
     assert.equal((await b.client.put(`/api/campaigns/${id}`, body(completeConfig()))).status, 404);
-    assert.equal((await b.client.post(`/api/campaigns/${id}/publish`, { confirm: true })).status, 404);
+    assert.equal((await b.client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' })).status, 404);
     assert.equal((await b.client.delete(`/api/campaigns/${id}`)).status, 404);
     assert.equal(fake.state.calls.length, 0);
   });
@@ -255,20 +257,20 @@ describe('API de campanhas em formato assistente', () => {
       const { client } = await createUser(ctx, { approve: true });
       const { id } = await draft(client);
       await reset();
-      const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
       assert.equal(res.status, 200);
       assert.equal(res.json.campaign.publish.status, 'published');
       assert.equal(res.json.campaign.status, 'paused');
-      assert.ok(res.json.campaign.publish.campaignId && res.json.campaign.publish.adGroupId && res.json.campaign.publish.adId);
-      assert.ok(res.json.campaign.publish.publishedAt);
+      assert.ok(res.json.publication.tiktokCampaignId && res.json.publication.tiktokAdGroupId && res.json.publication.tiktokAdId);
+      assert.ok(res.json.publication.publishedAt);
 
       const [c, g, a] = ['/campaign/create/', '/adgroup/create/', '/ad/create/'].map((p) => fake.callsTo(p)[0]);
       assert.equal(c.method, 'POST');
       assert.equal(c.token, GOOD_TOKEN);
       assert.equal(c.body.operation_status, 'DISABLE');
       assert.equal(g.body.operation_status, 'DISABLE');
-      assert.equal(g.body.campaign_id, res.json.campaign.publish.campaignId, 'o grupo usa o ID da campanha criada');
-      assert.equal(a.body.adgroup_id, res.json.campaign.publish.adGroupId);
+      assert.equal(g.body.campaign_id, res.json.publication.tiktokCampaignId, 'o grupo usa o ID da campanha criada');
+      assert.equal(a.body.adgroup_id, res.json.publication.tiktokAdGroupId);
       assert.equal(c.body.advertiser_id, '9001');
       assert.ok(!JSON.stringify(res.json).includes(GOOD_TOKEN));
     });
@@ -286,28 +288,29 @@ describe('API de campanhas em formato assistente', () => {
       const { client } = await createUser(ctx, { approve: true });
       const { id } = (await client.post('/api/campaigns', body({ campaign: { objective: 'TRAFFIC', name: 'Incompleta' } }))).json.campaign;
       await reset();
-      const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
       assert.equal(res.status, 400);
       const paths = res.json.error.details.map((d) => d.path);
-      assert.ok(paths.includes('account.advertiserId') && paths.includes('adGroup.locations') && paths.includes('ad.text'));
+      assert.ok(paths.includes('adGroup.locations') && paths.includes('ad.text'));
       assert.equal(fake.state.calls.length, 0);
     });
 
     it('só publica em conta de anúncio de uma Business Center cadastrada', async () => {
       const { client } = await createUser(ctx, { approve: true });
-      const { id } = await draft(client, 'TRAFFIC', { account: { advertiserId: '123456' } });
+      const { id } = await draft(client, 'TRAFFIC');
       await reset();
-      const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '123456' });
       assert.equal(res.status, 404);
       assert.equal(fake.callsTo('/campaign/create/').length, 0);
+      assert.deepEqual((await client.get(`/api/campaigns/${id}`)).json.campaign.publications, [], 'nada é registrado para conta de fora');
     });
 
     it('é idempotente: segunda publicação é recusada (409) e a campanha publicada não pode ser editada', async () => {
       const { client } = await createUser(ctx, { approve: true });
       const { id } = await draft(client);
-      await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
       await reset();
-      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true })).status, 409);
+      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' })).status, 409);
       const edit = await client.put(`/api/campaigns/${id}`, body(await mk(client)));
       assert.equal(edit.status, 409);
       assert.equal(edit.json.error.code, 'already_published');
@@ -320,19 +323,19 @@ describe('API de campanhas em formato assistente', () => {
       const { id } = await draft(client);
       await reset();
       fake.state.failCreate.add('ad');
-      const failed = await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      const failed = await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
       assert.equal(failed.status, 502);
       assert.match(failed.json.error.message, /Identity not found/);
 
       let detail = (await client.get(`/api/campaigns/${id}`)).json.campaign;
       assert.equal(detail.publish.status, 'partial');
-      assert.ok(detail.publish.campaignId && detail.publish.adGroupId && !detail.publish.adId);
+      assert.ok(detail.publications[0].tiktokCampaignId && detail.publications[0].tiktokAdGroupId && !detail.publications[0].tiktokAdId);
       assert.match(detail.publish.error, /Identity not found/);
       assert.equal(detail.status, 'draft');
 
       fake.state.failCreate.clear();
       const created = { c: fake.callsTo('/campaign/create/').length, g: fake.callsTo('/adgroup/create/').length };
-      const retry = await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      const retry = await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
       assert.equal(retry.status, 200);
       assert.equal(fake.callsTo('/campaign/create/').length, created.c, 'campanha não foi recriada');
       assert.equal(fake.callsTo('/adgroup/create/').length, created.g, 'grupo não foi recriado');
@@ -346,7 +349,7 @@ describe('API de campanhas em formato assistente', () => {
       const { client } = await createUser(ctx, { approve: true });
       const { id } = await draft(client);
       fake.state.failCreate.add('ad');
-      await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
       fake.state.failCreate.clear();
 
       const edited = await mk(client, 'TRAFFIC', { campaign: { name: 'Nome alterado' }, adGroup: { name: 'Grupo alterado' }, ad: { identityId: 'id-corrigido' } });
@@ -357,7 +360,7 @@ describe('API de campanhas em formato assistente', () => {
       assert.equal(res.json.campaign.config.ad.identityId, 'id-corrigido', 'anúncio ainda editável');
 
       await reset();
-      await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
       assert.equal(fake.callsTo('/ad/create/')[0].body.creatives[0].identity_id, 'id-corrigido');
     });
 
@@ -368,9 +371,9 @@ describe('API de campanhas em formato assistente', () => {
       fake.state.createDelayMs = 80;
       try {
         const [x, y, z] = await Promise.all([
-          client.post(`/api/campaigns/${id}/publish`, { confirm: true }),
-          client.post(`/api/campaigns/${id}/publish`, { confirm: true }),
-          client.post(`/api/campaigns/${id}/publish`, { confirm: true }),
+          client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' }),
+          client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' }),
+          client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' }),
         ]);
         assert.deepEqual([x.status, y.status, z.status].sort(), [200, 409, 409]);
         const blocked = [x, y, z].find((r) => r.status === 409);
@@ -389,7 +392,7 @@ describe('API de campanhas em formato assistente', () => {
       await reset();
       fake.state.createDelayMs = 100;
       try {
-        const publishing = client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+        const publishing = client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
         await new Promise((r) => setTimeout(r, 40));
         const edit = await client.put(`/api/campaigns/${id}`, body(await mk(client, 'TRAFFIC', { campaign: { name: 'Mudança no meio' } })));
         const del = await client.delete(`/api/campaigns/${id}`);
@@ -408,16 +411,16 @@ describe('API de campanhas em formato assistente', () => {
       const { id } = await draft(client);
       await reset();
       fake.state.failCreate.add('campaign');
-      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true })).status, 502);
+      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' })).status, 502);
       fake.state.failCreate.clear();
-      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true })).status, 200);
+      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' })).status, 200);
     });
 
     it('falha ao criar a campanha: nada registrado, mensagem do TikTok exibível', async () => {
       const { client } = await createUser(ctx, { approve: true });
       const { id } = await draft(client);
       fake.state.failCreate.add('campaign');
-      const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
       assert.equal(res.status, 502);
       const detail = (await client.get(`/api/campaigns/${id}`)).json.campaign;
       assert.equal(detail.publish.status, 'none');
@@ -429,7 +432,7 @@ describe('API de campanhas em formato assistente', () => {
       const { client } = await createUser(ctx, { approve: true });
       for (const { value } of OBJECTIVES) {
         const { id } = await draft(client, value);
-        const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+        const res = await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
         assert.equal(res.status, 200, `${value}: ${res.text}`);
         assert.equal(res.json.campaign.publish.status, 'published', value);
       }
@@ -440,17 +443,17 @@ describe('API de campanhas em formato assistente', () => {
       const { id } = await draft(client);
       const original = new Set(fake.state.validTokens);
       fake.state.validTokens.delete(GOOD_TOKEN);
-      const first = await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+      const first = await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
       assert.equal(first.status, 409);
       assert.equal(first.json.error.code, 'tiktok_reauth');
       assert.equal((await admin.get('/api/tiktok/business-centers')).json.businessCenters[0].status, 'error');
       assert.equal((await client.get(`/api/campaigns/${id}`)).json.campaign.publish.status, 'none');
-      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true })).status, 404, 'BC com erro não serve contas');
+      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' })).status, 404, 'BC com erro não serve contas');
 
       fake.state.validTokens = original;
       const bcId = (await admin.get('/api/tiktok/business-centers')).json.businessCenters[0].id;
       assert.equal((await admin.patch(`/api/tiktok/business-centers/${bcId}`, { accessToken: GOOD_TOKEN })).status, 200);
-      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true })).status, 200);
+      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' })).status, 200);
     });
 
     it('limita a frequência de publicações (429)', async () => {
@@ -462,7 +465,7 @@ describe('API de campanhas em formato assistente', () => {
         const { id } = (await client.post('/api/campaigns', body(await mk(client)))).json.campaign;
         assert.equal((await client.post(`/api/campaigns/${id}/publish`, {})).status, 400);
         assert.equal((await client.post(`/api/campaigns/${id}/publish`, {})).status, 400);
-        const blocked = await client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+        const blocked = await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' });
         assert.equal(blocked.status, 429);
       } finally {
         await limited.stop();
@@ -478,7 +481,7 @@ describe('API de campanhas em formato assistente', () => {
       assert.equal(created.json.campaign.wizard, false);
       const { id } = created.json.campaign;
       assert.equal((await client.put(`/api/campaigns/${id}`, { name: 'Simples 2', objective: 'REACH', dailyBudget: 2000, status: 'paused' })).json.campaign.name, 'Simples 2');
-      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true })).json.error.code, 'legacy_campaign');
+      assert.equal((await client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId: '9001' })).json.error.code, 'legacy_campaign');
       assert.equal((await client.put(`/api/campaigns/${id}`, body(completeConfig()))).json.error.code, 'legacy_campaign');
       assert.equal((await client.delete(`/api/campaigns/${id}`)).status, 204);
     });

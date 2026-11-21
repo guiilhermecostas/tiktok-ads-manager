@@ -9,13 +9,11 @@ const fieldFor = (path) => {
   return FIELDS[section]?.find((f) => f.key === key);
 };
 
-/** Passo final: resumo legível de tudo o que foi configurado, com atalhos para corrigir cada parte. */
-export function renderReview({ config, advertisers, creatives, errors, publish, readOnly, goTo }) {
-  const advertiserLabel = (id) => {
-    const a = advertisers.find((x) => x.id === id);
-    return a ? `${a.businessCenterName} · ${a.name} (${id})` : id;
-  };
-
+/**
+ * Passo final: resumo legível de tudo o que foi configurado (com atalhos para corrigir cada parte) e, abaixo,
+ * o painel `targets` para escolher em quais contas de anúncio publicar.
+ */
+export function renderReview({ config, creatives, errors, publish, readOnly, goTo, targets }) {
   const problems = errors.length
     ? h(
         'div',
@@ -42,13 +40,12 @@ export function renderReview({ config, advertisers, creatives, errors, publish, 
   const sections = REVIEW_STEPS.map((stepId) => {
     const stepIndex = STEPS.findIndex((s) => s.id === stepId);
     const rows = fieldsOfStep(stepId)
-      .filter(({ section, field }) => isVisible(field, config) && (field.required || field.type === 'advertiser' || !isBlankValue(getPath(config, `${section}.${field.key}`))))
+      .filter(({ section, field }) => isVisible(field, config) && (field.required || !isBlankValue(getPath(config, `${section}.${field.key}`))))
       .map(({ section, field }) => {
         const value = getPath(config, `${section}.${field.key}`);
         const creativeName = (id) => creatives.get(id)?.name ?? `Criativo #${id}`;
         let formatted;
-        if (field.type === 'advertiser') formatted = value ? advertiserLabel(value) : '—';
-        else if (field.type === 'creative') formatted = value ? creativeName(value) : '—';
+        if (field.type === 'creative') formatted = value ? creativeName(value) : '—';
         else if (field.type === 'creativeList') formatted = value?.length ? value.map(creativeName).join(', ') : '—';
         else formatted = formatValue(field, value, config);
         const text = field.type === 'money' && formatted !== '—' ? `R$ ${formatted}` : formatted;
@@ -67,21 +64,16 @@ export function renderReview({ config, advertisers, creatives, errors, publish, 
     );
   });
 
-  const published =
+  const count = publish.published + publish.partial;
+  const notice =
     publish.status === 'none'
       ? null
       : h(
           'div',
           { class: `alert ${publish.status === 'published' ? 'alert--success' : 'alert--danger'}` },
-          h('strong', null, publish.status === 'published' ? 'Publicada no TikTok (pausada).' : 'Publicação parcial: alguns níveis já foram criados no TikTok.'),
-          h(
-            'p',
-            null,
-            `Campanha: ${publish.campaignId ?? '—'} · Grupo de anúncios: ${publish.adGroupId ?? '—'} · Anúncio: ${publish.adId ?? '—'}`,
-          ),
-          publish.error ? h('p', null, `Último erro: ${publish.error}`) : null,
-          publish.status === 'partial' ? h('p', null, 'Ao publicar de novo, só os níveis que faltam serão criados.') : null,
+          h('strong', null, publish.status === 'published' ? `Publicada no TikTok (pausada) em ${count === 1 ? '1 conta' : `${count} contas`}.` : 'Publicação parcial: alguns níveis já foram criados no TikTok.'),
+          publish.status === 'published' ? h('p', null, 'A configuração da campanha não muda mais, mas você pode publicar em outras contas logo abaixo.') : h('p', null, 'Ao publicar de novo nessa conta, só os níveis que faltam serão criados.'),
         );
 
-  return h('div', { class: 'review' }, published, problems, sections);
+  return h('div', { class: 'review' }, notice, problems, sections, targets);
 }

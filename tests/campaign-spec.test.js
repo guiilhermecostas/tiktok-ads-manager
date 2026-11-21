@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  COUNTRIES, FIELDS, OBJECTIVES, STEPS, defaultConfig, fieldsOfStep, findField, getOptions, isRequired, isVisible,
-  pruneConfig, reconcileConfig, stepOfPath, summarize, validateConfig,
+  ACCOUNT_FIELDS, COUNTRIES, FIELDS, OBJECTIVES, STEPS, defaultConfig, fieldsOfStep, findField, getOptions, isRequired, isVisible,
+  applyAccountOverrides, pruneConfig, reconcileConfig, stepOfPath, summarize, validateConfig,
 } from '../shared/campaign-spec.js';
 import { completeConfig } from './campaign-fixtures.js';
 
@@ -48,7 +48,7 @@ describe('catálogo da especificação', () => {
 describe('configuração completa válida para cada objetivo', () => {
   for (const { value } of OBJECTIVES) {
     it(`${value} valida sem erros`, () => {
-      const { errors } = validateConfig(completeConfig(value), { requireComplete: true, publish: true });
+      const { errors } = validateConfig(completeConfig(value), { requireComplete: true });
       assert.deepEqual(errors, []);
     });
   }
@@ -109,27 +109,29 @@ describe('reconcileConfig (poda leve do formulário)', () => {
     reconcileConfig(cfg);
     assert.equal(JSON.stringify(cfg), before);
     assert.doesNotThrow(() => reconcileConfig(null));
-    assert.deepEqual(Object.keys(reconcileConfig(undefined)).sort(), ['account', 'ad', 'adGroup', 'campaign']);
+    assert.deepEqual(Object.keys(reconcileConfig(undefined)).sort(), ['ad', 'adGroup', 'campaign']);
   });
 });
 
 describe('validação de valores', () => {
-  const run = (over, opts = { requireComplete: true, publish: true }, objective = 'TRAFFIC') => validateConfig(completeConfig(objective, over), opts);
+  const run = (over, opts = { requireComplete: true }, objective = 'TRAFFIC') => validateConfig(completeConfig(objective, over), opts);
   const has = (errors, path) => errors.some((e) => e.path === path);
 
   it('campos obrigatórios faltando são reportados por caminho (e só no modo completo)', () => {
-    const empty = validateConfig({}, { requireComplete: true, publish: true });
-    for (const p of ['account.advertiserId', 'campaign.objective', 'campaign.name', 'adGroup.name', 'adGroup.locations', 'ad.name', 'ad.identityId', 'ad.text']) {
+    const empty = validateConfig({}, { requireComplete: true });
+    for (const p of ['campaign.objective', 'campaign.name', 'adGroup.name', 'adGroup.locations', 'ad.name', 'ad.identityId', 'ad.text']) {
       assert.ok(has(empty.errors, p), p);
     }
     assert.deepEqual(validateConfig({}, { requireComplete: false }).errors, []);
     assert.deepEqual(validateConfig(undefined, { requireComplete: false }).errors, []);
   });
-  it('advertiserId só é obrigatório ao publicar', () => {
+  it('a conta de anúncio não faz parte da configuração (é escolhida ao publicar): seção antiga é ignorada', () => {
     const cfg = completeConfig();
-    delete cfg.account.advertiserId;
-    assert.deepEqual(validateConfig(cfg, { requireComplete: true }).errors, []);
-    assert.ok(has(validateConfig(cfg, { requireComplete: true, publish: true }).errors, 'account.advertiserId'));
+    assert.equal('account' in cfg, false);
+    const withLegacy = { ...cfg, account: { advertiserId: '9001' } };
+    const { config, errors } = validateConfig(withLegacy, { requireComplete: true });
+    assert.deepEqual(errors, []);
+    assert.equal('account' in config, false, 'rascunhos antigos com account não quebram nem carregam o campo');
   });
   it('limita o escopo dos erros às etapas pedidas', () => {
     const { errors } = validateConfig({ campaign: { objective: 'TRAFFIC' } }, { requireComplete: true, steps: ['campaign'] });
@@ -187,7 +189,7 @@ describe('validação de valores', () => {
 });
 
 describe('regras entre campos', () => {
-  const run = (over, objective = 'TRAFFIC') => validateConfig(completeConfig(objective, over), { requireComplete: true, publish: true });
+  const run = (over, objective = 'TRAFFIC') => validateConfig(completeConfig(objective, over), { requireComplete: true });
   const has = (errors, path) => errors.some((e) => e.path === path);
 
   it('fim depois do início; agenda exigida com orçamento total', () => {
@@ -249,7 +251,7 @@ describe('segurança da entrada', () => {
     const raw = JSON.parse('{"__proto__":{"admin":true},"constructor":{"x":1},"campaign":{"name":"Teste","objective":"TRAFFIC","__proto__":{"polluted":1},"role":"admin"},"extra":{"a":1},"adGroup":{"hack":1}}');
     const { config, errors } = validateConfig(raw);
     assert.deepEqual(errors, []);
-    assert.equal(Object.keys(config).sort().join(), 'account,ad,adGroup,campaign');
+    assert.equal(Object.keys(config).sort().join(), 'ad,adGroup,campaign');
     assert.equal(config.campaign.role, undefined);
     assert.equal(config.adGroup.hack, undefined);
     assert.equal({}.polluted, undefined);
@@ -260,8 +262,8 @@ describe('segurança da entrada', () => {
     assert.ok(validateConfig('x').errors.some((e) => e.path === ''));
   });
   it('é idempotente: validar a saída não altera o resultado', () => {
-    const first = validateConfig(completeConfig('WEB_CONVERSIONS'), { requireComplete: true, publish: true });
-    const second = validateConfig(first.config, { requireComplete: true, publish: true });
+    const first = validateConfig(completeConfig('WEB_CONVERSIONS'), { requireComplete: true });
+    const second = validateConfig(first.config, { requireComplete: true });
     assert.deepEqual(second.config, first.config);
     assert.deepEqual(second.errors, []);
   });
@@ -274,5 +276,62 @@ describe('summarize', () => {
     assert.equal(summarize(campaignLevel).dailyBudget, 7000);
     const total = validateConfig(completeConfig('TRAFFIC', { adGroup: { budgetMode: 'BUDGET_MODE_TOTAL' } })).config;
     assert.equal(summarize(total).dailyBudget, 0);
+  });
+});
+
+describe('ajustes por conta de anúncio (publicar a mesma campanha em contas diferentes)', () => {
+  it('só os IDs que dependem da conta podem ser ajustados', () => {
+    assert.deepEqual([...ACCOUNT_FIELDS].sort(), ['ad.identityId', 'ad.identityType', 'adGroup.appId', 'adGroup.catalogId', 'adGroup.leadFormId', 'adGroup.pixelId', 'adGroup.productSetId']);
+  });
+
+  it('aplica o ajuste só na cópia: a campanha base nunca muda', () => {
+    const base = completeConfig('WEB_CONVERSIONS');
+    const snapshot = JSON.stringify(base);
+    const { config, overrides, errors } = applyAccountOverrides(base, { adGroup: { pixelId: '999000' }, ad: { identityId: 'id-outra-conta' } });
+    assert.deepEqual(errors, []);
+    assert.equal(config.adGroup.pixelId, '999000');
+    assert.equal(config.ad.identityId, 'id-outra-conta');
+    assert.deepEqual(overrides, { adGroup: { pixelId: '999000' }, ad: { identityId: 'id-outra-conta' } });
+    assert.equal(JSON.stringify(base), snapshot, 'a base não foi alterada');
+    assert.equal(base.adGroup.pixelId, '123456');
+  });
+
+  it('recusa qualquer campo que não seja por conta (orçamento, nome, público…) sem alterar nada', () => {
+    const base = completeConfig();
+    const { config, overrides, errors } = applyAccountOverrides(base, { campaign: { name: 'Hack' }, adGroup: { budget: 1, name: 'x', locations: ['US'] }, ad: { landingPageUrl: 'https://evil.example', videoCreativeId: 99 } });
+    assert.equal(errors.length, 6);
+    assert.ok(errors.every((e) => e.path.startsWith('overrides.')));
+    assert.deepEqual(overrides, {});
+    assert.deepEqual(config, base);
+  });
+
+  it('valor vazio ou só espaços = sem ajuste; tipos inválidos são erro; espaços nas pontas são removidos', () => {
+    const base = completeConfig('WEB_CONVERSIONS');
+    const blank = applyAccountOverrides(base, { adGroup: { pixelId: '' }, ad: { identityId: '   ' } });
+    assert.deepEqual(blank.errors, []);
+    assert.deepEqual(blank.overrides, {});
+    assert.equal(blank.config.adGroup.pixelId, '123456');
+    assert.equal(applyAccountOverrides(base, { adGroup: { pixelId: 123 } }).errors.length, 1);
+    assert.equal(applyAccountOverrides(base, { adGroup: { pixelId: { $ne: 1 } } }).errors.length, 1);
+    assert.equal(applyAccountOverrides(base, { adGroup: { pixelId: '  777  ' } }).config.adGroup.pixelId, '777');
+  });
+
+  it('entrada malformada não quebra e não permite poluir protótipos', () => {
+    const base = completeConfig();
+    for (const raw of [undefined, null]) assert.deepEqual(applyAccountOverrides(base, raw).errors, []);
+    for (const raw of ['x', 42, [], [1]]) assert.equal(applyAccountOverrides(base, raw).errors.length, 1);
+    assert.equal(applyAccountOverrides(base, { adGroup: 'x' }).errors.length, 1);
+    const evil = JSON.parse('{"__proto__":{"polluted":1},"constructor":{"prototype":{"p":1}},"adGroup":{"__proto__":{"q":1}}}');
+    const result = applyAccountOverrides(base, evil);
+    assert.ok(result.errors.length >= 1);
+    assert.equal({}.polluted, undefined);
+    assert.equal({}.q, undefined);
+    assert.equal({}.p, undefined);
+  });
+
+  it('o resultado passa pela validação normal: ID inválido do ajuste vira erro no caminho do campo', () => {
+    const { config } = applyAccountOverrides(completeConfig('WEB_CONVERSIONS'), { adGroup: { pixelId: 'abc' } });
+    const { errors } = validateConfig(config, { requireComplete: true });
+    assert.ok(errors.some((e) => e.path === 'adGroup.pixelId'));
   });
 });

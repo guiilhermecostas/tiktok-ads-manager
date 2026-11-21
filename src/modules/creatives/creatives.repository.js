@@ -115,11 +115,12 @@ export function createCreativesRepository(db) {
       );
     },
 
-    /** Campanhas ainda NÃO publicadas (rascunho/parcial) do usuário que usam este criativo. */
+    /** Campanhas sem NENHUMA publicação concluída (rascunho/parcial) do usuário que usam este criativo. */
     async findDraftCampaignsUsing(userId, id) {
       const { rows } = await db.query(
         `SELECT id, name FROM campaigns
-          WHERE user_id = $1 AND tiktok_ad_id IS NULL AND config IS NOT NULL
+          WHERE user_id = $1 AND config IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM campaign_publications p WHERE p.campaign_id = campaigns.id AND p.tiktok_ad_id IS NOT NULL)
             AND (   config #>> '{ad,videoCreativeId}' = $2::text
                  OR config #>> '{ad,coverCreativeId}' = $2::text
                  OR COALESCE(config #> '{ad,imageCreativeIds}', '[]'::jsonb) @> to_jsonb($2::int))

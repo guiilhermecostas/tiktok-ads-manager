@@ -118,8 +118,19 @@ Segurança dos tokens: AES-256-GCM no banco, nunca enviados ao navegador nem reg
 
 ## Campanhas (assistente passo a passo)
 
-- **Campanhas → Nova campanha** abre um assistente em 5 etapas: **Objetivo → Campanha → Grupo de anúncios → Anúncio → Revisão**,
-  espelhando a hierarquia do TikTok (campanha, grupo de anúncios, anúncio).
+- O botão flutuante **Publicar campanha** (canto inferior direito, em todas as telas) abre o assistente em um **pop-up**, já no passo
+  Objetivo, com 5 etapas: **Objetivo → Campanha → Grupo de anúncios → Anúncio → Revisão e publicação**, espelhando a hierarquia do TikTok
+  (campanha, grupo de anúncios, anúncio). Fechar com alterações não salvas pede confirmação; clicar fora não fecha. A lista de rascunhos e
+  campanhas publicadas fica em **Início → Gerenciar campanhas** (endereço `/campaigns`; fora da barra lateral).
+- **A conta de anúncio é escolhida no FINAL** (etapa de revisão), não no começo: a mesma campanha pode ser publicada em **várias contas, de
+  várias Business Centers**, de uma vez. As contas aparecem agrupadas por Business Center (com a moeda de cada uma). O sistema publica
+  **uma conta por vez**, mostra o progresso e o resultado de cada uma, e a falha de uma não impede as outras; dá para tentar de novo só as
+  que falharam (retoma de onde parou, sem duplicar). Cada publicação (campanha × conta) é registrada em `campaign_publications`.
+- IDs que pertencem a uma conta específica (pixel, app, catálogo, conjunto de produtos, formulário de leads e identidade) podem ser
+  **ajustados por conta** na publicação ("Ajustar IDs desta conta"); o restante da campanha continua igual. Orçamentos e lances são enviados
+  como o mesmo número em cada conta, **na moeda dela** (sem conversão): o sistema avisa quando as contas escolhidas têm moedas diferentes.
+- Depois que uma conta conclui, a configuração da campanha fica travada (a mesma vale para todas as contas), mas dá para publicar em
+  novas contas depois ("Detalhes e novas contas" na lista). Para mudar o anúncio, crie uma nova campanha.
 - Cobre os **8 objetivos** (tráfego, conversões no site, vendas de produtos, leads, app, alcance, vídeo, engajamento) e as
   configurações de cada nível: orçamento (sem limite/diário/total, na campanha ou no grupo), agenda, posicionamentos, público
   (países, gênero, idades, idiomas, sistema, interesses e públicos por ID), meta de otimização, evento de cobrança, lance, ritmo,
@@ -129,7 +140,7 @@ Segurança dos tokens: AES-256-GCM no banco, nunca enviados ao navegador nem reg
 - **Rascunhos:** salve em qualquer etapa (basta ter escolhido o objetivo). Campos obrigatórios só são exigidos para publicar.
 - **Publicar no TikTok:** cria campanha, grupo e anúncio **sempre pausados** (nada gasta até ativar no TikTok), exige confirmação,
   só aceita contas de anúncio das suas Business Centers (ou das compartilhadas) e, se um nível falhar, **retoma** de onde parou sem duplicar.
-  Campanhas publicadas ficam somente leitura; níveis já criados não podem mais ser alterados.
+  O que já foi criado no TikTok (em qualquer conta) não pode mais ser alterado na configuração.
 - **Criativos:** o vídeo, a capa e as imagens do anúncio são escolhidos da sua **biblioteca de criativos** (menu Criativos).
   Identidade, pixel, app, catálogo e formulário continuam sendo **referenciados por ID** (já cadastrados no TikTok).
 - As combinações (objetivo × meta × cobrança) e os valores seguem a estrutura documentada da Marketing API, mas **não foram validados

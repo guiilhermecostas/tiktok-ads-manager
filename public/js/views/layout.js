@@ -1,10 +1,10 @@
 import { post } from '../api.js';
 import { h, icon } from '../dom.js';
 import { state } from '../state.js';
+import { openCampaignWizard } from './campaign-wizard/index.js';
 
 const NAV = [
   { path: '/', label: 'Início', icon: 'home' },
-  { path: '/campaigns', label: 'Campanhas', icon: 'megaphone' },
   { path: '/creatives', label: 'Criativos', icon: 'image' },
   { path: '/tiktok', label: 'TikTok Ads', icon: 'chart' },
   { path: '/business-centers', label: 'Contas TikTok', icon: 'building' },
@@ -188,7 +188,15 @@ export function renderLayout(ctx, currentPath, content) {
     ),
   );
 
-  shell.append(sidebar, workspace);
+  // Botão flutuante: abre o assistente de campanha em pop-up, de qualquer tela.
+  const fab = h(
+    'button',
+    { type: 'button', class: 'fab', 'aria-label': 'Publicar campanha', title: 'Publicar campanha', onClick: () => openCampaignWizard(ctx) },
+    h('span', { class: 'fab__icon', 'aria-hidden': 'true' }, icon('megaphone', 20)),
+    h('span', { class: 'fab__label' }, 'Publicar campanha'),
+  );
+
+  shell.append(sidebar, workspace, fab);
   return shell;
 }
 

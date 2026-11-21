@@ -2,7 +2,8 @@ import { get } from '../api.js';
 import { h } from '../dom.js';
 import { formatCurrency, formatMoney, formatNumber, formatPercent } from '../format.js';
 import { state } from '../state.js';
-import { emptyState } from '../ui.js';
+import { button, emptyState } from '../ui.js';
+import { openCampaignWizard } from './campaign-wizard/index.js';
 import { pageHeader } from './layout.js';
 
 const metric = (label, value, accent = 'neutral') =>
@@ -66,7 +67,7 @@ function tiktokSection(overview) {
   return h('div', null, title, groups, notes.length ? h('p', { class: 'muted section-note section-note--lg' }, notes.join(' ')) : null);
 }
 
-export async function dashboardView() {
+export async function dashboardView(ctx) {
   const [{ summary }, overview] = await Promise.all([get('/campaigns/summary'), loadOverview()]);
   const firstName = state.user.name.split(' ')[0];
 
@@ -78,7 +79,7 @@ export async function dashboardView() {
           emptyState({
             title: 'Crie sua primeira campanha',
             text: 'Organize objetivos, orçamentos e status das suas campanhas de TikTok Ads em um só lugar.',
-            action: h('a', { href: '/campaigns', 'data-link': true, class: 'btn btn--primary' }, 'Ir para campanhas'),
+            action: button('Publicar campanha', { variant: 'primary', onClick: () => openCampaignWizard(ctx) }),
           }),
         )
       : h(
@@ -86,7 +87,7 @@ export async function dashboardView() {
           { class: 'card card--pad' },
           h('h2', { class: 'card__title' }, 'Resumo da operação'),
           h('p', { class: 'muted' }, `Você tem ${summary.draft} rascunho(s), ${summary.active} campanha(s) ativa(s) e ${summary.paused} pausada(s).`),
-          h('a', { href: '/campaigns', 'data-link': true, class: 'btn btn--secondary' }, 'Gerenciar campanhas'),
+          h('div', { class: 'page-header__actions' }, button('Publicar campanha', { variant: 'primary', onClick: () => openCampaignWizard(ctx) }), h('a', { href: '/campaigns', 'data-link': true, class: 'btn btn--secondary' }, 'Gerenciar campanhas')),
         );
 
   return {

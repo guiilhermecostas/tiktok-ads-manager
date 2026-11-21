@@ -194,6 +194,46 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['tiktok_oauth_attempts'], revoke: ['tiktok_oauth_attempts'], identity: [] })}
     `,
   },
+  {
+    version: 4,
+    description: 'Publicar a mesma campanha em várias contas de anúncio: uma publicação por (campanha, conta)',
+    sql: `
+      -- Uma campanha (configuração) pode ter várias publicações, uma por conta de anúncio. Cada publicação guarda os IDs
+      -- criados no TikTok, o último erro e os ajustes de IDs próprios daquela conta (pixel, identidade etc.).
+      CREATE TABLE campaign_publications (
+        id                 INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        campaign_id        INTEGER     NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+        advertiser_id      TEXT        NOT NULL CHECK (advertiser_id ~ '^[0-9]{1,24}$'),
+        overrides          JSONB,
+        tiktok_campaign_id TEXT,
+        tiktok_adgroup_id  TEXT,
+        tiktok_ad_id       TEXT,
+        error              TEXT,
+        published_at       TIMESTAMPTZ,
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (campaign_id, advertiser_id)
+      );
+
+      -- Preserva o que já existia: a publicação única de cada campanha vira uma linha desta tabela.
+      INSERT INTO campaign_publications (campaign_id, advertiser_id, tiktok_campaign_id, tiktok_adgroup_id, tiktok_ad_id, error, published_at, created_at, updated_at)
+      SELECT id, advertiser_id, tiktok_campaign_id, tiktok_adgroup_id, tiktok_ad_id, publish_error, published_at, created_at, updated_at
+        FROM campaigns
+       WHERE advertiser_id ~ '^[0-9]{1,24}$'
+         AND (tiktok_campaign_id IS NOT NULL OR tiktok_adgroup_id IS NOT NULL OR tiktok_ad_id IS NOT NULL OR publish_error IS NOT NULL);
+
+      -- Estas colunas deixam de ser usadas (a fonte é campaign_publications). Ficam por ora para não perder dados e permitir
+      -- reverter o deploy; uma migração futura pode removê-las.
+      COMMENT ON COLUMN campaigns.advertiser_id      IS 'OBSOLETA: use campaign_publications';
+      COMMENT ON COLUMN campaigns.tiktok_campaign_id IS 'OBSOLETA: use campaign_publications';
+      COMMENT ON COLUMN campaigns.tiktok_adgroup_id  IS 'OBSOLETA: use campaign_publications';
+      COMMENT ON COLUMN campaigns.tiktok_ad_id       IS 'OBSOLETA: use campaign_publications';
+      COMMENT ON COLUMN campaigns.publish_error      IS 'OBSOLETA: use campaign_publications';
+      COMMENT ON COLUMN campaigns.published_at       IS 'OBSOLETA: use campaign_publications';
+
+      ${protectTables({ rls: ['campaign_publications'], revoke: ['campaign_publications'], identity: ['campaign_publications'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

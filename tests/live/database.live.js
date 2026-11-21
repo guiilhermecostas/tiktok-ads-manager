@@ -95,15 +95,24 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
 
         // ---- campanhas: jsonb, resumo numérico, publicação parcial ----
         const config1 = { campaign: { name: 'Live', objective: 'REACH' }, adGroup: { locations: ['BR'], budget: 5000 }, ad: { text: 'Olá ✓ ação' } };
-        const wizard = await campaigns.createWizard(id, { name: 'Live', objective: 'REACH', dailyBudget: 5000, config: config1, advertiserId: '9001' });
+        const wizard = await campaigns.createWizard(id, { name: 'Live', objective: 'REACH', dailyBudget: 5000, config: config1 });
         assert.deepEqual(wizard.config, config1, 'jsonb preserva o objeto (inclusive acentos)');
         const simple = await campaigns.create(id, { name: 'Simples', objective: 'TRAFFIC', dailyBudget: 1000, status: 'active' });
         assert.equal(simple.wizard, false);
         const summary = await campaigns.summary(id);
         assert.deepEqual({ total: summary.total, active: summary.active, draft: summary.draft, activeBudget: summary.activeBudget }, { total: 2, active: 1, draft: 1, activeBudget: 1000 });
         assert.equal(typeof summary.activeBudget, 'number');
-        const progress = await campaigns.saveProgress(id, wizard.id, { campaignId: '7001', error: 'falhou', status: 'draft' });
-        assert.deepEqual([progress.publish.status, progress.publish.campaignId, progress.publish.error], ['partial', '7001', 'falhou']);
+        // Publicação por conta (várias contas por campanha): parcial na 9001, concluída na 9002.
+        const partial = await campaigns.saveProgress(id, wizard.id, '9001', { tiktokCampaignId: '7001', error: 'falhou', overrides: { ad: { identityId: 'abc-123' } } });
+        assert.deepEqual([partial.status, partial.tiktokCampaignId, partial.error, partial.overrides], ['partial', '7001', 'falhou', { ad: { identityId: 'abc-123' } }]);
+        await campaigns.saveProgress(id, wizard.id, '9002', { tiktokCampaignId: '8001', tiktokAdGroupId: '8002', tiktokAdId: '8003', publishedAt: new Date().toISOString() });
+        const detail = await campaigns.get(id, wizard.id);
+        assert.deepEqual([detail.publish.status, detail.publish.published, detail.publish.partial, detail.publications.length], ['partial', 1, 1, 2]);
+        assert.deepEqual(detail.publish.locks, { campaign: true, adGroup: true, ad: true });
+        assert.equal((await campaigns.list(id)).find((c) => c.id === wizard.id).publish.published, 1, 'a listagem agrega as publicações');
+        // O INSERT só vale para campanha do dono: outro usuário não consegue gravar publicação nela.
+        assert.equal(await campaigns.saveProgress(999_999_999, wizard.id, '9003', { tiktokCampaignId: '1' }), null);
+        await expectDbError(tx, "INSERT INTO campaign_publications (campaign_id, advertiser_id) VALUES ($1, '9001')", [wizard.id], (e) => e.code === '23505', 'uma publicação por (campanha, conta)');
         assert.equal((await campaigns.get(999_999_999 % 2_000_000_000, wizard.id)), null, 'isolamento por usuário');
         await expectDbError(tx, "INSERT INTO campaigns (user_id, name, objective, daily_budget) VALUES ($1, 'x', 'TRAFFIC', -1)", [id], (e) => e.code === '23514', 'CHECK de orçamento');
 
@@ -164,9 +173,9 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
     const config = loadConfig();
     const db = await openDatabase(config.database, { migrate: false });
     try {
-      const own = ['creatives', 'creative_tiktok_assets', 'tiktok_oauth_attempts'];
+      const own = ['creatives', 'creative_tiktok_assets', 'tiktok_oauth_attempts', 'campaign_publications'];
       const { rows: versions } = await db.query('SELECT version FROM schema_migrations ORDER BY version');
-      assert.ok(versions.length >= 3, 'migrações v2 e v3 aplicadas');
+      assert.ok(versions.length >= 4, 'migrações v2, v3 e v4 aplicadas');
       for (const table of own) {
         const rls = (await db.query('SELECT relrowsecurity FROM pg_class WHERE oid = $1::regclass', [table])).rows[0];
         assert.equal(rls.relrowsecurity, true, `${table}: RLS ligado`);

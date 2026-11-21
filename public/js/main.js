@@ -8,7 +8,7 @@ import { registerView } from './views/register.js';
 import { statusView } from './views/status.js';
 import { dashboardView } from './views/dashboard.js';
 import { campaignsView } from './views/campaigns.js';
-import { campaignWizardView } from './views/campaign-wizard/index.js';
+import { openCampaignWizard } from './views/campaign-wizard/index.js';
 import { adminView } from './views/admin.js';
 import { tiktokAdsView } from './views/tiktok-ads.js';
 import { businessCentersView } from './views/business-centers.js';
@@ -21,8 +21,6 @@ const root = document.getElementById('app');
 const PROTECTED_ROUTES = {
   '/': { title: 'Início', view: dashboardView },
   '/campaigns': { title: 'Campanhas', view: campaignsView },
-  '/campaigns/new': { title: 'Nova campanha', view: campaignWizardView },
-  '/campaigns/edit': { title: 'Editar campanha', view: campaignWizardView },
   '/creatives': { title: 'Criativos', view: creativesView },
   '/tiktok': { title: 'TikTok Ads', view: tiktokAdsView },
   '/business-centers': { title: 'Contas TikTok', view: businessCentersView },
@@ -52,10 +50,9 @@ async function render() {
   const current = ++renderId;
   cleanup?.();
   cleanup = null;
-  state.leaveGuard = null;
 
   const path = location.pathname.replace(/\/+$/, '') || '/';
-  const ctx = { navigate, refreshSession: async () => { await refreshSession(); await render(); } };
+  const ctx = { navigate, reload: () => render(), refreshSession: async () => { await refreshSession(); await render(); } };
 
   // 0) Retorno do TikTok após a autorização: página pública (pode abrir em outro navegador, sem sessão).
   if (path === '/tiktok/connected') {
@@ -80,6 +77,14 @@ async function render() {
 
   // 3) Conta aprovada.
   if (path === '/login' || path === '/register') return navigate('/', { replace: true });
+  // Endereços antigos do assistente (agora é um pop-up): abrem a lista de campanhas e o pop-up por cima.
+  if (path === '/campaigns/new' || path === '/campaigns/edit') {
+    const id = Number(new URLSearchParams(location.search).get('id'));
+    history.replaceState({}, '', '/campaigns');
+    await render();
+    openCampaignWizard(ctx, { campaignId: path === '/campaigns/edit' && Number.isSafeInteger(id) && id > 0 ? id : null });
+    return undefined;
+  }
   const route = PROTECTED_ROUTES[path];
   if (!route || (route.adminOnly && state.user.role !== 'admin')) {
     document.title = 'Página não encontrada · TikTok Ads Manager';
@@ -127,7 +132,6 @@ document.addEventListener('click', (event) => {
   const link = event.target.closest?.('a[data-link]');
   if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
   event.preventDefault();
-  if (state.leaveGuard && !state.leaveGuard()) return;
   navigate(link.getAttribute('href'));
 });
 window.addEventListener('popstate', render);

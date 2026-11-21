@@ -206,16 +206,16 @@ describe('Business Centers por usuário', () => {
     const b = await createUser(ctx, { approve: true });
     await a.client.post('/api/tiktok/business-centers', own());
     // Cada usuário só pode usar criativos da PRÓPRIA biblioteca.
-    const cfgFor = async (client) => completeConfig('TRAFFIC', { account: { advertiserId: '9101' }, ad: { videoCreativeId: await uploadedId(client, { type: 'mp4' }) } });
+    const cfgFor = async (client) => completeConfig('TRAFFIC', { ad: { videoCreativeId: await uploadedId(client, { type: 'mp4' }) } });
 
     const draftA = (await a.client.post('/api/campaigns', { config: await cfgFor(a.client) })).json.campaign;
     const draftB = (await b.client.post('/api/campaigns', { config: await cfgFor(b.client) })).json.campaign;
     fake.state.calls.length = 0;
-    const blocked = await b.client.post(`/api/campaigns/${draftB.id}/publish`, { confirm: true });
+    const blocked = await b.client.post(`/api/campaigns/${draftB.id}/publish`, { confirm: true, advertiserId: '9101' });
     assert.equal(blocked.status, 404, 'B não publica na conta do A');
     assert.equal(fake.callsTo('/campaign/create/').length, 0);
 
-    const ok = await a.client.post(`/api/campaigns/${draftA.id}/publish`, { confirm: true });
+    const ok = await a.client.post(`/api/campaigns/${draftA.id}/publish`, { confirm: true, advertiserId: '9101' });
     assert.equal(ok.status, 200);
     assert.equal(fake.callsTo('/campaign/create/')[0].token, OTHER_TOKEN, 'usa o token do dono da BC');
   });

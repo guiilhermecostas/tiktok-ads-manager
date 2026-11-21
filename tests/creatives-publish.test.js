@@ -25,9 +25,9 @@ describe('Criativos nas campanhas: validação ao salvar e envio ao TikTok na pu
     fake.state.validTokens = new Set([GOOD_TOKEN, OTHER_TOKEN]);
   };
   const newUser = () => createUser(ctx, { approve: true });
-  /** Rascunho de campanha (TRAFFIC, vídeo) pronto para publicar na conta 9001, com os ajustes de `ad`/`account`. */
+  /** Rascunho de campanha (TRAFFIC, vídeo) pronto para publicar, com os ajustes de `ad`. A conta é escolhida ao publicar. */
   const draft = async (client, over = {}) => (await client.post('/api/campaigns', { config: completeConfig('TRAFFIC', over) })).json.campaign;
-  const publish = (client, id) => client.post(`/api/campaigns/${id}/publish`, { confirm: true });
+  const publish = (client, id, advertiserId = '9001') => client.post(`/api/campaigns/${id}/publish`, { confirm: true, advertiserId });
   const pathsOf = () => fake.state.calls.map((c) => c.path);
   const creatingCalls = () => pathsOf().filter((p) => p.endsWith('/create/'));
 
@@ -125,7 +125,7 @@ describe('Criativos nas campanhas: validação ao salvar e envio ao TikTok na pu
       const video = await uploadedId(client, { type: 'mp4' });
       const first = await draft(client, { campaign: { name: 'Primeira' }, ad: { videoCreativeId: video } });
       const second = await draft(client, { campaign: { name: 'Segunda' }, ad: { videoCreativeId: video } });
-      const other = await draft(client, { campaign: { name: 'Outra conta' }, account: { advertiserId: '9002' }, ad: { videoCreativeId: video } });
+      const other = await draft(client, { campaign: { name: 'Outra conta' }, ad: { videoCreativeId: video } });
       reset();
       assert.equal((await publish(client, first.id)).status, 200);
       assert.equal((await publish(client, second.id)).status, 200);
@@ -133,7 +133,7 @@ describe('Criativos nas campanhas: validação ao salvar e envio ao TikTok na pu
       const [ad1, ad2] = fake.callsTo('/ad/create/');
       assert.equal(ad1.body.creatives[0].video_id, ad2.body.creatives[0].video_id);
 
-      assert.equal((await publish(client, other.id)).status, 200);
+      assert.equal((await publish(client, other.id, '9002')).status, 200);
       assert.equal(fake.callsTo('/file/video/ad/upload/').length, 2, 'conta diferente = envio novo');
       assert.equal(fake.callsTo('/file/video/ad/upload/')[1].body.advertiser_id, '9002');
       const assets = await all(ctx.db, 'SELECT advertiser_id FROM creative_tiktok_assets WHERE creative_id = $1 ORDER BY advertiser_id', [video]);
@@ -231,14 +231,14 @@ describe('Criativos nas campanhas: validação ao salvar e envio ao TikTok na pu
       const { client } = await newUser();
       const ref = (await client.post('/api/creatives/tiktok', { name: 'Já no TikTok', kind: 'video', advertiserId: '9001', tiktokId: 'v10033g50000existente1' })).json.creative.id;
       const same = await draft(client, { campaign: { name: 'Mesma conta' }, ad: { videoCreativeId: ref } });
-      const other = await draft(client, { campaign: { name: 'Outra conta' }, account: { advertiserId: '9002' }, ad: { videoCreativeId: ref } });
+      const other = await draft(client, { campaign: { name: 'Outra conta' }, ad: { videoCreativeId: ref } });
       reset();
       assert.equal((await publish(client, same.id)).status, 200);
       assert.equal(fake.callsTo('/file/video/ad/upload/').length, 0, 'não há arquivo para enviar');
       assert.equal(fake.callsTo('/ad/create/')[0].body.creatives[0].video_id, 'v10033g50000existente1');
 
       reset();
-      const wrong = await publish(client, other.id);
+      const wrong = await publish(client, other.id, '9002');
       assert.equal(wrong.status, 400);
       assert.equal(wrong.json.error.code, 'creative_wrong_account');
       assert.equal(fake.state.calls.length, 0, 'nada foi chamado no TikTok');
@@ -260,16 +260,16 @@ describe('Criativos nas campanhas: validação ao salvar e envio ao TikTok na pu
       const owner = await newUser();
       assert.equal((await owner.client.post('/api/tiktok/business-centers', { name: 'Privada', bcId: '222', accessToken: OTHER_TOKEN })).status, 201);
       const video = await uploadedId(owner.client, { type: 'mp4' });
-      const { id } = await draft(owner.client, { account: { advertiserId: '9101' }, ad: { videoCreativeId: video } });
+      const { id } = await draft(owner.client, { ad: { videoCreativeId: video } });
       reset();
-      assert.equal((await publish(owner.client, id)).status, 200);
+      assert.equal((await publish(owner.client, id, '9101')).status, 200);
       assert.equal(fake.callsTo('/file/video/ad/upload/')[0].token, OTHER_TOKEN);
 
       const stranger = await newUser();
       const strangerVideo = await uploadedId(stranger.client, { type: 'mp4' });
-      const attempt = await draft(stranger.client, { account: { advertiserId: '9101' }, ad: { videoCreativeId: strangerVideo } });
+      const attempt = await draft(stranger.client, { ad: { videoCreativeId: strangerVideo } });
       reset();
-      assert.equal((await publish(stranger.client, attempt.id)).status, 404, 'conta de anúncio alheia');
+      assert.equal((await publish(stranger.client, attempt.id, '9101')).status, 404, 'conta de anúncio alheia');
       assert.equal(fake.state.calls.length, 0, 'o arquivo do usuário nunca vai para a conta de outro');
     });
 

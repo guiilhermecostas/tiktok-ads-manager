@@ -45,11 +45,20 @@ export async function importFromSqlite({ sqlitePath, db, dryRun = false }) {
       }
       for (const c of data.campaigns) {
         await tx.query(
-          `INSERT INTO campaigns (id, user_id, name, objective, daily_budget, status, config, advertiser_id,
-                                  tiktok_campaign_id, tiktok_adgroup_id, tiktok_ad_id, publish_error, published_at, created_at, updated_at)
-           OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::timestamptz, $14::timestamptz, $15::timestamptz)`,
-          [c.id, c.user_id, c.name, c.objective, c.daily_budget, c.status, text(c.config), text(c.advertiser_id), text(c.tiktok_campaign_id), text(c.tiktok_adgroup_id), text(c.tiktok_ad_id), text(c.publish_error), text(c.published_at), text(c.created_at), text(c.updated_at)],
+          `INSERT INTO campaigns (id, user_id, name, objective, daily_budget, status, config, created_at, updated_at)
+           OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz, $9::timestamptz)`,
+          [c.id, c.user_id, c.name, c.objective, c.daily_budget, c.status, text(c.config), text(c.created_at), text(c.updated_at)],
         );
+        // O banco antigo guardava UMA publicação por campanha nas próprias colunas: no modelo novo vira uma linha por conta.
+        const advertiserId = text(c.advertiser_id);
+        const hadPublication = [c.tiktok_campaign_id, c.tiktok_adgroup_id, c.tiktok_ad_id, c.publish_error].some((v) => text(v) !== null);
+        if (advertiserId && /^\d{1,24}$/.test(advertiserId) && hadPublication) {
+          await tx.query(
+            `INSERT INTO campaign_publications (campaign_id, advertiser_id, tiktok_campaign_id, tiktok_adgroup_id, tiktok_ad_id, error, published_at, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8::timestamptz, $9::timestamptz)`,
+            [c.id, advertiserId, text(c.tiktok_campaign_id), text(c.tiktok_adgroup_id), text(c.tiktok_ad_id), text(c.publish_error), text(c.published_at), text(c.created_at), text(c.updated_at)],
+          );
+        }
       }
       for (const bc of data.businessCenters) {
         await tx.query(

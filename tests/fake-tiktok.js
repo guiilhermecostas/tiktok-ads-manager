@@ -27,6 +27,7 @@ export function createFakeTiktok() {
     failReportFor: new Set(),
     calls: [],
     failCreate: new Set(), // ex.: 'ad' derruba a criação do anúncio
+    failForAdvertiser: new Map(), // ID da conta -> nível ('campaign' | 'adGroup' | 'ad'): derruba a criação só nessa conta
     nextId: 7000,
     failUpload: new Set(), // 'image' | 'video'
     createDelayMs: 0, // simula latência nas criações (testes de concorrência)
@@ -127,12 +128,15 @@ export function createFakeTiktok() {
         if (state.failUpload.has('video')) return reply({}, 40002, 'Video file is invalid');
         return reply([{ video_id: `v10033g5000video${++state.nextId}`, duration: 5 }]);
       case '/campaign/create/':
+        if (state.failForAdvertiser.get(body?.advertiser_id) === 'campaign') return reply({}, 40002, 'Campaign name already exists');
         if (state.failCreate.has('campaign')) return reply({}, 40002, 'Campaign name already exists');
         return reply({ campaign_id: String(++state.nextId) });
       case '/adgroup/create/':
+        if (state.failForAdvertiser.get(body?.advertiser_id) === 'adGroup') return reply({}, 40002, 'Invalid optimization goal for this objective');
         if (state.failCreate.has('adGroup')) return reply({}, 40002, 'Invalid optimization goal for this objective');
         return reply({ adgroup_id: String(++state.nextId) });
       case '/ad/create/':
+        if (state.failForAdvertiser.get(body?.advertiser_id) === 'ad') return reply({}, 40002, 'Identity not found');
         if (state.failCreate.has('ad')) return reply({}, 40002, 'Identity not found');
         return reply({ ad_ids: [String(++state.nextId)] });
       default:
