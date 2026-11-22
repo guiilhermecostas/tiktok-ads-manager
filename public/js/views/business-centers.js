@@ -148,7 +148,7 @@ export async function businessCentersView() {
       badges: [badge(bc.authType === 'oauth' ? 'Por link' : 'Token', 'neutral'), visibilityBadge(bc), bc.viaProxy ? badge('Via proxy', 'success') : null],
       note: bc.lastError ? { text: bc.lastError, tone: 'error' } : null,
       stats: [
-        { label: 'Contas de anúncio', value: String(bc.advertiserCount), big: true },
+        { label: 'Contas', value: String(bc.advertiserCount), big: true },
         { label: 'ID da BC', value: bc.bcId ? h('span', { class: 'code' }, bc.bcId) : '—' },
         { label: 'Última sincronização', value: bc.lastSyncedAt ? formatDate(bc.lastSyncedAt) : '—', wide: true },
         isAdmin() ? { label: 'Dono', value: bc.owned ? 'Você' : (bc.ownerName ?? '—') } : null,
