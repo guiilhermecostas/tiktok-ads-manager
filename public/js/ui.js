@@ -9,10 +9,11 @@ export function toast(message, tone = 'success') {
 
 export const badge = (label, tone = 'neutral') => h('span', { class: `badge badge--${tone}` }, label);
 
-export function button(label, { variant = 'secondary', type = 'button', onClick, disabled = false, small = false } = {}) {
+/** `ariaLabel` desambigua botões repetidos em listas (ex.: "Editar" em cada cartão vira "Editar Loja Principal"). */
+export function button(label, { variant = 'secondary', type = 'button', onClick, disabled = false, small = false, ariaLabel } = {}) {
   return h(
     'button',
-    { type, class: `btn btn--${variant}${small ? ' btn--sm' : ''}`, onClick, disabled },
+    { type, class: `btn btn--${variant}${small ? ' btn--sm' : ''}`, onClick, disabled, 'aria-label': ariaLabel },
     label,
   );
 }

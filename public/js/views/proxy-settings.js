@@ -3,8 +3,7 @@ import { h } from '../dom.js';
 import { formatDate } from '../format.js';
 import { PROXY_KIND_LABELS, parseProxyUrl } from '../proxy-url.js';
 import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, toast } from '../ui.js';
-import { accountsTabs } from './accounts-tabs.js';
-import { pageHeader } from './layout.js';
+import { hubCard, hubGrid, hubLayout, plural } from './hub.js';
 
 const kindLabel = (kind) => PROXY_KIND_LABELS[kind] ?? kind;
 const address = (p) => `${p.host.includes(':') ? `[${p.host}]` : p.host}:${p.port}`;
@@ -111,13 +110,27 @@ function proxyForm(existing, onSaved) {
   (existing ? name.control : paste.control).focus();
 }
 
-function lastTestCell(proxy) {
+/** Resultado do último teste, no corpo do cartão. */
+function lastTestBlock(proxy) {
   const test = proxy.lastTest;
-  if (!test) return h('span', { class: 'muted' }, 'Nunca testada');
+  if (!test) return h('div', { class: 'hub-test' }, h('span', { class: 'hub-test__label' }, 'Último teste'), h('span', { class: 'muted' }, 'Nunca testada'));
   if (test.ok) {
-    return h('div', null, h('span', { class: 'proxy-test proxy-test--ok' }, `✓ ${test.ip}${test.country ? ` · ${test.country}` : ''}`), h('p', { class: 'muted cell-note' }, formatDate(test.at)));
+    return h(
+      'div',
+      { class: 'hub-test' },
+      h('span', { class: 'hub-test__label' }, 'Último teste'),
+      h('span', { class: 'proxy-test proxy-test--ok' }, `✓ ${test.ip}${test.country ? ` · ${test.country}` : ''}`),
+      h('span', { class: 'muted hub-test__date' }, formatDate(test.at)),
+    );
   }
-  return h('div', null, h('span', { class: 'proxy-test proxy-test--fail' }, '✗ Falhou'), h('p', { class: 'muted cell-note' }, test.error ?? 'Sem detalhes.'), h('p', { class: 'muted cell-note' }, formatDate(test.at)));
+  return h(
+    'div',
+    { class: 'hub-test' },
+    h('span', { class: 'hub-test__label' }, 'Último teste'),
+    h('span', { class: 'proxy-test proxy-test--fail' }, '✗ Falhou'),
+    h('span', { class: 'muted hub-test__date' }, test.error ?? 'Sem detalhes.'),
+    h('span', { class: 'muted hub-test__date' }, formatDate(test.at)),
+  );
 }
 
 /** Sub-aba "Proxy": cadastra proxies (HTTP, HTTPS, SOCKS4, SOCKS5) e escolhe a ativa para as chamadas ao TikTok. */
@@ -196,78 +209,75 @@ export async function proxySettingsView() {
     await reload();
   }
 
-  function statusCard(proxies) {
+  /** Faixa central com a situação: há proxy ativa ou as chamadas saem do IP do servidor. */
+  function statusBanner(proxies) {
     const active = proxies.find((p) => p.active);
     if (active) {
       return h(
-        'div',
-        { class: 'proxy-status proxy-status--on' },
-        h('strong', null, `Proxy ativa: ${active.name}`),
-        h('p', null, `${kindLabel(active.kind)} · ${address(active)}${active.lastTest?.ok ? ` · saída ${active.lastTest.ip}${active.lastTest.country ? ` (${active.lastTest.country})` : ''}` : ''}`),
-        h('p', { class: 'muted' }, 'TODAS as chamadas à API do TikTok das suas Business Centers saem por ela. Se ela falhar, a chamada falha: o IP do servidor nunca é usado como reserva. Contas de uma Business Center compartilhada pelo administrador usam a proxy de quem conectou essa BC.'),
+        'section',
+        { class: 'hub-banner hub-banner--on' },
+        h('strong', { class: 'hub-banner__title' }, `Proxy ativa: ${active.name}`),
+        h('p', { class: 'hub-banner__line' }, `${kindLabel(active.kind)} · ${address(active)}${active.lastTest?.ok ? ` · saída ${active.lastTest.ip}${active.lastTest.country ? ` (${active.lastTest.country})` : ''}` : ''}`),
+        h('p', { class: 'hub-banner__text' }, 'TODAS as chamadas à API do TikTok das suas Business Centers saem por ela. Se ela falhar, a chamada falha: o IP do servidor nunca é usado como reserva. Contas de uma Business Center compartilhada pelo administrador usam a proxy de quem conectou essa BC.'),
       );
     }
     return h(
-      'div',
-      { class: 'proxy-status' },
-      h('strong', null, 'Nenhuma proxy ativa'),
-      h('p', { class: 'muted' }, 'As chamadas ao TikTok saem do IP do servidor. Vende nos EUA e o TikTok bloqueia por país? Cadastre uma proxy dos EUA, use “Testar” para conferir o IP de saída e ative.'),
+      'section',
+      { class: 'hub-banner' },
+      h('strong', { class: 'hub-banner__title' }, 'Nenhuma proxy ativa'),
+      h('p', { class: 'hub-banner__text' }, 'As chamadas ao TikTok saem do IP do servidor. Vende nos EUA e o TikTok bloqueia por país? Cadastre uma proxy dos EUA, use “Testar” para conferir o IP de saída e ative.'),
     );
+  }
+
+  /** Cartão de uma proxy: tipo, endereço, acesso, último teste e ações lado a lado. */
+  function proxyCard(p) {
+    return hubCard({
+      title: p.name,
+      tone: p.active ? 'active' : null,
+      status: p.active ? badge('Ativa', 'success') : badge('Inativa', 'neutral'),
+      badges: [badge(kindLabel(p.kind), 'neutral'), badge(p.username || p.hasPassword ? 'Usuário e senha' : 'Sem autenticação', 'neutral')],
+      stats: [{ label: 'Endereço', value: h('span', { class: 'code code--line', title: address(p) }, address(p)) }],
+      body: lastTestBlock(p),
+      actions: [
+        button('Testar', { small: true, ariaLabel: `Testar ${p.name}`, onClick: (e) => test(p, e.currentTarget) }),
+        p.active ? button('Desativar', { small: true, ariaLabel: `Desativar ${p.name}`, onClick: () => deactivate(p) }) : button('Ativar', { small: true, ariaLabel: `Ativar ${p.name}`, onClick: () => activate(p) }),
+        button('Editar', { small: true, ariaLabel: `Editar ${p.name}`, onClick: () => proxyForm(p, reload) }),
+        button('Remover', { small: true, variant: 'danger-ghost', ariaLabel: `Remover ${p.name}`, onClick: () => remove(p) }),
+      ],
+    });
   }
 
   function draw({ configured, max, proxies }) {
     const addButton = button('+ Adicionar proxy', { variant: 'primary', disabled: !configured || proxies.length >= max, onClick: () => proxyForm(null, reload) });
-    const header = pageHeader('Contas TikTok', 'Proxies para as chamadas à API do TikTok: HTTP, HTTPS, SOCKS4 e SOCKS5.', addButton);
+    const subtitle = 'Proxies para as chamadas à API do TikTok: HTTP, HTTPS, SOCKS4 e SOCKS5.';
     const notice = configured ? null : alertBox('O servidor ainda não tem a TOKEN_ENCRYPTION_KEY configurada (arquivo .env). Ela também protege os dados das proxies.');
     if (!proxies.length) {
-      return h(
-        'div',
-        null,
-        header,
-        accountsTabs('/business-centers/proxy'),
+      return hubLayout({
+        active: '/business-centers/proxy',
+        subtitle,
         notice,
-        statusCard(proxies),
-        h('div', { class: 'card' }, emptyState({
-          title: 'Nenhuma proxy cadastrada',
-          text: 'Cadastre uma proxy (por exemplo, dos EUA) para que a publicação e as consultas ao TikTok saiam por ela. Usuário e senha ficam criptografados e nunca voltam para o navegador.',
-          action: configured ? button('+ Adicionar proxy', { variant: 'primary', onClick: () => proxyForm(null, reload) }) : null,
-        })),
-      );
+        children: [
+          statusBanner(proxies),
+          h('div', { class: 'card' }, emptyState({
+            title: 'Nenhuma proxy cadastrada',
+            text: 'Cadastre uma proxy (por exemplo, dos EUA) para que a publicação e as consultas ao TikTok saiam por ela. Usuário e senha ficam criptografados e nunca voltam para o navegador.',
+            action: configured ? button('+ Adicionar proxy', { variant: 'primary', onClick: () => proxyForm(null, reload) }) : null,
+          })),
+        ],
+      });
     }
-    const rows = proxies.map((p) =>
-      h(
-        'tr',
-        null,
-        h('td', { class: 'cell-strong' }, p.name),
-        h('td', null, badge(kindLabel(p.kind), 'neutral')),
-        h('td', null, h('span', { class: 'code' }, address(p))),
-        h('td', { class: 'muted' }, p.username || p.hasPassword ? 'Usuário e senha' : 'Sem autenticação'),
-        h('td', null, lastTestCell(p)),
-        h('td', null, p.active ? badge('Ativa', 'success') : badge('Inativa', 'neutral')),
-        h(
-          'td',
-          null,
-          h(
-            'div',
-            { class: 'cell-actions' },
-            button('Testar', { small: true, onClick: (e) => test(p, e.currentTarget) }),
-            p.active ? button('Desativar', { small: true, onClick: () => deactivate(p) }) : button('Ativar', { small: true, onClick: () => activate(p) }),
-            button('Editar', { small: true, onClick: () => proxyForm(p, reload) }),
-            button('Remover', { small: true, variant: 'danger-ghost', onClick: () => remove(p) }),
-          ),
-        ),
-      ),
-    );
-    return h(
-      'div',
-      null,
-      header,
-      accountsTabs('/business-centers/proxy'),
+    return hubLayout({
+      active: '/business-centers/proxy',
+      subtitle,
       notice,
-      statusCard(proxies),
-      h('div', { class: 'card table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['Nome', 'Tipo', 'Endereço', 'Acesso', 'Último teste', 'Status', ''].map((t) => h('th', { scope: 'col' }, t)))), h('tbody', null, rows))),
-      h('p', { class: 'muted section-note' }, `Até ${max} proxies por usuário; só uma fica ativa por vez. O endereço da proxy precisa ser público: redes internas são bloqueadas por segurança.`),
-    );
+      summary: `${plural(proxies.length, 'proxy cadastrada', 'proxies cadastradas')} · ${proxies.some((p) => p.active) ? 'uma ativa' : 'nenhuma ativa'}`,
+      actions: addButton,
+      children: [
+        statusBanner(proxies),
+        hubGrid(proxies.map(proxyCard)),
+        h('p', { class: 'hub__note' }, `Até ${max} proxies por usuário; só uma fica ativa por vez. O endereço da proxy precisa ser público: redes internas são bloqueadas por segurança.`),
+      ],
+    });
   }
 
   await load();

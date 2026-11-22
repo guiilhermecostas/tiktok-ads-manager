@@ -3,9 +3,8 @@ import { h, icon } from '../dom.js';
 import { formatDate } from '../format.js';
 import { state } from '../state.js';
 import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, toast } from '../ui.js';
-import { accountsTabs } from './accounts-tabs.js';
 import { connectByLink } from './connect-link.js';
-import { pageHeader } from './layout.js';
+import { hubCard, hubGrid, hubLayout, plural } from './hub.js';
 
 const isAdmin = () => state.user.role === 'admin';
 
@@ -131,72 +130,76 @@ export async function businessCentersView() {
     return badge(bc.owned ? 'Só você' : 'Privada', 'neutral');
   }
 
+  /** Cartão de uma Business Center: situação, selos, números e ações lado a lado. */
+  function businessCenterCard(bc, oauth) {
+    const active = bc.status === 'active';
+    const actions = bc.canManage
+      ? [
+          button('Sincronizar', { small: true, ariaLabel: `Sincronizar ${bc.name}`, onClick: (e) => sync(bc, e.currentTarget) }),
+          bc.authType === 'oauth' && oauth.available ? button('Reautorizar', { small: true, ariaLabel: `Reautorizar ${bc.name}`, onClick: () => connectByLink({ initialName: bc.name, onDone: reload }) }) : null,
+          button('Editar', { small: true, ariaLabel: `Editar ${bc.name}`, onClick: () => businessCenterForm(bc, reload, oauth) }),
+          button('Remover', { small: true, variant: 'danger-ghost', ariaLabel: `Remover ${bc.name}`, onClick: () => remove(bc) }),
+        ]
+      : [];
+    return hubCard({
+      title: bc.name,
+      tone: active ? 'ok' : 'error',
+      status: active ? badge('Ativa', 'success') : badge('Acesso com erro', 'danger'),
+      badges: [badge(bc.authType === 'oauth' ? 'Por link' : 'Token', 'neutral'), visibilityBadge(bc), bc.viaProxy ? badge('Via proxy', 'success') : null],
+      note: bc.lastError ? { text: bc.lastError, tone: 'error' } : null,
+      stats: [
+        { label: 'Contas de anúncio', value: String(bc.advertiserCount), big: true },
+        { label: 'ID da BC', value: bc.bcId ? h('span', { class: 'code' }, bc.bcId) : '—' },
+        { label: 'Última sincronização', value: bc.lastSyncedAt ? formatDate(bc.lastSyncedAt) : '—', wide: true },
+        isAdmin() ? { label: 'Dono', value: bc.owned ? 'Você' : (bc.ownerName ?? '—') } : null,
+      ],
+      actions,
+      footnote: bc.canManage ? null : 'Gerenciada pelo administrador',
+    });
+  }
+
   function draw(configured, oauth, businessCenters) {
     // Com o app do TikTok configurado: pop-up do link (padrão). Sem ele: formulário com token.
     const startConnect = () => (oauth.available ? connectByLink({ onDone: reload, onUseToken: () => businessCenterForm(null, reload, oauth) }) : businessCenterForm(null, reload, oauth));
     const connectButton = button([icon('plus', 16), ' Conectar Business Center'], { variant: 'primary', disabled: !configured, onClick: startConnect });
-    const header = pageHeader('Contas TikTok', 'Conecte suas Business Centers. Os dados delas alimentam o Início, TikTok Ads e Campanhas.', connectButton);
+    const subtitle = 'Conecte suas Business Centers. Os dados delas alimentam o Início, o TikTok Ads e a publicação de campanhas.';
     const notice = configured
       ? null
       : alertBox('O servidor ainda não tem a TOKEN_ENCRYPTION_KEY configurada (arquivo .env). Peça ao administrador para defini-la e reiniciar o sistema: ela protege os tokens salvos.');
 
     if (!businessCenters.length) {
-      return h(
-        'div',
-        null,
-        header,
-        accountsTabs('/business-centers'),
+      return hubLayout({
+        active: '/business-centers',
+        subtitle,
         notice,
-        h(
-          'div',
-          { class: 'card' },
-          emptyState({
-            title: 'Nenhuma Business Center conectada',
-            text: oauth.available
-              ? 'Gere um link, abra no navegador em que você está logado na Business Center do TikTok e libere o acesso. Sem copiar tokens. O acesso fica criptografado e é usado só para ler suas contas e publicar campanhas pausadas.'
-              : 'Informe o ID da sua Business Center e um token de acesso da Marketing API. O token é validado no TikTok, guardado criptografado e usado só para ler suas contas e publicar campanhas pausadas.',
-            action: configured ? button([icon('plus', 16), ' Conectar Business Center'], { variant: 'primary', onClick: startConnect }) : null,
-          }),
-        ),
-      );
+        children: [
+          h(
+            'div',
+            { class: 'card' },
+            emptyState({
+              title: 'Nenhuma Business Center conectada',
+              text: oauth.available
+                ? 'Gere um link, abra no navegador em que você está logado na Business Center do TikTok e libere o acesso. Sem copiar tokens. O acesso fica criptografado e é usado só para ler suas contas e publicar campanhas pausadas.'
+                : 'Informe o ID da sua Business Center e um token de acesso da Marketing API. O token é validado no TikTok, guardado criptografado e usado só para ler suas contas e publicar campanhas pausadas.',
+              action: configured ? button([icon('plus', 16), ' Conectar Business Center'], { variant: 'primary', onClick: startConnect }) : null,
+            }),
+          ),
+        ],
+      });
     }
 
-    const admin = isAdmin();
-    const rows = businessCenters.map((bc) => {
-      const actions = bc.canManage
-        ? h(
-            'div',
-            { class: 'cell-actions' },
-            button('Sincronizar', { small: true, onClick: (e) => sync(bc, e.currentTarget) }),
-            bc.authType === 'oauth' && oauth.available ? button('Reautorizar', { small: true, onClick: () => connectByLink({ initialName: bc.name, onDone: reload }) }) : null,
-            button('Editar', { small: true, onClick: () => businessCenterForm(bc, reload, oauth) }),
-            button('Remover', { small: true, variant: 'danger-ghost', onClick: () => remove(bc) }),
-          )
-        : h('span', { class: 'muted' }, 'Gerenciada pelo administrador');
-      return h(
-        'tr',
-        null,
-        h('td', { class: 'cell-strong' }, bc.name, bc.lastError ? h('p', { class: 'muted cell-note' }, bc.lastError) : null),
-        h('td', null, bc.bcId ? h('span', { class: 'code' }, bc.bcId) : h('span', { class: 'muted' }, '—'), ' ', badge(bc.authType === 'oauth' ? 'Por link' : 'Token', 'neutral'), bc.viaProxy ? ' ' : null, bc.viaProxy ? badge('Via proxy', 'success') : null),
-        admin ? h('td', null, bc.owned ? 'Você' : (bc.ownerName ?? '—')) : null,
-        h('td', null, visibilityBadge(bc)),
-        h('td', null, bc.status === 'active' ? badge('Ativa', 'success') : badge('Acesso com erro', 'danger')),
-        h('td', null, String(bc.advertiserCount)),
-        h('td', { class: 'muted' }, bc.lastSyncedAt ? formatDate(bc.lastSyncedAt) : '—'),
-        h('td', null, actions),
-      );
-    });
-
-    const heads = ['Nome', 'ID da BC', admin ? 'Dono' : null, 'Visibilidade', 'Status', 'Contas de anúncio', 'Última sincronização', ''].filter((t) => t !== null);
-    return h(
-      'div',
-      null,
-      header,
-      accountsTabs('/business-centers'),
+    const accounts = businessCenters.reduce((sum, bc) => sum + bc.advertiserCount, 0);
+    return hubLayout({
+      active: '/business-centers',
+      subtitle,
       notice,
-      h('div', { class: 'card table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, heads.map((t) => h('th', { scope: 'col' }, t)))), h('tbody', null, rows))),
-      admin ? h('p', { class: 'muted section-note' }, 'Como administrador você vê as Business Centers de todos os usuários e pode compartilhar uma BC com a equipe em Editar. Os dados de BCs privadas de outros usuários não aparecem nas suas telas.') : null,
-    );
+      summary: `${plural(businessCenters.length, 'Business Center', 'Business Centers')} · ${plural(accounts, 'conta de anúncio', 'contas de anúncio')}`,
+      actions: connectButton,
+      children: [
+        hubGrid(businessCenters.map((bc) => businessCenterCard(bc, oauth))),
+        isAdmin() ? h('p', { class: 'hub__note' }, 'Como administrador você vê as Business Centers de todos os usuários e pode compartilhar uma BC com a equipe em Editar. Os dados de BCs privadas de outros usuários não aparecem nas suas telas.') : null,
+      ],
+    });
   }
 
   await load();

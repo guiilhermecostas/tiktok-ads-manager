@@ -10,7 +10,7 @@ const TABS = [
 export function accountsTabs(activePath) {
   return h(
     'nav',
-    { class: 'tabs', 'aria-label': 'Seções de Contas TikTok' },
+    { class: 'tabs tabs--hub', 'aria-label': 'Seções de Contas TikTok' },
     TABS.map((tab) =>
       h('a', { href: tab.path, 'data-link': '', class: `tab${tab.path === activePath ? ' is-active' : ''}`, 'aria-current': tab.path === activePath ? 'page' : null }, tab.label),
     ),
