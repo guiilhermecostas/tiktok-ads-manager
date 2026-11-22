@@ -73,6 +73,14 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
    informar, o cartão mostra “—” com uma explicação; “Sincronizar” tenta de novo (conexões criadas antes disso preenchem o ID assim).
    Os dois endpoints são tratados de forma defensiva (resposta sem o campo não gera erro); a resposta real do TikTok ainda precisa ser
    conferida com um token de verdade.
+   **Etiqueta “Conta de agência”:** na aba “Contas de anúncio” cada conta tem um seletor de tipo (conta comum ou conta de agência),
+   individual ou em lote (marque várias e use a barra “Marcar como conta de agência”). Só o dono da BC e o admin etiquetam; contas de BCs
+   compartilhadas aparecem com a etiqueta, mas somente o admin a altera. A etiqueta é do sistema (não vem do TikTok), fica em
+   `tiktok_advertisers.label` e **sobrevive à sincronização e à troca de token**. Na aba, e também no passo “Publicar em” da campanha, há
+   filtros por **tipo** (todas, comuns, de agência) e por **situação** (ativas, inativas = BC com erro de acesso); na publicação, o atalho
+   “Marcar todas as listadas” seleciona só o que o filtro mostra, o resumo detalha “N de agência, M comuns” e um aviso lembra de publicar
+   um tipo de cada vez quando a seleção mistura os dois. API: `PATCH /api/tiktok/business-centers/:id/advertisers` com
+   `{ "advertiserIds": ["…"], "label": "agency" | null }` (1 a 200 contas da mesma BC; tudo ou nada). Regras e nomes em `shared/account-labels.js`.
    **Cada usuário enxerga e usa apenas as próprias BCs** (Início, TikTok Ads e publicação de campanhas). Nunca vê as de outros.
 3. **Compartilhamento:** somente o admin pode marcar uma BC como "compartilhada com a equipe" (em Conectar/Editar). BCs
    compartilhadas aparecem para todos como somente leitura. As BCs que existiam antes desta mudança ficaram compartilhadas.

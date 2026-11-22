@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { MAX_LABEL_BATCH, isAccountLabel } from '../../../shared/account-labels.js';
 import { RateLimiter } from '../../lib/rate-limit.js';
 import { badRequest, tooMany } from '../../lib/http-error.js';
 import { asObject, parseId, parseText } from '../../lib/validation.js';
@@ -28,6 +29,16 @@ function parseOptionalBool(value, label) {
 function parseAdvertiserId(value) {
   if (typeof value !== 'string' || !NUMERIC_ID_RE.test(value)) throw badRequest('Conta de anúncio inválida.');
   return value;
+}
+
+/** Corpo de "etiquetar contas": `{ advertiserIds: ['…'], label: 'agency' | null }` (null remove a etiqueta). */
+function parseLabelRequest(body) {
+  const { advertiserIds, label } = asObject(body);
+  if (!Array.isArray(advertiserIds) || advertiserIds.length < 1 || advertiserIds.length > MAX_LABEL_BATCH) {
+    throw badRequest(`Informe de 1 a ${MAX_LABEL_BATCH} contas de anúncio.`);
+  }
+  if (label !== null && !isAccountLabel(label)) throw badRequest('Etiqueta inválida.');
+  return { advertiserIds: advertiserIds.map(parseAdvertiserId), label };
 }
 
 function parseDays(value) {
@@ -86,6 +97,12 @@ export function createTiktokRouter({ service, limits = {} }) {
 
   router.post('/business-centers/:id/sync', ...write, async (req, res) => {
     res.json({ businessCenter: await service.syncBusinessCenter(req.user, parseId(req.params.id)) });
+  });
+
+  // Etiqueta as contas de anúncio desta BC (ex.: "conta de agência"). Só o dono da BC ou o admin.
+  router.patch('/business-centers/:id/advertisers', ...write, async (req, res) => {
+    const { advertiserIds, label } = parseLabelRequest(req.body);
+    res.json(await service.setAdvertiserLabels(req.user, parseId(req.params.id), advertiserIds, label));
   });
 
   router.delete('/business-centers/:id', ...write, async (req, res) => {

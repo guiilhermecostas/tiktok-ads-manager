@@ -1,3 +1,4 @@
+import { isAccountLabel } from '../../../shared/account-labels.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest, forbidden, notFound } from '../../lib/http-error.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
@@ -185,7 +186,25 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       const list = await (isAdmin(actor) ? repo.listAll() : repo.listVisible(actor.id));
       return list.map((bc) => present(actor, bc));
     },
-    listAdvertisers: async (actor) => repo.advertisers(actor.id),
+    /** Contas de anúncio visíveis; `canLabel` diz se quem pede pode etiquetá-las (dono da BC ou admin). */
+    async listAdvertisers(actor) {
+      const list = await repo.advertisers(actor.id);
+      return list.map((a) => ({ ...a, canLabel: isAdmin(actor) || a.businessCenterOwned }));
+    },
+
+    /**
+     * Etiqueta (ex.: conta de agência) ou, com `label` nulo, remove a etiqueta de contas de UMA Business Center.
+     * Só o dono da BC ou o admin; ID que não pertence à BC faz o pedido inteiro falhar (nada é alterado pela metade).
+     */
+    async setAdvertiserLabels(actor, bcRowId, advertiserIds, label) {
+      if (label !== null && !isAccountLabel(label)) throw badRequest('Etiqueta inválida.');
+      await requireManageable(actor, bcRowId);
+      const unique = [...new Set(advertiserIds)];
+      const changed = await repo.setAdvertiserLabels(bcRowId, unique, label);
+      if (changed !== unique.length) throw notFound('Alguma conta de anúncio não pertence a esta Business Center.');
+      invalidate();
+      return { updated: changed };
+    },
 
     async addBusinessCenter(actor, { bcId, name, accessToken, shared = false }) {
       if (shared && !isAdmin(actor)) throw forbidden('Somente administradores podem compartilhar uma Business Center com a equipe.');

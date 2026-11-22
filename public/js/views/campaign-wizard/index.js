@@ -1,3 +1,4 @@
+import { countByKind } from '/shared/account-labels.js';
 import { STEPS, collectCreativeRefs, defaultConfig, findField, reconcileConfig, stepOfPath, validateConfig } from '/shared/campaign-spec.js';
 import { get, post, put } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
@@ -283,9 +284,11 @@ export function openCampaignWizard(ctx, { campaignId = null } = {}) {
       }
       const chosen = st.advertisers.filter((a) => ids.includes(a.id));
       const centers = new Set(chosen.map((a) => a.businessCenterId)).size;
+      const kinds = countByKind(chosen);
+      const kindText = kinds.agency ? ` (${kinds.agency} de agência${kinds.standard ? ` e ${kinds.standard} ${kinds.standard === 1 ? 'comum' : 'comuns'}` : ''})` : '';
       const ok = await confirmDialog({
         title: 'Publicar no TikTok',
-        message: `Vamos criar a campanha, o grupo de anúncios e o anúncio em ${ids.length === 1 ? `1 conta ("${chosen[0].name}")` : `${ids.length} contas de ${centers === 1 ? '1 Business Center' : `${centers} Business Centers`}`}. Tudo será criado PAUSADO: nada começa a gastar até você ativar no TikTok.`,
+        message: `Vamos criar a campanha, o grupo de anúncios e o anúncio em ${ids.length === 1 ? `1 conta ("${chosen[0].name}")` : `${ids.length} contas${kindText} de ${centers === 1 ? '1 Business Center' : `${centers} Business Centers`}`}. Tudo será criado PAUSADO: nada começa a gastar até você ativar no TikTok.`,
         confirmLabel: ids.length === 1 ? 'Publicar (pausada)' : `Publicar em ${ids.length} contas (pausadas)`,
       });
       if (!ok) return;

@@ -273,6 +273,27 @@ describe('ID da BC dona da conta de anúncio (migração v7)', () => {
   });
 });
 
+describe('Etiqueta das contas de anúncio (migração v8)', () => {
+  it('coluna opcional que só aceita "agency"; contas existentes ficam comuns (sem etiqueta)', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db, MIGRATIONS.slice(0, 7)); // banco como estava antes da v8
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')");
+      await db.query("INSERT INTO tiktok_business_centers (owner_id, bc_id, name, access_token) VALUES (1, '111', 'BC', 'v1.x')");
+      await db.query("INSERT INTO tiktok_advertisers (business_center_id, advertiser_id, name) VALUES (1, '9001', 'Antiga')");
+      await runMigrations(db);
+      assert.equal((await one(db, "SELECT label FROM tiktok_advertisers WHERE advertiser_id = '9001'")).label, null, 'dados antigos preservados como conta comum');
+      await db.query("UPDATE tiktok_advertisers SET label = 'agency' WHERE advertiser_id = '9001'");
+      await db.query('UPDATE tiktok_advertisers SET label = NULL WHERE advertiser_id = $1', ['9001']);
+      for (const bad of ['', 'Agency', 'vip', 'agency ', "agency'; --"]) {
+        await assert.rejects(() => db.query('UPDATE tiktok_advertisers SET label = $1 WHERE advertiser_id = $2', [bad, '9001']), (e) => e.code === '23514', JSON.stringify(bad));
+      }
+    } finally {
+      await db.close();
+    }
+  });
+});
+
 describe('biblioteca de criativos: restrições do esquema (migração v2)', () => {
   it('tipos, coerência arquivo/referência, duplicidade por usuário e cascatas', async () => {
     const db = await freshDb();

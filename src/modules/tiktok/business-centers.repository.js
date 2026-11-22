@@ -30,11 +30,12 @@ const SELECT_PUBLIC = `
     FROM tiktok_business_centers bc JOIN users u ON u.id = bc.owner_id`;
 
 /**
- * Substitui as contas de anúncio de uma BC em UMA instrução (unnest): com banco remoto, centenas de
- * INSERTs individuais custariam centenas de idas e voltas à rede.
+ * Sincroniza as contas de anúncio de uma BC em duas instruções (unnest: com banco remoto, centenas de INSERTs individuais
+ * custariam centenas de idas e voltas à rede): apaga as que o TikTok não lista mais e grava/atualiza as demais.
+ * NÃO apaga e recria tudo: a etiqueta (`label`) é escolha do usuário e precisa sobreviver às sincronizações.
  */
 async function writeAdvertisers(tx, bcRowId, advertisers) {
-  await tx.query('DELETE FROM tiktok_advertisers WHERE business_center_id = $1', [bcRowId]);
+  await tx.query('DELETE FROM tiktok_advertisers WHERE business_center_id = $1 AND advertiser_id <> ALL($2::text[])', [bcRowId, advertisers.map((a) => a.id)]);
   if (!advertisers.length) return;
   await tx.query(
     `INSERT INTO tiktok_advertisers (business_center_id, advertiser_id, name, currency, timezone, owner_bc_id)
@@ -119,6 +120,19 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
         await tx.query(MARK_OK, [id]);
       });
     },
+    /**
+     * Define (ou, com `label` nulo, remove) a etiqueta de contas de UMA BC, TUDO OU NADA: se algum dos IDs (distintos) não
+     * for desta BC, nada é alterado e devolve 0. Uma única instrução, então não há estado pela metade nem corrida.
+     */
+    async setAdvertiserLabels(bcRowId, advertiserIds, label) {
+      const { rowCount } = await db.query(
+        `UPDATE tiktok_advertisers SET label = $3
+          WHERE business_center_id = $1 AND advertiser_id = ANY($2::text[])
+            AND (SELECT COUNT(*) FROM tiktok_advertisers WHERE business_center_id = $1 AND advertiser_id = ANY($2::text[])) = cardinality($2::text[])`,
+        [bcRowId, advertiserIds, label],
+      );
+      return rowCount;
+    },
     async markError(id, message) {
       await db.query("UPDATE tiktok_business_centers SET status = 'error', last_error = $1 WHERE id = $2", [String(message).slice(0, 300), id]);
     },
@@ -139,7 +153,7 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
     /** Contas de anúncio das BCs visíveis para o usuário. */
     async advertisers(userId) {
       const { rows } = await db.query(
-        `SELECT a.advertiser_id, a.name, a.currency, a.timezone, a.owner_bc_id, bc.id AS bc_row_id, bc.name AS bc_name, bc.status AS bc_status,
+        `SELECT a.advertiser_id, a.name, a.currency, a.timezone, a.owner_bc_id, a.label, bc.id AS bc_row_id, bc.name AS bc_name, bc.status AS bc_status,
                 bc.bc_id AS bc_external_id, bc.auth_type AS bc_auth_type, bc.shared AS bc_shared, (bc.owner_id = $1) AS bc_owned,
                 EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS bc_via_proxy
            FROM tiktok_advertisers a JOIN tiktok_business_centers bc ON bc.id = a.business_center_id
@@ -153,6 +167,7 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
         currency: r.currency,
         timezone: r.timezone,
         ownerBcId: r.owner_bc_id ?? null, // BC dona da conta segundo o TikTok
+        label: r.label ?? null, // etiqueta do usuário (ex.: 'agency'); nula = conta comum
         businessCenterId: r.bc_row_id,
         businessCenterName: r.bc_name,
         businessCenterStatus: r.bc_status,

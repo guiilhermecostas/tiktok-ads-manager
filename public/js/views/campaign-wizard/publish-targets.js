@@ -1,6 +1,8 @@
+import { countByKind } from '/shared/account-labels.js';
 import { ACCOUNT_FIELDS, applyAccountOverrides, getPath, validateConfig } from '/shared/campaign-spec.js';
 import { h, setChildren } from '../../dom.js';
 import { badge } from '../../ui.js';
+import { createAccountFilter, labelBadge } from '../account-filter.js';
 import { renderAccountFields } from './form-fields.js';
 
 const normalize = (text) => String(text ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -12,11 +14,12 @@ const SEARCH_THRESHOLD = 6; // a partir de quantas contas a busca aparece
  * publicada, com ajustes opcionais de IDs próprios de cada conta (pixel, identidade etc.) e o progresso por conta.
  *
  * Opções:
- *  - advertisers: contas disponíveis ({ id, name, currency, businessCenterId, businessCenterName, businessCenterStatus, … })
+ *  - advertisers: contas disponíveis ({ id, name, currency, label, businessCenterId, businessCenterName, businessCenterStatus, … })
  *  - getConfig(): configuração base da campanha
  *  - getPublications(): publicações já existentes ({ advertiserId, status, error, tiktokCampaignId, tiktokAdGroupId, overrides })
  *  - onChange(): chamado quando a seleção muda (o assistente atualiza o botão de publicar)
- * Retorna { element, refresh, selectedIds, overridesFor, validate, setResult, setBusy, deselect }.
+ * Há filtros por tipo (comuns / de agência) e por situação (ativas / inativas) e um atalho para marcar todas as contas listadas:
+ * assim dá para publicar um tipo de cada vez. Retorna { element, refresh, selectedIds, overridesFor, validate, setResult, setBusy, deselect }.
  */
 export function createPublishTargets({ advertisers, getConfig, getPublications, onChange }) {
   const selected = new Set();
@@ -74,6 +77,21 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     renderList();
   });
   const searchRow = h('div', { class: 'targets__search-row' }, search);
+
+  // Filtros por tipo e situação + atalho "marcar todas as listadas" (valem para o que está na tela, já com busca e filtros).
+  const filter = createAccountFilter({ onChange: () => renderList() });
+  const selectListed = h('button', { type: 'button', class: 'link-btn' });
+  selectListed.addEventListener('click', () => {
+    const listed = listedSelectable();
+    const all = listed.every((a) => selected.has(a.id));
+    for (const a of listed) {
+      if (all) selected.delete(a.id);
+      else selected.add(a.id);
+    }
+    renderList();
+    onChange?.();
+  });
+  const filtersRow = h('div', { class: 'targets__filters' }, filter.controls, selectListed);
 
   function overrideForm(account) {
     const id = account.id;
@@ -148,6 +166,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
         h('span', { class: 'targets__name' }, account.name),
         h('span', { class: 'code' }, id),
         account.currency ? h('span', { class: 'targets__currency' }, account.currency) : null,
+        labelBadge(account),
       ),
       h('div', { class: 'targets__status' }, statusChip(account)),
       message ? h('p', { class: 'targets__error', role: 'status' }, message) : null,
@@ -209,8 +228,12 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     );
   }
 
+  /** Está na lista agora? (busca + filtros de tipo e situação) */
+  const isListed = (a) => filter.matches(a) && (!query || normalize(`${a.name} ${a.id} ${a.businessCenterName}`).includes(query));
+  const listedSelectable = () => advertisers.filter((a) => isListed(a) && isSelectable(a));
+
   function visibleCenters() {
-    const matches = advertisers.filter((a) => !query || normalize(`${a.name} ${a.id} ${a.businessCenterName}`).includes(query));
+    const matches = advertisers.filter(isListed);
     const byCenter = new Map();
     for (const a of matches) {
       if (!byCenter.has(a.businessCenterId)) byCenter.set(a.businessCenterId, { id: a.businessCenterId, name: a.businessCenterName, accounts: [] });
@@ -222,11 +245,23 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
   function renderSummary() {
     const picked = advertisers.filter((a) => selected.has(a.id));
     const centers = new Set(picked.map((a) => a.businessCenterId)).size;
-    summary.textContent = picked.length ? `${plural(picked.length, 'conta selecionada', 'contas selecionadas')} em ${plural(centers, 'Business Center', 'Business Centers')}` : 'Nenhuma conta selecionada.';
+    const kinds = countByKind(picked);
+    const kindText = kinds.agency ? ` (${kinds.agency} de agência${kinds.standard ? `, ${plural(kinds.standard, 'comum', 'comuns')}` : ''})` : '';
+    const hidden = picked.filter((a) => !isListed(a)).length;
+    summary.textContent = picked.length
+      ? `${plural(picked.length, 'conta selecionada', 'contas selecionadas')} em ${plural(centers, 'Business Center', 'Business Centers')}${kindText}${hidden ? ` · ${hidden} fora da lista atual` : ''}`
+      : 'Nenhuma conta selecionada.';
+    // O botão de atalho acompanha o que está listado (com busca e filtros).
+    const listed = listedSelectable();
+    const allListed = listed.length > 0 && listed.every((a) => selected.has(a.id));
+    selectListed.textContent = allListed ? `Desmarcar as ${listed.length} listadas` : `Marcar todas as ${listed.length} listadas`;
+    selectListed.disabled = busy || !listed.length;
     const currencies = [...new Set(picked.map((a) => a.currency).filter(Boolean))];
     const unusual = currencies.length > 1 || currencies.some((c) => c !== 'BRL');
+    const mixed = kinds.agency > 0 && kinds.standard > 0;
     setChildren(
       warning,
+      mixed ? h('div', { class: 'alert alert--warning' }, 'Esta seleção mistura contas comuns e contas de agência. Para subir anúncios separados por tipo, publique um tipo de cada vez (use o filtro de tipo acima).') : null,
       unusual
         ? h(
             'div',
@@ -241,7 +276,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
 
   function renderList() {
     const centers = visibleCenters();
-    list.replaceChildren(...(centers.length ? centers.map(groupSection) : [h('p', { class: 'muted targets__empty' }, 'Nenhuma conta encontrada para esta busca.')]));
+    list.replaceChildren(...(centers.length ? centers.map(groupSection) : [h('p', { class: 'muted targets__empty' }, filter.isActive() ? 'Nenhuma conta com estes filtros e esta busca.' : 'Nenhuma conta encontrada para esta busca.')]));
     renderSummary();
   }
 
@@ -257,6 +292,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
       'em cada conta, vídeos e imagens são refeitos do zero, sem metadados e com hash novo, e os cantos dos primeiros e dos últimos 0,1 s do vídeo recebem pixels de cores próximas. Cada conta e cada campanha enviam uma versão diferente. Por isso a publicação pode levar um pouco mais.',
     ),
     searchRow,
+    filtersRow,
     list,
     summary,
     warning,
@@ -264,6 +300,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
 
   function refresh() {
     searchRow.hidden = advertisers.length < SEARCH_THRESHOLD;
+    filtersRow.hidden = advertisers.length === 0;
     // Contas que deixaram de ser elegíveis (já publicadas, BC com erro) saem da seleção.
     for (const id of [...selected]) {
       const account = advertisers.find((a) => a.id === id);

@@ -297,6 +297,15 @@ export const MIGRATIONS = [
       ALTER TABLE tiktok_advertisers ADD COLUMN owner_bc_id TEXT CHECK (owner_bc_id IS NULL OR owner_bc_id ~ '^[0-9]{1,24}$');
     `,
   },
+  {
+    version: 8,
+    description: 'Etiqueta nas contas de anúncio (ex.: conta de agência)',
+    sql: `
+      -- NULL = conta comum. A etiqueta é do usuário (não vem do TikTok) e sobrevive às sincronizações.
+      -- Novas etiquetas entram aqui com uma migração que troca a restrição.
+      ALTER TABLE tiktok_advertisers ADD COLUMN label TEXT CHECK (label IS NULL OR label IN ('agency'));
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

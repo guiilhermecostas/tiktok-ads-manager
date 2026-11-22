@@ -226,6 +226,7 @@ a { color: var(--tt-red-dark); }
 .badge--success { background: #d9fffd; color: #075e5a; }
 .badge--warning { background: #fff3cf; color: #7a5200; }
 .badge--danger { background: #ffe0e7; color: #9d1033; }
+.badge--agency { background: #ece7ff; color: #4a2fb3; }
 
 /* ============ Abas ============ */
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
@@ -532,6 +533,7 @@ body.modal-open { overflow: hidden; }
 .hub__actions { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
 .hub__actions .toolbar__search { width: 270px; max-width: 100%; }
 .hub__actions select.input { width: auto; min-width: 230px; max-width: 100%; }
+.hub__actions select.input--filter { min-width: 170px; }
 .hub__note { text-align: center; margin: 4px auto 20px; max-width: 720px; font-size: 13px; color: var(--muted); }
 
 /* cartões de largura igual, em fila centralizada: com 1, 2 ou um cartão sobrando na última linha, tudo fica no meio */
@@ -599,3 +601,19 @@ body.modal-open { overflow: hidden; }
 .hub-ids { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .hub-ids .code { white-space: nowrap; word-break: normal; } /* um ID nunca quebra no meio do número */
 
+
+/* ============ Etiquetas e filtros das contas de anúncio ============ */
+.acc-select { width: 16px; text-align: center; }
+.acc-kind { width: auto; min-width: 130px; padding-top: 6px; padding-bottom: 6px; font-size: 13px; }
+.acc-bulk { display: flex; align-items: center; justify-content: center; gap: 10px 14px; flex-wrap: wrap; margin: -8px 0 18px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+.acc-bulk[hidden] { display: none; }
+.acc-bulk__count { font-weight: 600; }
+.targets__filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+.targets__filters select.input { width: auto; min-width: 170px; max-width: 100%; }
+.targets__filters .link-btn { margin-left: auto; }
+.targets__outside { margin: 4px 0 0; }
+@media (max-width: 720px) {
+  .acc-kind { min-width: 0; }
+  .targets__filters select.input { flex: 1 1 100%; }
+  .targets__filters .link-btn { margin-left: 0; }
+}
