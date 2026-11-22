@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { HttpError } from '../../lib/http-error.js';
+import { describeProxyError } from '../proxies/proxy-errors.js';
 
 const API_PREFIX = '/open_api/v1.3';
 const TIMEOUT_MS = 10_000;
@@ -39,7 +40,7 @@ const num = (value) => {
  * recebe `fetchFn` por injeção (testável sem rede) e NUNCA registra o token em log.
  * Os formatos de resposta são lidos de forma defensiva, pois variam entre endpoints/versões.
  */
-export function createTiktokClient({ config, fetchFn = fetch }) {
+export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
   const { apiBase } = config.tiktok;
 
   async function call(path, { token, query, method = 'GET', body, form, timeoutMs = TIMEOUT_MS }) {
@@ -60,8 +61,13 @@ export function createTiktokClient({ config, fetchFn = fetch }) {
         },
         body: form ?? (body === undefined ? undefined : JSON.stringify(body)),
         signal: AbortSignal.timeout(timeoutMs),
+        // Com proxy ativa, TODA chamada sai por ela. Se ela falhar, a chamada falha (abaixo): nunca há conexão direta de reserva.
+        ...(route ? { dispatcher: route.dispatcher } : {}),
       });
-    } catch {
+    } catch (err) {
+      if (route) {
+        throw new HttpError(502, `Não foi possível falar com o TikTok pela proxy "${route.name}": ${describeProxyError(err)}. Nada foi enviado fora da proxy. Teste ou troque a proxy em Contas TikTok → Proxy.`, 'proxy_error');
+      }
       throw new HttpError(502, 'Não foi possível contatar o TikTok. Tente novamente em instantes.', 'tiktok_unreachable');
     }
 
@@ -91,6 +97,9 @@ export function createTiktokClient({ config, fetchFn = fetch }) {
   }
 
   return {
+    /** Mesmo cliente, mas com todas as chamadas saindo pela rota (proxy) informada. */
+    through: (nextRoute) => createTiktokClient({ config, fetchFn, route: nextRoute }),
+
     /** IDs das contas de anúncio atribuídas à Business Center (paginado). Também valida o token. */
     async listBusinessCenterAdvertiserIds(token, bcId) {
       const ids = new Set();

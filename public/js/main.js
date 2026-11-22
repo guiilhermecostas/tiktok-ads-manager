@@ -14,6 +14,7 @@ import { tiktokAdsView } from './views/tiktok-ads.js';
 import { businessCentersView } from './views/business-centers.js';
 import { creativesView } from './views/creatives/library.js';
 import { adAccountsView } from './views/ad-accounts.js';
+import { proxySettingsView } from './views/proxy-settings.js';
 import { tiktokConnectedView } from './views/tiktok-connected.js';
 
 const root = document.getElementById('app');
@@ -25,6 +26,7 @@ const PROTECTED_ROUTES = {
   '/tiktok': { title: 'TikTok Ads', view: tiktokAdsView },
   '/business-centers': { title: 'Contas TikTok', view: businessCentersView },
   '/business-centers/accounts': { title: 'Contas de anúncio', view: adAccountsView },
+  '/business-centers/proxy': { title: 'Proxy', view: proxySettingsView },
   '/admin': { title: 'Administração', view: adminView, adminOnly: true },
 };
 const GUEST_ROUTES = { '/login': loginView, '/register': registerView };

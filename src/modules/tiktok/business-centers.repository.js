@@ -8,6 +8,7 @@ function toRecord(row) {
     ownerId: row.owner_id,
     ownerName: row.owner_name ?? null,
     bcId: row.bc_id ?? null,
+    viaProxy: row.via_proxy === true,
     authType: row.auth_type,
     name: row.name,
     shared: row.shared === true,
@@ -22,7 +23,8 @@ function toRecord(row) {
 const SELECT_PUBLIC = `
   SELECT bc.id, bc.owner_id, u.name AS owner_name, bc.bc_id, bc.auth_type, bc.name, bc.shared, bc.status, bc.last_error,
          bc.last_synced_at, bc.created_at,
-         (SELECT COUNT(*)::int FROM tiktok_advertisers a WHERE a.business_center_id = bc.id) AS advertiser_count
+         (SELECT COUNT(*)::int FROM tiktok_advertisers a WHERE a.business_center_id = bc.id) AS advertiser_count,
+         EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS via_proxy
     FROM tiktok_business_centers bc JOIN users u ON u.id = bc.owner_id`;
 
 /**
@@ -123,17 +125,21 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
       return rowCount > 0;
     },
 
-    /** Token descriptografado: uso EXCLUSIVO do servidor, nunca enviado ao cliente. */
-    async getToken(id) {
-      const { rows } = await db.query('SELECT access_token FROM tiktok_business_centers WHERE id = $1', [id]);
-      return rows[0] ? decrypt(rows[0].access_token, encryptionKey) : null;
+    /**
+     * Token descriptografado + dono: uso EXCLUSIVO do servidor, nunca enviado ao cliente. O dono decide por qual proxy
+     * as chamadas com este token saem.
+     */
+    async getAccess(id) {
+      const { rows } = await db.query('SELECT owner_id, access_token FROM tiktok_business_centers WHERE id = $1', [id]);
+      return rows[0] ? { ownerId: rows[0].owner_id, token: decrypt(rows[0].access_token, encryptionKey) } : null;
     },
 
     /** Contas de anúncio das BCs visíveis para o usuário. */
     async advertisers(userId) {
       const { rows } = await db.query(
         `SELECT a.advertiser_id, a.name, a.currency, a.timezone, bc.id AS bc_row_id, bc.name AS bc_name, bc.status AS bc_status,
-                bc.bc_id AS bc_external_id, bc.auth_type AS bc_auth_type, bc.shared AS bc_shared, (bc.owner_id = $1) AS bc_owned
+                bc.bc_id AS bc_external_id, bc.auth_type AS bc_auth_type, bc.shared AS bc_shared, (bc.owner_id = $1) AS bc_owned,
+                EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS bc_via_proxy
            FROM tiktok_advertisers a JOIN tiktok_business_centers bc ON bc.id = a.business_center_id
           WHERE bc.owner_id = $1 OR bc.shared
           ORDER BY lower(bc.name), lower(a.name)`,
@@ -151,6 +157,7 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
         businessCenterAuthType: r.bc_auth_type,
         businessCenterShared: r.bc_shared === true,
         businessCenterOwned: r.bc_owned === true,
+        businessCenterViaProxy: r.bc_via_proxy === true,
       }));
     },
     /** Se a mesma conta existir em mais de uma BC visível, prefere a do próprio usuário. */

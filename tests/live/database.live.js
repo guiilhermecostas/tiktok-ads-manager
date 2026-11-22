@@ -8,6 +8,7 @@ import { findTablesWithoutRls } from '../../src/db/migrations.js';
 import { createSessionsRepository } from '../../src/modules/auth/sessions.repository.js';
 import { createCampaignsRepository } from '../../src/modules/campaigns/campaigns.repository.js';
 import { createBusinessCentersRepository } from '../../src/modules/tiktok/business-centers.repository.js';
+import { createProxiesRepository } from '../../src/modules/proxies/proxies.repository.js';
 import { createOauthAttemptsRepository } from '../../src/modules/tiktok/oauth-attempts.repository.js';
 import { createUsersRepository } from '../../src/modules/users/users.repository.js';
 
@@ -119,7 +120,8 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
         // ---- Business Centers: token cifrado, lote de contas (unnest), visibilidade, preferência pelo dono ----
         const other = await users.create({ email: 'live.outro@example.com', name: 'Outro', passwordHash: 'h', status: 'approved' });
         const bcId = await centers.create({ ownerId: id, bcId: '111', name: 'BC Live', accessToken: 'token-secreto-live-123456', advertisers: [{ id: '9001', name: 'Conta 1', currency: 'BRL', timezone: 'America/Sao_Paulo' }, { id: '9002', name: 'Conta 2', currency: null, timezone: null }] });
-        assert.equal(await centers.getToken(bcId), 'token-secreto-live-123456');
+        const access = await centers.getAccess(bcId);
+        assert.deepEqual([access.token, access.ownerId], ['token-secreto-live-123456', id], 'token descriptografado + dono (decide a proxy)');
         assert.ok(!(await tx.query('SELECT access_token FROM tiktok_business_centers WHERE id = $1', [bcId])).rows[0].access_token.includes('token-secreto'), 'token cifrado no banco');
         await expectDbError(tx, "INSERT INTO tiktok_business_centers (owner_id, bc_id, name, access_token) VALUES ($1, '111', 'dup', 'v1.x')", [id], (e) => isUniqueViolation(e), 'unicidade (dono, BC)');
         assert.equal((await centers.get(bcId)).advertiserCount, 2);
@@ -173,9 +175,9 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
     const config = loadConfig();
     const db = await openDatabase(config.database, { migrate: false });
     try {
-      const own = ['creatives', 'creative_tiktok_assets', 'tiktok_oauth_attempts', 'campaign_publications', 'campaign_creative_assets'];
+      const own = ['creatives', 'creative_tiktok_assets', 'tiktok_oauth_attempts', 'campaign_publications', 'campaign_creative_assets', 'proxies'];
       const { rows: versions } = await db.query('SELECT version FROM schema_migrations ORDER BY version');
-      assert.ok(versions.length >= 5, 'migrações v2 a v5 aplicadas');
+      assert.ok(versions.length >= 6, 'migrações v2 a v6 aplicadas');
       for (const table of own) {
         const rls = (await db.query('SELECT relrowsecurity FROM pg_class WHERE oid = $1::regclass', [table])).rows[0];
         assert.equal(rls.relrowsecurity, true, `${table}: RLS ligado`);
@@ -228,6 +230,46 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
         await expectDbError(tx, "INSERT INTO tiktok_oauth_attempts (attempt_id, state_hash, user_id, name, status, expires_at) VALUES ($1, 'h', $2, 'n', 'hackeado', now())", ['f'.repeat(32), user.id], (e) => e.code === '23514', 'status inválido');
         await tx.query('DELETE FROM users WHERE id = $1', [user.id]);
         assert.equal((await tx.query('SELECT COUNT(*)::int AS c FROM tiktok_oauth_attempts WHERE user_id = $1', [user.id])).rows[0].c, 0, 'cascata do usuário');
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('proxies no banco real: credenciais cifradas, UMA ativa por usuário (índice único), flag da BC e cascata (transação desfeita)', async () => {
+    const config = loadConfig();
+    const db = await openDatabase(config.database, { migrate: false });
+    try {
+      await withRollback(db, async (txDb, tx) => {
+        const key = randomBytes(32);
+        const users = createUsersRepository(txDb);
+        const owner = await users.create({ email: `live.${randomBytes(4).toString('hex')}@example.com`, name: 'Live', passwordHash: 'x', role: 'user', status: 'approved' });
+        const proxies = createProxiesRepository(txDb, { encryptionKey: key });
+        const a = await proxies.create(owner, { name: 'EUA', kind: 'socks5', host: '203.0.113.9', port: 1080, auth: { username: 'resi-us', password: 'senha-secreta-live' } });
+        assert.deepEqual([a.hasPassword, a.username, a.active, 'password' in a], [true, 'resi-us', false, false], 'a visão pública não traz a senha');
+        const stored = (await tx.query('SELECT auth_enc FROM proxies WHERE id = $1', [a.id])).rows[0].auth_enc;
+        assert.match(stored, /^v1\./);
+        assert.ok(!stored.includes('senha-secreta-live') && !stored.includes('resi-us'), 'cifrado em repouso');
+        assert.equal((await proxies.getWithSecrets(owner, a.id)).password, 'senha-secreta-live');
+        assert.equal(await proxies.get(999_999_999, a.id), null, 'isolamento por usuário');
+
+        const b = await proxies.create(owner, { name: 'HTTP', kind: 'http', host: '203.0.113.10', port: 8080, auth: null });
+        await proxies.activate(owner, a.id);
+        await proxies.activate(owner, b.id);
+        assert.deepEqual((await proxies.list(owner)).filter((p) => p.active).map((p) => p.id), [b.id], 'ativar outra desativa a anterior');
+        assert.equal((await proxies.getActiveWithSecrets(owner)).id, b.id);
+        await expectDbError(tx, 'UPDATE proxies SET active = true WHERE id = $1', [a.id], (e) => isUniqueViolation(e), 'duas ativas violam o índice único');
+
+        // o selo "via proxy" da Business Center depende da proxy ATIVA do dono
+        const centers = createBusinessCentersRepository(txDb, { encryptionKey: key });
+        const bc = await centers.create({ ownerId: owner, bcId: '555', name: 'BC', accessToken: 'token-live-0123456789', advertisers: [{ id: '9501', name: 'C' }] });
+        assert.equal((await centers.get(bc)).viaProxy, true);
+        assert.equal((await centers.advertisers(owner))[0].businessCenterViaProxy, true);
+        await proxies.deactivate(owner, b.id);
+        assert.equal((await centers.get(bc)).viaProxy, false);
+
+        await tx.query('DELETE FROM users WHERE id = $1', [owner]);
+        assert.equal((await tx.query('SELECT COUNT(*)::int AS c FROM proxies WHERE user_id = $1', [owner])).rows[0].c, 0, 'cascata do usuário');
       });
     } finally {
       await db.close();

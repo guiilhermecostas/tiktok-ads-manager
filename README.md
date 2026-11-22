@@ -74,6 +74,28 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
 5. Token revogado/expirado: a BC fica marcada com erro e deixa de servir dados até o dono informar um novo token (Editar).
 6. Requer `TOKEN_ENCRYPTION_KEY` no `.env` (32 bytes em base64). Sem ela o cadastro fica desligado.
 
+### Proxy nas chamadas ao TikTok
+
+Para vender em outro país (ex.: Estados Unidos) sem o TikTok bloquear por causa do IP, cadastre uma proxy em **Contas TikTok → Proxy**.
+
+- **Tipos:** HTTP, HTTPS, SOCKS4 e SOCKS5, com usuário e senha. Dá para colar a proxy como o provedor entrega
+  (`socks5://usuario:senha@host:porta` ou `host:porta:usuario:senha`) e o formulário se preenche sozinho.
+- **Testar:** conecta pela proxy, mostra o **IP e o país de saída** e confirma que a API do TikTok responde.
+- **Ativar:** só uma proxy fica ativa por usuário. Com ela ativa, **TODAS** as chamadas à API do TikTok das Business Centers
+  desse usuário saem por ela: sincronizar, relatórios, campanhas, envio de criativos, criação de campanha/grupo/anúncio,
+  validação do token e a conexão por link (inclusive a troca do código com o App Secret).
+- **Sem vazamento do IP:** se a proxy ativa falhar, a chamada **falha** (`proxy_error`); o sistema nunca tenta de novo pela
+  conexão direta. Quando a proxy volta, tudo volta a funcionar sozinho.
+- **De quem é a proxy:** vale a proxy do **dono da Business Center** (assim o IP daquela BC é sempre o mesmo). Uma BC
+  compartilhada pelo administrador usa a proxy do administrador; o admin mexendo na BC de um usuário usa a proxy desse usuário.
+  As telas mostram o selo "Via proxy" nas BCs, sem revelar nome ou endereço da proxy a outras pessoas.
+- **Segurança:** usuário e senha ficam criptografados (AES-256-GCM, mesma chave dos tokens) e a senha nunca volta ao navegador.
+  O TLS com o TikTok é de ponta a ponta (a proxy só vê bytes cifrados e não consegue ler o token). Como o servidor se conecta
+  ao endereço que o usuário informa, redes internas (loopback, privadas, link-local/metadados da nuvem, IPv6 equivalentes) são
+  **bloqueadas** e o IP é validado a cada uso (contra DNS rebinding). Limite de 20 proxies por usuário e de testes por minuto.
+- Se o servidor já está nos EUA (ex.: Render em Ohio), a proxy ainda é útil quando você quer um IP fixo ou residencial.
+  O uso de proxy pode ser restrito pelas regras do TikTok: confira os termos antes de usar.
+
 ### Conexão por link: como habilitar
 
 1. No [portal de desenvolvedores do TikTok](https://business-api.tiktok.com/portal/apps), crie um app (Marketing API) e peça as permissões

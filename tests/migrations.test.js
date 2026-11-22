@@ -5,7 +5,7 @@ import { MIGRATIONS, findTablesWithoutRls, runMigrations } from '../src/db/migra
 import { createPgliteDatabase } from '../src/db/adapters/pglite.js';
 import { all, one } from './helpers.js';
 
-const EXPECTED_TABLES = ['campaign_creative_assets', 'campaign_publications', 'campaigns', 'creative_tiktok_assets', 'creatives', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users'];
+const EXPECTED_TABLES = ['campaign_creative_assets', 'campaign_publications', 'campaigns', 'creative_tiktok_assets', 'creatives', 'proxies', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users'];
 const config = { url: null, sslCaPath: null, poolMax: 1, devDataDir: null, requireRls: true };
 const silent = { info() {}, warn() {}, error() {} };
 
@@ -221,6 +221,32 @@ describe('versões limpas dos criativos por campanha e conta (migração v5)', (
       assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM campaign_creative_assets')).c, 2, 'apagar a campanha apaga as versões dela');
       await db.query('DELETE FROM creatives WHERE id = 1');
       assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM campaign_creative_assets')).c, 0, 'apagar o criativo apaga as versões dele');
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('proxies por usuário (migração v6)', () => {
+  it('tipos válidos, porta 1-65535, nome único por usuário (sem diferenciar maiúsculas), UMA ativa por usuário e cascata', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x'), ('b@example.com', 'B', 'x')");
+      const insert = (user, name, { kind = 'socks5', port = 1080, active = false } = {}) => db.query("INSERT INTO proxies (user_id, name, kind, host, port, active) VALUES ($1, $2, $3, '203.0.113.9', $4, $5)", [user, name, kind, port, active]);
+      for (const kind of ['http', 'https', 'socks4', 'socks5']) await insert(1, `p-${kind}`, { kind });
+      for (const kind of ['ftp', 'socks', 'HTTP', '']) await assert.rejects(() => insert(1, `ruim-${kind}`, { kind }), (e) => e.code === '23514', kind);
+      for (const port of [0, -1, 65536, 100000]) await assert.rejects(() => insert(1, `porta-${port}`, { port }), (e) => e.code === '23514', String(port));
+      await assert.rejects(() => insert(1, 'P-HTTP'), (e) => e.code === '23505', 'nome único sem diferenciar maiúsculas');
+      await insert(2, 'p-http'); // outro usuário pode usar o mesmo nome
+
+      await insert(1, 'ativa-1', { active: true });
+      await assert.rejects(() => insert(1, 'ativa-2', { active: true }), (e) => e.code === '23505', 'só uma ativa por usuário');
+      await insert(2, 'ativa-do-outro', { active: true });
+      await assert.rejects(() => db.query('UPDATE proxies SET active = true WHERE user_id = 1 AND name = $1', ['p-http']), (e) => e.code === '23505');
+      await assert.rejects(() => db.query("INSERT INTO proxies (user_id, name, kind, host, port) VALUES (999, 'x', 'http', 'h', 80)"), (e) => e.code === '23503');
+      await db.query('DELETE FROM users WHERE id = 1');
+      assert.equal((await one(db, 'SELECT COUNT(*)::int AS c FROM proxies')).c, 2, 'remover o usuário apaga as proxies dele');
     } finally {
       await db.close();
     }

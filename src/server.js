@@ -1,6 +1,7 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { openDatabase } from './db/index.js';
+import { proxyRuntimeSelfCheck } from './modules/proxies/proxy-dispatcher.js';
 
 const config = loadConfig();
 const db = await openDatabase(config.database);
@@ -9,6 +10,10 @@ console.log(`[db] ${config.database.url ? 'PostgreSQL (DATABASE_URL)' : `PGlite 
 const { app, authService, sessions, creativeStorage, creativeCleaner, close } = createApp({ config, db });
 await creativeStorage.init(); // pastas privadas da biblioteca de criativos + limpeza de temporários antigos
 // A limpeza dos criativos depende do FFmpeg: confere na subida e avisa alto se não executa (não derruba o sistema).
+// O mesmo para as proxies: o fetch precisa aceitar os dispatchers (HTTP e SOCKS) neste ambiente.
+const proxyRuntime = await proxyRuntimeSelfCheck();
+if (proxyRuntime.ok) console.log('[proxy] roteamento por proxy pronto (HTTP, HTTPS, SOCKS4 e SOCKS5)');
+else console.error(`[proxy] ATENÇÃO: o roteamento por proxy NÃO está funcionando: ${proxyRuntime.error} As chamadas com proxy ativa vão falhar.`);
 const ffmpeg = await creativeCleaner.selfCheck();
 if (ffmpeg.ok) console.log(`[criativos] limpeza de criativos pronta (FFmpeg ${ffmpeg.version})`);
 else console.error(`[criativos] ATENÇÃO: a limpeza de criativos NÃO está disponível: ${ffmpeg.error} Publicações com arquivos serão recusadas.`);

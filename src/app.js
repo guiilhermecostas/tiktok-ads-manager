@@ -13,6 +13,9 @@ import { createLocalCreativeStorage } from './modules/creatives/creative-storage
 import { createCreativesRepository } from './modules/creatives/creatives.repository.js';
 import { createCreativesRouter } from './modules/creatives/creatives.routes.js';
 import { createCreativesService } from './modules/creatives/creatives.service.js';
+import { createProxiesRepository } from './modules/proxies/proxies.repository.js';
+import { createProxiesRouter } from './modules/proxies/proxies.routes.js';
+import { createProxiesService } from './modules/proxies/proxies.service.js';
 import { createTiktokClient } from './modules/tiktok/tiktok.client.js';
 import { createBusinessCentersRepository } from './modules/tiktok/business-centers.repository.js';
 import { createOauthAttemptsRepository } from './modules/tiktok/oauth-attempts.repository.js';
@@ -38,7 +41,9 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner 
   const tiktokClient = createTiktokClient({ config, fetchFn });
   // Sem TOKEN_ENCRYPTION_KEY a chave é nula: o serviço recusa cadastros (ensureConfigured) e nada é gravado.
   const businessCenters = createBusinessCentersRepository(db, { encryptionKey: config.tiktok.encryptionKey });
-  const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, config, log });
+  // Proxies do usuário: com uma ativa, TODAS as chamadas ao TikTok feitas com as BCs dele saem por ela.
+  const proxiesService = createProxiesService({ repo: createProxiesRepository(db, { encryptionKey: config.tiktok.encryptionKey }), config, fetchFn: fetchFn ?? fetch, log });
+  const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, config, log });
   const creativeStorage = createLocalCreativeStorage({ dir: config.creatives.dir });
   // Limpeza dos criativos a cada publicação (metadados, hash e cantos). `cleaner` pode ser injetado nos testes.
   const cleaning = config.creatives.cleaning ?? {};
@@ -109,6 +114,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner 
   protectedApi.use(requireAuth, requireApproved);
   const campaignsRouter = createCampaignsRouter({ campaigns, tiktok: tiktokService, creatives: creativesService, limits });
   protectedApi.use('/campaigns', campaignsRouter);
+  const proxiesRouter = createProxiesRouter({ service: proxiesService, limits });
+  protectedApi.use('/proxies', proxiesRouter);
   const tiktokRouter = createTiktokRouter({ service: tiktokService, limits });
   protectedApi.use('/tiktok', tiktokRouter);
   const creativesRouter = createCreativesRouter({ service: creativesService, limits });
@@ -146,6 +153,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner 
     close: () => {
       authRouter.stop();
       tiktokRouter.stop();
+      proxiesRouter.stop();
+      proxiesService.close();
       tiktokCallbackRouter.stop();
       creativesRouter.stop();
       campaignsRouter.stop();

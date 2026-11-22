@@ -20,13 +20,22 @@ const isoDate = (date) => date.toISOString().slice(0, 10);
  * ou ao admin. Os dados (contas, campanhas, desempenho) usam apenas as BCs visíveis para quem pede.
  * `actor` é sempre o usuário autenticado: { id, role }.
  */
-export function createTiktokService({ client, repo, attempts, users, config, log = console }) {
+export function createTiktokService({ client, repo, attempts, users, proxies = null, config, log = console }) {
   const dataCache = new TtlCache({ ttlMs: 60_000 });
   const overviewCache = new TtlCache({ ttlMs: 5 * 60_000, maxEntries: 200 });
   const invalidate = () => {
     dataCache.clear();
     overviewCache.clear();
   };
+
+  /**
+   * Cliente do TikTok para as chamadas feitas em nome de um DONO de Business Center: se ele tem uma proxy ativa, todas as
+   * chamadas saem por ela (e falham, sem conexão direta, se ela não funcionar). O IP de saída fica sempre o mesmo para a BC.
+   */
+  async function apiFor(ownerId) {
+    const route = proxies ? await proxies.routeFor(ownerId) : null;
+    return route ? client.through(route) : client;
+  }
 
   const isAdmin = (actor) => actor.role === 'admin';
   const canManage = (actor, bc) => isAdmin(actor) || bc.ownerId === actor.id;
@@ -36,6 +45,7 @@ export function createTiktokService({ client, repo, attempts, users, config, log
     id: bc.id,
     bcId: bc.bcId,
     authType: bc.authType,
+    viaProxy: bc.viaProxy,
     name: bc.name,
     shared: bc.shared,
     status: bc.status,
@@ -65,21 +75,21 @@ export function createTiktokService({ client, repo, attempts, users, config, log
       ? badRequest('Token inválido ou sem permissão nesta Business Center.', 'tiktok_token_invalid')
       : err;
 
-  async function loadAdvertisersByIds(token, ids) {
-    const info = ids.length ? await client.getAdvertiserInfo(token, ids) : [];
+  async function loadAdvertisersByIds(token, ids, api) {
+    const info = ids.length ? await api.getAdvertiserInfo(token, ids) : [];
     const byId = new Map(info.map((a) => [a.id, a]));
     return ids.map((id) => byId.get(id) ?? { id, name: id, currency: null, timezone: null });
   }
 
   /** Token manual: contas atribuídas à Business Center informada. */
-  async function loadAdvertisers(token, bcId) {
-    return loadAdvertisersByIds(token, await client.listBusinessCenterAdvertiserIds(token, bcId));
+  async function loadAdvertisers(token, bcId, api) {
+    return loadAdvertisersByIds(token, await api.listBusinessCenterAdvertiserIds(token, bcId), api);
   }
 
   /** Conexão por link: contas que o usuário autorizou para o app (a lista cresce se ele reautorizar com mais contas). */
-  async function loadOauthAdvertisers(token) {
+  async function loadOauthAdvertisers(token, api) {
     const { appId, appSecret } = config.tiktok.oauth;
-    return loadAdvertisersByIds(token, await client.listAuthorizedAdvertiserIds(token, { appId, appSecret }));
+    return loadAdvertisersByIds(token, await api.listAuthorizedAdvertiserIds(token, { appId, appSecret }), api);
   }
 
   /** Texto seguro para o usuário quando a autorização falha (nunca ecoa token, código ou detalhes internos). */
@@ -87,26 +97,31 @@ export function createTiktokService({ client, repo, attempts, users, config, log
     if (err instanceof HttpError) {
       if (err.code === 'tiktok_unreachable') return 'Não foi possível falar com o TikTok agora. Gere um novo link e tente de novo em instantes.';
       if (err.code === 'tiktok_rate_limited') return 'O TikTok limitou as requisições. Aguarde um pouco e gere um novo link.';
+      if (err.code === 'proxy_error') return 'A proxy configurada falhou e nada foi enviado fora dela. Verifique em Contas TikTok → Proxy e gere um novo link.';
       if (/app_id|secret/i.test(err.message)) return 'O app do TikTok não está configurado corretamente no servidor (App ID/Secret). Avise o administrador.';
       if (err.code === 'tiktok_error' || err.code === 'tiktok_reauth') return 'O TikTok recusou a autorização (o link pode ter expirado ou já ter sido usado). Gere um novo link.';
     }
     return 'Não foi possível concluir a autorização. Gere um novo link e tente de novo.';
   }
 
-  /** Executa uma chamada com o token da BC dona da conta; marca a BC com erro se o token caiu. */
+  /**
+   * Executa uma chamada com o token da BC dona da conta (`fn(token, api)`: `api` já leva a proxy do dono da BC, se houver);
+   * marca a BC com erro se o token caiu.
+   */
   async function withBusinessCenterToken(bcRowId, fn) {
-    let token;
+    let access;
     try {
-      token = await repo.getToken(bcRowId);
+      access = await repo.getAccess(bcRowId);
     } catch {
       // Dado ilegível (ex.: TOKEN_ENCRYPTION_KEY foi trocada): pede um novo token em vez de falhar com 500.
       await repo.markError(bcRowId, 'Não foi possível ler o token salvo (a chave de criptografia mudou?). Informe o token novamente.');
       invalidate();
       throw new HttpError(409, 'Não foi possível ler o token salvo desta Business Center. Atualize o token.', 'tiktok_token_unreadable');
     }
-    if (!token) throw notFound('Business Center não encontrada.');
+    if (!access) throw notFound('Business Center não encontrada.');
+    const api = await apiFor(access.ownerId); // proxy_error aqui: nenhuma chamada sai sem a proxy
     try {
-      return await fn(token);
+      return await fn(access.token, api);
     } catch (err) {
       if (err instanceof HttpError && err.code === 'tiktok_reauth') {
         await repo.markError(bcRowId, 'Token inválido, expirado ou revogado. Atualize o token.');
@@ -130,7 +145,7 @@ export function createTiktokService({ client, repo, attempts, users, config, log
 
   function cachedReport(advertiser, days) {
     return dataCache.remember(`report:${advertiser.businessCenterId}:${advertiser.id}:${days}`, () =>
-      withBusinessCenterToken(advertiser.businessCenterId, (token) => client.getDailyReport(token, advertiser.id, periodRange(days))),
+      withBusinessCenterToken(advertiser.businessCenterId, (token, api) => api.getDailyReport(token, advertiser.id, periodRange(days))),
     );
   }
 
@@ -161,7 +176,7 @@ export function createTiktokService({ client, repo, attempts, users, config, log
       if (await repo.existsForOwner(actor.id, bcId)) throw new HttpError(409, 'Você já cadastrou esta Business Center.', 'conflict');
       let advertisers;
       try {
-        advertisers = await loadAdvertisers(accessToken, bcId); // valida o token antes de gravar
+        advertisers = await loadAdvertisers(accessToken, bcId, await apiFor(actor.id)); // valida o token antes de gravar (pela proxy do usuário, se houver)
       } catch (err) {
         throw asValidationError(err);
       }
@@ -184,7 +199,7 @@ export function createTiktokService({ client, repo, attempts, users, config, log
       if (accessToken) {
         let advertisers;
         try {
-          advertisers = await loadAdvertisers(accessToken, current.bcId);
+          advertisers = await loadAdvertisers(accessToken, current.bcId, await apiFor(current.ownerId));
         } catch (err) {
           throw asValidationError(err);
         }
@@ -200,7 +215,7 @@ export function createTiktokService({ client, repo, attempts, users, config, log
     async syncBusinessCenter(actor, id) {
       const current = await requireManageable(actor, id);
       if (current.authType === 'oauth') ensureOauthEnabled();
-      const advertisers = await withBusinessCenterToken(id, (token) => (current.authType === 'oauth' ? loadOauthAdvertisers(token) : loadAdvertisers(token, current.bcId)));
+      const advertisers = await withBusinessCenterToken(id, (token, api) => (current.authType === 'oauth' ? loadOauthAdvertisers(token, api) : loadAdvertisers(token, current.bcId, api)));
       await repo.replaceAdvertisers(id, advertisers);
       invalidate();
       return present(actor, await repo.get(id));
@@ -264,10 +279,11 @@ export function createTiktokService({ client, repo, attempts, users, config, log
 
       try {
         const { appId, appSecret } = config.tiktok.oauth;
-        const { accessToken, advertiserIds } = await client.exchangeAuthCode({ appId, appSecret, authCode });
-        const ids = advertiserIds.length ? advertiserIds : await client.listAuthorizedAdvertiserIds(accessToken, { appId, appSecret });
+        const api = await apiFor(owner.id); // a troca do código e a leitura das contas saem pela proxy do dono, se houver
+        const { accessToken, advertiserIds } = await api.exchangeAuthCode({ appId, appSecret, authCode });
+        const ids = advertiserIds.length ? advertiserIds : await api.listAuthorizedAdvertiserIds(accessToken, { appId, appSecret });
         if (!ids.length) return fail('error', 'Nenhuma conta de anúncio foi autorizada. Gere um novo link e selecione ao menos uma conta.');
-        const advertisers = await loadAdvertisersByIds(accessToken, ids);
+        const advertisers = await loadAdvertisersByIds(accessToken, ids, api);
 
         // Reautorizar as mesmas contas atualiza a conexão existente (novo token) em vez de duplicá-la.
         const existingId = await repo.findOauthByAdvertisers(owner.id, ids);
@@ -291,18 +307,18 @@ export function createTiktokService({ client, repo, attempts, users, config, log
     async publishCampaign({ actor, advertiserId, config: campaignConfig, assets = {}, existing = {}, onCreated }) {
       const advertiser = await requireAdvertiser(actor, advertiserId);
       const ids = { campaignId: existing.campaignId ?? null, adGroupId: existing.adGroupId ?? null, adId: existing.adId ?? null };
-      return withBusinessCenterToken(advertiser.businessCenterId, async (token) => {
+      return withBusinessCenterToken(advertiser.businessCenterId, async (token, api) => {
         try {
           if (!ids.campaignId) {
-            ids.campaignId = await client.createCampaign(token, buildCampaignPayload(advertiserId, campaignConfig));
+            ids.campaignId = await api.createCampaign(token, buildCampaignPayload(advertiserId, campaignConfig));
             await onCreated?.('campaign', ids.campaignId);
           }
           if (!ids.adGroupId) {
-            ids.adGroupId = await client.createAdGroup(token, buildAdGroupPayload(advertiserId, ids.campaignId, campaignConfig, { timezone: advertiser.timezone }));
+            ids.adGroupId = await api.createAdGroup(token, buildAdGroupPayload(advertiserId, ids.campaignId, campaignConfig, { timezone: advertiser.timezone }));
             await onCreated?.('adGroup', ids.adGroupId);
           }
           if (!ids.adId) {
-            ids.adId = await client.createAd(token, buildAdPayload(advertiserId, ids.adGroupId, campaignConfig, assets));
+            ids.adId = await api.createAd(token, buildAdPayload(advertiserId, ids.adGroupId, campaignConfig, assets));
             await onCreated?.('ad', ids.adId);
           }
         } catch (err) {
@@ -323,17 +339,17 @@ export function createTiktokService({ client, repo, attempts, users, config, log
      */
     async uploadCreative({ actor, advertiserId, kind, filePath, fileName, md5 }) {
       const advertiser = await requireAdvertiser(actor, advertiserId);
-      return withBusinessCenterToken(advertiser.businessCenterId, (token) =>
+      return withBusinessCenterToken(advertiser.businessCenterId, (token, api) =>
         kind === 'video'
-          ? client.uploadVideo(token, { advertiserId, filePath, fileName, md5 })
-          : client.uploadImage(token, { advertiserId, filePath, fileName, md5 }),
+          ? api.uploadVideo(token, { advertiserId, filePath, fileName, md5 })
+          : api.uploadImage(token, { advertiserId, filePath, fileName, md5 }),
       );
     },
 
     async campaigns(actor, advertiserId) {
       const advertiser = await requireAdvertiser(actor, advertiserId);
       return dataCache.remember(`campaigns:${advertiser.businessCenterId}:${advertiserId}`, () =>
-        withBusinessCenterToken(advertiser.businessCenterId, (token) => client.getCampaigns(token, advertiserId)),
+        withBusinessCenterToken(advertiser.businessCenterId, (token, api) => api.getCampaigns(token, advertiserId)),
       );
     },
 

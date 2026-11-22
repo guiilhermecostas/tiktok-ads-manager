@@ -71,6 +71,16 @@ function megabytes(name, fallback, max) {
   return value * MB;
 }
 
+/**
+ * Proxies para as chamadas ao TikTok. Por padrão o endereço da proxy precisa ser PÚBLICO (anti-SSRF: o servidor não conecta
+ * em redes internas). PROXY_ALLOW_PRIVATE_HOSTS=true libera redes internas só para DESENVOLVIMENTO (ex.: proxy local).
+ */
+function loadProxyConfig({ isProduction }) {
+  const allowPrivateHosts = (process.env.PROXY_ALLOW_PRIVATE_HOSTS ?? '').trim().toLowerCase() === 'true';
+  if (allowPrivateHosts && isProduction) throw new Error('PROXY_ALLOW_PRIVATE_HOSTS não é permitido em produção (abriria o servidor a conexões para redes internas).');
+  return { allowPrivateHosts };
+}
+
 /** Inteiro de uma variável de ambiente, com padrão e limites. */
 function integer(name, fallback, min, max) {
   const raw = process.env[name];
@@ -154,6 +164,7 @@ export function loadConfig(overrides = {}) {
     sessionTtlMs: 7 * 24 * 60 * 60 * 1000,
     cookieName: 'tt_sid',
     tiktok: loadTiktokConfig({ port, isProduction }),
+    proxy: loadProxyConfig({ isProduction }),
     creatives: loadCreativesConfig(),
     ...overrides,
   };

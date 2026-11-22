@@ -117,3 +117,28 @@ describe('config: limpeza dos criativos (FFmpeg)', () => {
     assert.equal(cleaning({ FFMPEG_PATH: process.execPath }).ffmpegPath, process.execPath, 'caminho absoluto existente é aceito');
   });
 });
+
+describe('config: proxies (anti-SSRF)', () => {
+  const withProxyEnv = (env, fn) => {
+    const previous = { PROXY_ALLOW_PRIVATE_HOSTS: process.env.PROXY_ALLOW_PRIVATE_HOSTS };
+    delete process.env.PROXY_ALLOW_PRIVATE_HOSTS;
+    Object.assign(process.env, env);
+    try {
+      return fn();
+    } finally {
+      if (previous.PROXY_ALLOW_PRIVATE_HOSTS === undefined) delete process.env.PROXY_ALLOW_PRIVATE_HOSTS;
+      else process.env.PROXY_ALLOW_PRIVATE_HOSTS = previous.PROXY_ALLOW_PRIVATE_HOSTS;
+    }
+  };
+
+  it('por padrão redes internas NÃO são permitidas como destino da proxy', () => {
+    assert.equal(withProxyEnv({}, () => loadConfig({ adminPassword: 'x' }).proxy.allowPrivateHosts), false);
+    for (const value of ['false', '0', 'sim', '1', '']) assert.equal(withProxyEnv({ PROXY_ALLOW_PRIVATE_HOSTS: value }, () => loadConfig({ adminPassword: 'x' }).proxy.allowPrivateHosts), false, value);
+  });
+
+  it('PROXY_ALLOW_PRIVATE_HOSTS=true libera só em desenvolvimento e é RECUSADA em produção', () => {
+    assert.equal(withProxyEnv({ PROXY_ALLOW_PRIVATE_HOSTS: 'true' }, () => loadConfig({ adminPassword: 'x' }).proxy.allowPrivateHosts), true);
+    const production = { NODE_ENV: 'production', DATABASE_URL: 'postgresql://u:p@db.example.com:5432/postgres', PROXY_ALLOW_PRIVATE_HOSTS: 'true' };
+    assert.throws(() => withProxyEnv({}, () => withEnv(production, () => loadConfig({ adminPassword: 'x' }))), /PROXY_ALLOW_PRIVATE_HOSTS/);
+  });
+});

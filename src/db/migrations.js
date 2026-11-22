@@ -257,6 +257,37 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['campaign_creative_assets'], revoke: ['campaign_creative_assets'], identity: [] })}
     `,
   },
+  {
+    version: 6,
+    description: 'Proxies por usuário para as chamadas à API do TikTok',
+    sql: `
+      -- Cada usuário pode cadastrar várias proxies (HTTP, HTTPS, SOCKS4, SOCKS5) e deixar UMA ativa. Com uma proxy ativa, todas as
+      -- chamadas à API do TikTok feitas com as Business Centers dele saem por ela (nunca pelo IP do servidor).
+      -- Usuário e senha da proxy ficam CRIPTOGRAFADOS pela aplicação (AES-256-GCM) em auth_enc; nunca voltam ao navegador.
+      CREATE TABLE proxies (
+        id                INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id           INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name              TEXT        NOT NULL,
+        kind              TEXT        NOT NULL CHECK (kind IN ('http', 'https', 'socks4', 'socks5')),
+        host              TEXT        NOT NULL,
+        port              INTEGER     NOT NULL CHECK (port BETWEEN 1 AND 65535),
+        auth_enc          TEXT,
+        active            BOOLEAN     NOT NULL DEFAULT false,
+        last_test_at      TIMESTAMPTZ,
+        last_test_ok      BOOLEAN,
+        last_test_ip      TEXT,
+        last_test_country TEXT,
+        last_test_error   TEXT,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      -- No máximo UMA proxy ativa por usuário (o banco garante, mesmo com requisições simultâneas).
+      CREATE UNIQUE INDEX proxies_one_active_per_user ON proxies (user_id) WHERE active;
+      CREATE UNIQUE INDEX proxies_user_name_key ON proxies (user_id, lower(name));
+
+      ${protectTables({ rls: ['proxies'], revoke: ['proxies'], identity: ['proxies'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

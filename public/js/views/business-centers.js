@@ -177,7 +177,7 @@ export async function businessCentersView() {
         'tr',
         null,
         h('td', { class: 'cell-strong' }, bc.name, bc.lastError ? h('p', { class: 'muted cell-note' }, bc.lastError) : null),
-        h('td', null, bc.bcId ? h('span', { class: 'code' }, bc.bcId) : h('span', { class: 'muted' }, '—'), ' ', badge(bc.authType === 'oauth' ? 'Por link' : 'Token', 'neutral')),
+        h('td', null, bc.bcId ? h('span', { class: 'code' }, bc.bcId) : h('span', { class: 'muted' }, '—'), ' ', badge(bc.authType === 'oauth' ? 'Por link' : 'Token', 'neutral'), bc.viaProxy ? ' ' : null, bc.viaProxy ? badge('Via proxy', 'success') : null),
         admin ? h('td', null, bc.owned ? 'Você' : (bc.ownerName ?? '—')) : null,
         h('td', null, visibilityBadge(bc)),
         h('td', null, bc.status === 'active' ? badge('Ativa', 'success') : badge('Acesso com erro', 'danger')),

@@ -30,7 +30,7 @@ export async function adAccountsView() {
       'div',
       null,
       h('span', { class: 'cell-strong' }, a.businessCenterName),
-      h('div', { class: 'cell-meta' }, a.businessCenterBcId ? h('span', { class: 'code' }, a.businessCenterBcId) : null, badge(a.businessCenterAuthType === 'oauth' ? 'Por link' : 'Token', 'neutral'), badge(a.businessCenterShared ? 'Compartilhada' : a.businessCenterOwned ? 'Só você' : 'Privada', a.businessCenterShared ? 'success' : 'neutral')),
+      h('div', { class: 'cell-meta' }, a.businessCenterBcId ? h('span', { class: 'code' }, a.businessCenterBcId) : null, badge(a.businessCenterAuthType === 'oauth' ? 'Por link' : 'Token', 'neutral'), a.businessCenterViaProxy ? badge('Via proxy', 'success') : null, badge(a.businessCenterShared ? 'Compartilhada' : a.businessCenterOwned ? 'Só você' : 'Privada', a.businessCenterShared ? 'success' : 'neutral')),
     );
   }
 

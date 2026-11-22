@@ -513,3 +513,11 @@ body.modal-open { overflow: hidden; }
 .targets__empty { padding: 14px; margin: 0; }
 .targets__note { margin: 10px 0 0; padding: 10px 12px; font-size: 13px; color: var(--muted); background: #f6f6f7; border-left: 3px solid var(--tt-cyan); border-radius: 8px; }
 
+/* ============ Proxy (Contas TikTok) ============ */
+.proxy-status { margin-bottom: 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.proxy-status--on { border-color: #98f5f1; background: #f2fffe; box-shadow: inset 4px 0 0 var(--tt-cyan); }
+.proxy-status p { margin: 4px 0 0; }
+.proxy-test { font-weight: 600; font-size: 13px; }
+.proxy-test--ok { color: var(--tt-cyan-dark); }
+.proxy-test--fail { color: #9d1033; }
+

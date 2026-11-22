@@ -30,6 +30,12 @@ export function createFakeTiktok() {
     failForAdvertiser: new Map(), // ID da conta -> nível ('campaign' | 'adGroup' | 'ad'): derruba a criação só nessa conta
     nextId: 7000,
     failUpload: new Set(), // 'image' | 'video'
+    exitIp: '198.51.100.23', // IP que a "proxy" mostra ao serviço de IP
+    exitCountry: 'United States',
+    exitCountryCode: 'US',
+    failProxied: false, // true: toda chamada com dispatcher (proxy) falha por rede
+    failIpCheck: null, // ex.: 'ECONNREFUSED': o serviço de IP falha
+    ipifyBody: null, // sobrescreve a resposta do serviço de IP
     failUploadOnCall: {}, // ex.: { image: 2 } derruba só a 2ª imagem enviada desde o último `uploadCalls = {}`
     uploadCalls: {},
     createDelayMs: 0, // simula latência nas criações (testes de concorrência)
@@ -49,8 +55,19 @@ export function createFakeTiktok() {
   const reply = (data, code = 0, message = 'OK') =>
     new Response(JSON.stringify({ code, message, request_id: 'x', data }), { status: 200, headers: { 'content-type': 'application/json' } });
 
+  const jsonReply = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
+
   const fetchFn = async (url, init) => {
     const u = new URL(url);
+    // Falha de rede simulada para TODA chamada que sai por uma proxy (proxy fora do ar).
+    if (state.failProxied && init.dispatcher) throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
+    // Serviços públicos que o teste de proxy consulta (IP e país de saída).
+    if (u.hostname === 'api.ipify.org' || u.hostname === 'ipwho.is') {
+      state.calls.push({ path: `${u.hostname}${u.pathname}`, query: {}, token: undefined, method: init.method ?? 'GET', body: undefined, dispatcher: init.dispatcher ?? null });
+      if (state.failIpCheck) throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('x'), { code: state.failIpCheck }) });
+      if (u.hostname === 'api.ipify.org') return jsonReply(state.ipifyBody ?? { ip: state.exitIp });
+      return jsonReply({ success: true, country: state.exitCountry, country_code: state.exitCountryCode });
+    }
     const query = Object.fromEntries(u.searchParams);
     const token = init.headers['Access-Token'];
     if (state.createDelayMs && u.pathname.endsWith('/create/')) await new Promise((r) => setTimeout(r, state.createDelayMs));
@@ -62,7 +79,7 @@ export function createFakeTiktok() {
     } else if (init.body) {
       body = JSON.parse(init.body);
     }
-    state.calls.push({ path: u.pathname.replace('/open_api/v1.3', ''), query, token, method: init.method, body });
+    state.calls.push({ path: u.pathname.replace('/open_api/v1.3', ''), query, token, method: init.method, body, dispatcher: init.dispatcher ?? null });
 
     const path = u.pathname.replace('/open_api/v1.3', '');
 
