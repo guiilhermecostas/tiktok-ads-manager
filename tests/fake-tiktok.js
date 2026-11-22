@@ -30,6 +30,10 @@ export function createFakeTiktok() {
     failForAdvertiser: new Map(), // ID da conta -> nível ('campaign' | 'adGroup' | 'ad'): derruba a criação só nessa conta
     nextId: 7000,
     failUpload: new Set(), // 'image' | 'video'
+    ownerBc: {}, // conta de anúncio -> ID da BC dona (preenchido pelas autorizações por link)
+    omitOwnerBc: false, // true: o TikTok não devolve owner_bc_id
+    rejectFields: false, // true: o TikTok recusa o parâmetro `fields` em advertiser/info
+    accessibleBcs: [], // BCs que o token enxerga em /bc/get/ ([{ id, name }]); null = sem permissão
     exitIp: '198.51.100.23', // IP que a "proxy" mostra ao serviço de IP
     exitCountry: 'United States',
     exitCountryCode: 'US',
@@ -47,8 +51,8 @@ export function createFakeTiktok() {
   };
 
   /** Registra um código que o "TikTok" aceitará uma vez; devolve o código. */
-  const grantAuthCode = (code, { token = `oauth-token-${randomBytes(6).toString('hex')}-xxxxxxxx`, advertisers = ['9001', '9002'] } = {}) => {
-    state.authCodes.set(code, { token, advertisers });
+  const grantAuthCode = (code, { token = `oauth-token-${randomBytes(6).toString('hex')}-xxxxxxxx`, advertisers = ['9001', '9002'], bcId = null } = {}) => {
+    state.authCodes.set(code, { token, advertisers, bcId });
     return code;
   };
 
@@ -92,6 +96,7 @@ export function createFakeTiktok() {
       state.authCodes.delete(body.auth_code); // uso único
       state.validTokens.add(grant.token);
       state.authorized.set(grant.token, [...grant.advertisers]);
+      if (grant.bcId) for (const advertiser of grant.advertisers) state.ownerBc[advertiser] = grant.bcId;
       return reply({ access_token: grant.token, advertiser_ids: grant.advertisers, scope: [4] });
     }
 
@@ -104,6 +109,10 @@ export function createFakeTiktok() {
         if (!ids) return reply({}, 40105, 'Access token is incorrect or has been revoked.');
         return reply({ list: ids.map((id) => ({ advertiser_id: id, advertiser_name: `Conta ${id}` })) });
       }
+      case '/bc/get/': {
+        if (state.accessibleBcs === null) return reply({}, 40001, 'No permission to this API');
+        return reply({ list: state.accessibleBcs.map((bc) => ({ bc_info: { bc_id: bc.id, name: bc.name } })), page_info: { page: 1, total_page: 1 } });
+      }
       case '/bc/asset/get/': {
         // Limite documentado no SDK oficial: page_size máximo = 50.
         if (Number(query.page_size) > 50) return reply({}, 40002, 'page_size must be less than or equal to 50');
@@ -113,7 +122,9 @@ export function createFakeTiktok() {
       }
       case '/advertiser/info/': {
         const ids = JSON.parse(query.advertiser_ids);
-        return reply({ list: ids.map((id) => ({ advertiser_id: id, name: `Conta ${id}`, currency: state.currencies[id] ?? 'BRL', timezone: 'America/Sao_Paulo' })) });
+        if (state.rejectFields && query.fields) return reply({}, 40002, 'The value of fields is invalid');
+        const ownerOf = (id) => state.ownerBc[id] ?? Object.entries(state.bcs).find(([, accounts]) => accounts.includes(id))?.[0];
+        return reply({ list: ids.map((id) => ({ advertiser_id: id, name: `Conta ${id}`, currency: state.currencies[id] ?? 'BRL', timezone: 'America/Sao_Paulo', ...(state.omitOwnerBc || !ownerOf(id) ? {} : { owner_bc_id: ownerOf(id) }) })) });
       }
       case '/campaign/get/': {
         if (state.manyCampaigns) {

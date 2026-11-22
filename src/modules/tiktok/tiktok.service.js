@@ -44,6 +44,8 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
   const present = (actor, bc) => ({
     id: bc.id,
     bcId: bc.bcId,
+    // IDs da Business Center: o informado no cadastro por token, ou (conexão por link) o das BCs donas das contas autorizadas.
+    bcIds: bc.bcId ? [bc.bcId] : bc.ownerBcIds,
     authType: bc.authType,
     viaProxy: bc.viaProxy,
     name: bc.name,
@@ -75,10 +77,24 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       ? badRequest('Token inválido ou sem permissão nesta Business Center.', 'tiktok_token_invalid')
       : err;
 
-  async function loadAdvertisersByIds(token, ids, api) {
+  /**
+   * Contas de anúncio com nome, moeda, fuso e a BC dona (`ownerBcId`). `discoverBc` (conexões por link, que não têm o ID da BC):
+   * se nenhuma conta informou a BC dona, tenta a lista de BCs do token, e só usa o resultado se houver UMA (sem adivinhar). É
+   * melhor esforço: falhar aqui nunca impede a conexão nem a sincronização.
+   */
+  async function loadAdvertisersByIds(token, ids, api, { discoverBc = false } = {}) {
     const info = ids.length ? await api.getAdvertiserInfo(token, ids) : [];
     const byId = new Map(info.map((a) => [a.id, a]));
-    return ids.map((id) => byId.get(id) ?? { id, name: id, currency: null, timezone: null });
+    const list = ids.map((id) => byId.get(id) ?? { id, name: id, currency: null, timezone: null, ownerBcId: null });
+    if (discoverBc && list.length && !list.some((a) => a.ownerBcId)) {
+      try {
+        const centers = await api.listBusinessCenters(token);
+        if (centers.length === 1) for (const a of list) a.ownerBcId = centers[0].id;
+      } catch {
+        /* sem permissão para listar BCs (ou falha momentânea): segue sem o ID */
+      }
+    }
+    return list;
   }
 
   /** Token manual: contas atribuídas à Business Center informada. */
@@ -89,7 +105,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
   /** Conexão por link: contas que o usuário autorizou para o app (a lista cresce se ele reautorizar com mais contas). */
   async function loadOauthAdvertisers(token, api) {
     const { appId, appSecret } = config.tiktok.oauth;
-    return loadAdvertisersByIds(token, await api.listAuthorizedAdvertiserIds(token, { appId, appSecret }), api);
+    return loadAdvertisersByIds(token, await api.listAuthorizedAdvertiserIds(token, { appId, appSecret }), api, { discoverBc: true });
   }
 
   /** Texto seguro para o usuário quando a autorização falha (nunca ecoa token, código ou detalhes internos). */
@@ -283,7 +299,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
         const { accessToken, advertiserIds } = await api.exchangeAuthCode({ appId, appSecret, authCode });
         const ids = advertiserIds.length ? advertiserIds : await api.listAuthorizedAdvertiserIds(accessToken, { appId, appSecret });
         if (!ids.length) return fail('error', 'Nenhuma conta de anúncio foi autorizada. Gere um novo link e selecione ao menos uma conta.');
-        const advertisers = await loadAdvertisersByIds(accessToken, ids, api);
+        const advertisers = await loadAdvertisersByIds(accessToken, ids, api, { discoverBc: true });
 
         // Reautorizar as mesmas contas atualiza a conexão existente (novo token) em vez de duplicá-la.
         const existingId = await repo.findOauthByAdvertisers(owner.id, ids);

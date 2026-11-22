@@ -16,6 +16,7 @@ const client = createTiktokClient({ config: { tiktok: { apiBase: 'https://busine
 const calls = {
   'GET  bc/asset/get': () => client.listBusinessCenterAdvertiserIds(FAKE_TOKEN, '1'),
   'GET  advertiser/info': () => client.getAdvertiserInfo(FAKE_TOKEN, ['1']),
+  'GET  bc/get': () => client.listBusinessCenters(FAKE_TOKEN),
   'GET  campaign/get': () => client.getCampaigns(FAKE_TOKEN, '1'),
   'GET  report/integrated/get': () => client.getDailyReport(FAKE_TOKEN, '1', { startDate: '2026-11-01', endDate: '2026-11-02' }),
   'POST campaign/create': () => client.createCampaign(FAKE_TOKEN, { advertiser_id: '1', campaign_name: 'x', objective_type: 'TRAFFIC', operation_status: 'DISABLE' }),

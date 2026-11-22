@@ -177,7 +177,7 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
     try {
       const own = ['creatives', 'creative_tiktok_assets', 'tiktok_oauth_attempts', 'campaign_publications', 'campaign_creative_assets', 'proxies'];
       const { rows: versions } = await db.query('SELECT version FROM schema_migrations ORDER BY version');
-      assert.ok(versions.length >= 6, 'migrações v2 a v6 aplicadas');
+      assert.ok(versions.length >= 7, 'migrações v2 a v7 aplicadas');
       for (const table of own) {
         const rls = (await db.query('SELECT relrowsecurity FROM pg_class WHERE oid = $1::regclass', [table])).rows[0];
         assert.equal(rls.relrowsecurity, true, `${table}: RLS ligado`);

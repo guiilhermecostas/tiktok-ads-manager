@@ -9,6 +9,7 @@ function toRecord(row) {
     ownerName: row.owner_name ?? null,
     bcId: row.bc_id ?? null,
     viaProxy: row.via_proxy === true,
+    ownerBcIds: row.owner_bc_ids ?? [], // BCs donas das contas de anúncio (para conexões por link, que não têm bc_id)
     authType: row.auth_type,
     name: row.name,
     shared: row.shared === true,
@@ -24,7 +25,8 @@ const SELECT_PUBLIC = `
   SELECT bc.id, bc.owner_id, u.name AS owner_name, bc.bc_id, bc.auth_type, bc.name, bc.shared, bc.status, bc.last_error,
          bc.last_synced_at, bc.created_at,
          (SELECT COUNT(*)::int FROM tiktok_advertisers a WHERE a.business_center_id = bc.id) AS advertiser_count,
-         EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS via_proxy
+         EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS via_proxy,
+         ARRAY(SELECT DISTINCT a.owner_bc_id FROM tiktok_advertisers a WHERE a.business_center_id = bc.id AND a.owner_bc_id IS NOT NULL ORDER BY a.owner_bc_id) AS owner_bc_ids
     FROM tiktok_business_centers bc JOIN users u ON u.id = bc.owner_id`;
 
 /**
@@ -35,12 +37,12 @@ async function writeAdvertisers(tx, bcRowId, advertisers) {
   await tx.query('DELETE FROM tiktok_advertisers WHERE business_center_id = $1', [bcRowId]);
   if (!advertisers.length) return;
   await tx.query(
-    `INSERT INTO tiktok_advertisers (business_center_id, advertiser_id, name, currency, timezone)
-     SELECT $1, t.advertiser_id, t.name, t.currency, t.timezone
-       FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS t(advertiser_id, name, currency, timezone)
+    `INSERT INTO tiktok_advertisers (business_center_id, advertiser_id, name, currency, timezone, owner_bc_id)
+     SELECT $1, t.advertiser_id, t.name, t.currency, t.timezone, t.owner_bc_id
+       FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[]) AS t(advertiser_id, name, currency, timezone, owner_bc_id)
      ON CONFLICT (business_center_id, advertiser_id)
-     DO UPDATE SET name = EXCLUDED.name, currency = EXCLUDED.currency, timezone = EXCLUDED.timezone`,
-    [bcRowId, advertisers.map((a) => a.id), advertisers.map((a) => a.name), advertisers.map((a) => a.currency ?? null), advertisers.map((a) => a.timezone ?? null)],
+     DO UPDATE SET name = EXCLUDED.name, currency = EXCLUDED.currency, timezone = EXCLUDED.timezone, owner_bc_id = EXCLUDED.owner_bc_id`,
+    [bcRowId, advertisers.map((a) => a.id), advertisers.map((a) => a.name), advertisers.map((a) => a.currency ?? null), advertisers.map((a) => a.timezone ?? null), advertisers.map((a) => a.ownerBcId ?? null)],
   );
 }
 
@@ -137,7 +139,7 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
     /** Contas de anúncio das BCs visíveis para o usuário. */
     async advertisers(userId) {
       const { rows } = await db.query(
-        `SELECT a.advertiser_id, a.name, a.currency, a.timezone, bc.id AS bc_row_id, bc.name AS bc_name, bc.status AS bc_status,
+        `SELECT a.advertiser_id, a.name, a.currency, a.timezone, a.owner_bc_id, bc.id AS bc_row_id, bc.name AS bc_name, bc.status AS bc_status,
                 bc.bc_id AS bc_external_id, bc.auth_type AS bc_auth_type, bc.shared AS bc_shared, (bc.owner_id = $1) AS bc_owned,
                 EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS bc_via_proxy
            FROM tiktok_advertisers a JOIN tiktok_business_centers bc ON bc.id = a.business_center_id
@@ -150,6 +152,7 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
         name: r.name,
         currency: r.currency,
         timezone: r.timezone,
+        ownerBcId: r.owner_bc_id ?? null, // BC dona da conta segundo o TikTok
         businessCenterId: r.bc_row_id,
         businessCenterName: r.bc_name,
         businessCenterStatus: r.bc_status,

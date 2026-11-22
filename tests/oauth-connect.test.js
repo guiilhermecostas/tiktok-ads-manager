@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { OAUTH_APP_ID, OAUTH_APP_SECRET, OAUTH_REDIRECT_URI, createFakeTiktok, tiktokTestConfig } from './fake-tiktok.js';
+import { OAUTH_APP_ID, OAUTH_APP_SECRET, OAUTH_REDIRECT_URI, OTHER_TOKEN, createFakeTiktok, tiktokTestConfig } from './fake-tiktok.js';
 import { all, createUser, loginAdmin, one, run, startTestServer } from './helpers.js';
 
 const LIMITS = { register: 1000, loginIp: 1000, loginAccount: 1000, tiktokRead: 1000, tiktokWrite: 1000, tiktokCallback: 1000, campaignPublish: 1000 };
@@ -392,5 +392,133 @@ describe('Conexão por link desabilitada (sem App ID/Secret)', () => {
     const manual = await user.client.post('/api/tiktok/business-centers', { name: 'Manual', bcId: '222', accessToken: 'other-token-bbbbbbbbbbbbbbbbbbb' });
     assert.equal(manual.status, 201);
     assert.equal(manual.json.businessCenter.authType, 'token');
+  });
+});
+
+describe('ID da Business Center nas conexões por link', () => {
+  let ctx;
+  let fake;
+  before(async () => {
+    fake = createFakeTiktok();
+    ctx = await startTestServer({ limits: LIMITS, config: tiktokTestConfig(), fetchFn: fake.fetchFn });
+  });
+  after(() => ctx.stop());
+
+  const reset = async () => {
+    await run(ctx.db, 'DELETE FROM tiktok_oauth_attempts');
+    await run(ctx.db, 'DELETE FROM tiktok_business_centers');
+    Object.assign(fake.state, { ownerBc: {}, omitOwnerBc: false, rejectFields: false, accessibleBcs: [] });
+    fake.state.calls.length = 0;
+    fake.state.authCodes.clear();
+    fake.state.authorized.clear();
+  };
+  /** O usuário autoriza pelo link; `bcId` é a BC dona que o TikTok informa nas contas. */
+  async function connect(user, { advertisers = ['9301', '9302'], bcId } = {}) {
+    const start = (await user.client.post('/api/tiktok/connect', { name: 'Por link' })).json;
+    const code = newCode();
+    fake.grantAuthCode(code, { advertisers, bcId });
+    await ctx.client().get(`/api/tiktok/callback?auth_code=${code}&state=${encodeURIComponent(stateOf(start.url))}`);
+    return (await user.client.get(`/api/tiktok/connect/${start.attemptId}`)).json.connection;
+  }
+  const listed = async (user) => (await user.client.get('/api/tiktok/business-centers')).json.businessCenters;
+
+  it('o TikTok informa a BC dona das contas: o ID aparece na conexão, nas contas de anúncio e no banco', async () => {
+    await reset();
+    const user = await createUser(ctx, { approve: true });
+    const connection = await connect(user, { bcId: '7123450000000000001' });
+    assert.deepEqual(connection.bcIds, ['7123450000000000001']);
+    assert.equal(connection.bcId, null, 'o campo bcId (cadastro por token) continua vazio na conexão por link');
+    assert.deepEqual((await listed(user))[0].bcIds, ['7123450000000000001']);
+    const accounts = (await user.client.get('/api/tiktok/advertisers')).json.advertisers;
+    assert.deepEqual(accounts.map((a) => [a.id, a.ownerBcId]), [['9301', '7123450000000000001'], ['9302', '7123450000000000001']]);
+    assert.deepEqual((await all(ctx.db, 'SELECT DISTINCT owner_bc_id FROM tiktok_advertisers')).map((r) => r.owner_bc_id), ['7123450000000000001']);
+    const infoCall = fake.callsTo('/advertiser/info/')[0];
+    assert.deepEqual(JSON.parse(infoCall.query.fields), ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id']);
+  });
+
+  it('autorização com contas de BCs diferentes mostra todas as BCs (sem repetir, em ordem)', async () => {
+    await reset();
+    const user = await createUser(ctx, { approve: true });
+    fake.state.ownerBc = { 9401: '700000000000000002', 9402: '700000000000000001', 9403: '700000000000000002' };
+    const connection = await connect(user, { advertisers: ['9401', '9402', '9403'] });
+    assert.deepEqual(connection.bcIds, ['700000000000000001', '700000000000000002']);
+  });
+
+  it('conexão por token continua mostrando o ID informado no cadastro', async () => {
+    await reset();
+    const user = await createUser(ctx, { approve: true });
+    const res = await user.client.post('/api/tiktok/business-centers', { name: 'Por token', bcId: '222', accessToken: OTHER_TOKEN });
+    assert.equal(res.status, 201);
+    assert.deepEqual([res.json.businessCenter.bcId, res.json.businessCenter.bcIds], ['222', ['222']]);
+  });
+
+  it('as contas não informam a BC: usa a lista de BCs do token SÓ se houver exatamente uma (sem adivinhar)', async () => {
+    await reset();
+    const user = await createUser(ctx, { approve: true });
+    fake.state.omitOwnerBc = true;
+    fake.state.accessibleBcs = [{ id: '7777', name: 'Minha BC' }];
+    assert.deepEqual((await connect(user)).bcIds, ['7777']);
+    assert.ok(fake.callsTo('/bc/get/').length >= 1);
+
+    await reset();
+    fake.state.omitOwnerBc = true;
+    fake.state.accessibleBcs = [{ id: '7777', name: 'A' }, { id: '8888', name: 'B' }];
+    assert.deepEqual((await connect(user)).bcIds, [], 'duas BCs possíveis: não dá para saber qual é; não chuta');
+  });
+
+  it('sem permissão para listar BCs ou sem informação nenhuma: a conexão FUNCIONA e o ID fica vazio (a tela explica)', async () => {
+    await reset();
+    const user = await createUser(ctx, { approve: true });
+    Object.assign(fake.state, { omitOwnerBc: true, accessibleBcs: null });
+    const connection = await connect(user);
+    assert.equal(connection.status, 'active');
+    assert.equal(connection.advertiserCount, 2);
+    assert.deepEqual(connection.bcIds, []);
+  });
+
+  it('TikTok recusa o parâmetro `fields`: tudo funciona como antes (repete sem ele) e usa a reserva da lista de BCs', async () => {
+    await reset();
+    const user = await createUser(ctx, { approve: true });
+    Object.assign(fake.state, { rejectFields: true, accessibleBcs: [{ id: '5555', name: 'BC' }] });
+    const connection = await connect(user);
+    assert.equal(connection.advertiserCount, 2, 'as contas foram lidas mesmo sem o parâmetro');
+    assert.deepEqual(connection.bcIds, ['5555']);
+    const withFields = fake.callsTo('/advertiser/info/').map((c) => 'fields' in c.query);
+    assert.deepEqual(withFields, [true, false]);
+  });
+
+  it('conexões antigas (sem o ID) são preenchidas ao Sincronizar; e o que o TikTok informa de novo atualiza', async () => {
+    await reset();
+    const user = await createUser(ctx, { approve: true });
+    fake.state.omitOwnerBc = true;
+    const connection = await connect(user);
+    assert.deepEqual(connection.bcIds, []);
+    const id = (await listed(user))[0].id;
+
+    fake.state.omitOwnerBc = false;
+    fake.state.ownerBc = { 9301: '7000000000000000009', 9302: '7000000000000000009' };
+    const res = await user.client.post(`/api/tiktok/business-centers/${id}/sync`, {});
+    assert.equal(res.status, 200, res.text);
+    assert.deepEqual(res.json.businessCenter.bcIds, ['7000000000000000009']);
+
+    fake.state.ownerBc = { 9301: '7000000000000000010', 9302: '7000000000000000010' };
+    assert.deepEqual((await user.client.post(`/api/tiktok/business-centers/${id}/sync`, {})).json.businessCenter.bcIds, ['7000000000000000010']);
+  });
+
+  it('valor estranho vindo do TikTok nunca é gravado (só números)', async () => {
+    await reset();
+    const user = await createUser(ctx, { approve: true });
+    fake.state.ownerBc = { 9301: "1'; DROP TABLE users;--", 9302: '<b>x</b>' };
+    assert.deepEqual((await connect(user)).bcIds, []);
+    assert.equal((await one(ctx.db, 'SELECT COUNT(*)::int AS c FROM tiktok_advertisers WHERE owner_bc_id IS NOT NULL')).c, 0);
+  });
+
+  it('o ID da BC segue as mesmas regras de visibilidade da conexão (outro usuário não vê)', async () => {
+    await reset();
+    const owner = await createUser(ctx, { approve: true });
+    const stranger = await createUser(ctx, { approve: true });
+    await connect(owner, { bcId: '7000000000000000042' });
+    assert.deepEqual(await listed(stranger), []);
+    assert.ok(!JSON.stringify((await stranger.client.get('/api/tiktok/advertisers')).json).includes('7000000000000000042'));
   });
 });

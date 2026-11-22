@@ -130,6 +130,18 @@ export async function businessCentersView() {
     return badge(bc.owned ? 'Só você' : 'Privada', 'neutral');
   }
 
+  /** ID(s) da Business Center: um código por BC (até 2 na tela; o resto vai em "+N" com a lista completa ao passar o mouse). */
+  function bcIdValue(bc) {
+    const ids = bc.bcIds ?? [];
+    if (!ids.length) {
+      const hint = bc.authType === 'oauth'
+        ? 'O TikTok não informou o ID desta Business Center na autorização. Use “Sincronizar” para tentar de novo.'
+        : 'ID não informado.';
+      return h('span', { class: 'muted', title: hint }, '—');
+    }
+    return h('span', { class: 'hub-ids', title: ids.join(', ') }, ids.slice(0, 2).map((id) => h('span', { class: 'code' }, id)), ids.length > 2 ? h('span', { class: 'muted' }, `+${ids.length - 2}`) : null);
+  }
+
   /** Cartão de uma Business Center: situação, selos, números e ações lado a lado. */
   function businessCenterCard(bc, oauth) {
     const active = bc.status === 'active';
@@ -149,7 +161,7 @@ export async function businessCentersView() {
       note: bc.lastError ? { text: bc.lastError, tone: 'error' } : null,
       stats: [
         { label: 'Contas', value: String(bc.advertiserCount), big: true },
-        { label: 'ID da BC', value: bc.bcId ? h('span', { class: 'code' }, bc.bcId) : '—' },
+        { label: (bc.bcIds?.length ?? 0) > 1 ? 'IDs das BCs' : 'ID da BC', value: bcIdValue(bc), wide: (bc.bcIds ?? []).some((id) => id.length > 10) }, // IDs reais têm 19 dígitos: linha inteira, sem quebrar o número
         { label: 'Última sincronização', value: bc.lastSyncedAt ? formatDate(bc.lastSyncedAt) : '—', wide: true },
         isAdmin() ? { label: 'Dono', value: bc.owned ? 'Você' : (bc.ownerName ?? '—') } : null,
       ],

@@ -26,7 +26,7 @@ export async function adAccountsView() {
   /** Business Center de origem: nome e uma linha discreta (ID, tipo da conexão, visibilidade e proxy). */
   function origin(a) {
     const meta = [
-      a.businessCenterBcId ? `ID ${a.businessCenterBcId}` : null,
+      a.ownerBcId ?? a.businessCenterBcId ? `ID ${a.ownerBcId ?? a.businessCenterBcId}` : null, // a BC dona da conta (conexões por link não têm ID na conexão)
       a.businessCenterAuthType === 'oauth' ? 'Por link' : 'Token',
       a.businessCenterShared ? 'Compartilhada' : a.businessCenterOwned ? 'Só você' : 'Privada',
       a.businessCenterViaProxy ? 'Via proxy' : null,

@@ -65,8 +65,14 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
      do TikTok não está configurado.
 2. **Contas TikTok** tem três sub-abas, no mesmo layout centralizado (cabeçalho, abas segmentadas e cartões de largura igual; no celular as
    listas viram cartões empilhados): **Business Centers** (as conexões), **Contas de anúncio** (todas as contas disponíveis, cada uma com
-   a Business Center de origem, tipo de conexão, moeda, fuso e status; com busca por nome/ID e filtro por BC). Em conexões por link o
-   TikTok não informa o ID da BC, então a origem é o nome da conexão.
+   a Business Center de origem, tipo de conexão, moeda, fuso e status; com busca por nome/ID e filtro por BC).
+   **ID da BC em conexões por link:** a autorização do TikTok não devolve o ID da Business Center, por isso ele não é digitado nem
+   guardado na conexão. O sistema o obtém na sincronização: lê o campo `owner_bc_id` de cada conta de anúncio (`advertiser/info`) e, se o
+   TikTok não o informar, consulta `/bc/get/` e só usa o resultado quando o token enxerga **exatamente uma** BC (nunca adivinha). O ID é
+   gravado por conta (`tiktok_advertisers.owner_bc_id`, só dígitos) e aparece no cartão da BC e na lista de contas. Se o TikTok não
+   informar, o cartão mostra “—” com uma explicação; “Sincronizar” tenta de novo (conexões criadas antes disso preenchem o ID assim).
+   Os dois endpoints são tratados de forma defensiva (resposta sem o campo não gera erro); a resposta real do TikTok ainda precisa ser
+   conferida com um token de verdade.
    **Cada usuário enxerga e usa apenas as próprias BCs** (Início, TikTok Ads e publicação de campanhas). Nunca vê as de outros.
 3. **Compartilhamento:** somente o admin pode marcar uma BC como "compartilhada com a equipe" (em Conectar/Editar). BCs
    compartilhadas aparecem para todos como somente leitura. As BCs que existiam antes desta mudança ficaram compartilhadas.

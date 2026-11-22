@@ -71,7 +71,7 @@ describe('cliente TikTok: envelope e erros', () => {
   const call = (handler) => setup(handler).client.getAdvertiserInfo(TOKEN, ['1']);
 
   it('aceita code 0 e também envelope sem `code` mas com `data` (SDK oficial: code só em erros)', async () => {
-    assert.deepEqual(await call(() => json({ code: 0, message: 'OK', data: { list: [{ advertiser_id: 1, name: 'A' }] } })), [{ id: '1', name: 'A', currency: null, timezone: null }]);
+    assert.deepEqual(await call(() => json({ code: 0, message: 'OK', data: { list: [{ advertiser_id: 1, name: 'A' }] } })), [{ id: '1', name: 'A', currency: null, timezone: null, ownerBcId: null }]);
     assert.equal((await call(() => json({ data: { list: [{ advertiser_id: 2, name: 'B' }] } })))[0].id, '2');
   });
 
@@ -145,7 +145,7 @@ describe('cliente TikTok: paginação e limites', () => {
     assert.equal(calls.length, 3);
     assert.deepEqual(calls.map((c) => JSON.parse(c.url.searchParams.get('advertiser_ids')).length), [100, 100, 50]);
     assert.equal(result.length, 250);
-    assert.deepEqual(result[0], { id: '1', name: 'C1', currency: 'BRL', timezone: 'America/Sao_Paulo' });
+    assert.deepEqual(result[0], { id: '1', name: 'C1', currency: 'BRL', timezone: 'America/Sao_Paulo', ownerBcId: null });
     const none = setup(() => json({ code: 0, data: {} }));
     assert.deepEqual(await none.client.getAdvertiserInfo(TOKEN, []), []);
     assert.equal(none.calls.length, 0, 'lista vazia não chama a API');
@@ -322,5 +322,51 @@ describe('cliente TikTok: autorização por link (OAuth)', () => {
   it('token revogado ao listar contas pede nova autorização (409)', async () => {
     const { client } = setup(() => json({ code: 40105, message: 'Access token is incorrect or has been revoked.' }));
     await rejectsWith(client.listAuthorizedAdvertiserIds(ACCESS, APP), { status: 409, code: 'tiktok_reauth' });
+  });
+});
+
+describe('cliente TikTok: Business Center dona da conta (owner_bc_id)', () => {
+  const info = (list) => json({ code: 0, data: { list } });
+
+  it('pede owner_bc_id junto com nome, moeda e fuso e devolve o ID da BC (só dígitos)', async () => {
+    const { client, calls } = setup(() => info([{ advertiser_id: 9001, name: 'A', currency: 'BRL', timezone: 'X', owner_bc_id: '7000000000000000001' }, { advertiser_id: '9002', name: 'B', owner_bc_id: 'abc' }, { advertiser_id: '9003', name: 'C' }, { advertiser_id: '9004', name: 'D', owner_bc_id: '1; DROP TABLE' }]));
+    const result = await client.getAdvertiserInfo(TOKEN, ['9001', '9002', '9003', '9004']);
+    assert.deepEqual(result.map((a) => [a.id, a.ownerBcId]), [['9001', '7000000000000000001'], ['9002', null], ['9003', null], ['9004', null]], 'valor que não é número do TikTok nunca é guardado');
+    assert.deepEqual(JSON.parse(calls[0].url.searchParams.get('fields')), ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id']);
+  });
+
+  it('se o TikTok recusar o parâmetro `fields`, repete SEM ele (a sincronização nunca quebra por causa do ID da BC) e não insiste nas páginas seguintes', async () => {
+    const { client, calls } = setup((url) => (url.searchParams.has('fields') ? json({ code: 40002, message: 'fields invalid' }) : info(JSON.parse(url.searchParams.get('advertiser_ids')).map((id) => ({ advertiser_id: id, name: `Conta ${id}` })))));
+    const ids = Array.from({ length: 150 }, (_, i) => String(1000 + i));
+    const result = await client.getAdvertiserInfo(TOKEN, ids);
+    assert.equal(result.length, 150);
+    assert.ok(result.every((a) => a.ownerBcId === null));
+    assert.deepEqual(calls.map((c) => c.url.searchParams.has('fields')), [true, false, false], '1ª página tenta com fields; as outras já vão sem');
+  });
+
+  it('erro de token, limite de requisições e queda de rede NÃO são repetidos sem `fields` (são erros de verdade)', async () => {
+    const reauth = setup(() => json({ code: 40105, message: 'Access token is incorrect' }));
+    await rejectsWith(reauth.client.getAdvertiserInfo(TOKEN, ['1']), { status: 409, code: 'tiktok_reauth' });
+    assert.equal(reauth.calls.length, 1);
+    const limited = setup(() => json({ code: 40100, message: 'Too many requests' }));
+    await rejectsWith(limited.client.getAdvertiserInfo(TOKEN, ['1']), { status: 429, code: 'tiktok_rate_limited' });
+    assert.equal(limited.calls.length, 1);
+    const down = setup(() => { throw new TypeError('fetch failed'); });
+    await rejectsWith(down.client.getAdvertiserInfo(TOKEN, ['1']), { status: 502, code: 'tiktok_unreachable' });
+    assert.equal(down.calls.length, 1);
+  });
+
+  it('lista as Business Centers do token (formatos bc_info.bc_id e bc_id), sem repetidos e ignorando o que não é ID', async () => {
+    const { client, calls } = setup(() => json({ code: 0, data: { list: [{ bc_info: { bc_id: '111', name: 'Loja' } }, { bc_id: '222', name: 'Outra' }, { bc_info: { bc_id: '111', name: 'Repetida' } }, { bc_info: { bc_id: 'x' } }, {}, null], page_info: { total_page: 1 } } }));
+    assert.deepEqual(await client.listBusinessCenters(TOKEN), [{ id: '111', name: 'Repetida' }, { id: '222', name: 'Outra' }]);
+    assert.equal(calls[0].url.pathname, '/open_api/v1.3/bc/get/');
+    assert.equal(calls[0].init.headers['Access-Token'], TOKEN);
+    const empty = setup(() => json({ code: 0, data: {} }));
+    assert.deepEqual(await empty.client.listBusinessCenters(TOKEN), []);
+  });
+
+  it('sem permissão para listar BCs é erro do TikTok (quem chama trata como "sem ID")', async () => {
+    const { client } = setup(() => json({ code: 40001, message: 'No permission' }));
+    await rejectsWith(client.listBusinessCenters(TOKEN), { status: 502, code: 'tiktok_error' });
   });
 });

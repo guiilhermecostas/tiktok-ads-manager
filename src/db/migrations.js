@@ -288,6 +288,15 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['proxies'], revoke: ['proxies'], identity: ['proxies'] })}
     `,
   },
+  {
+    version: 7,
+    description: 'ID da Business Center dona de cada conta de anúncio (conexões por link não informam o ID da BC)',
+    sql: `
+      -- O TikTok devolve na conta de anúncio a Business Center dona dela (owner_bc_id). Guardamos por conta: uma autorização por
+      -- link pode trazer contas de BCs diferentes, e é daí que a tela mostra o ID da BC de uma conexão por link.
+      ALTER TABLE tiktok_advertisers ADD COLUMN owner_bc_id TEXT CHECK (owner_bc_id IS NULL OR owner_bc_id ~ '^[0-9]{1,24}$');
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

@@ -253,6 +253,26 @@ describe('proxies por usuário (migração v6)', () => {
   });
 });
 
+describe('ID da BC dona da conta de anúncio (migração v7)', () => {
+  it('coluna opcional que só aceita números do TikTok; contas existentes ficam sem ID', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db, MIGRATIONS.slice(0, 6)); // banco como estava antes da v7
+      await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x')");
+      await db.query("INSERT INTO tiktok_business_centers (owner_id, bc_id, name, access_token) VALUES (1, '111', 'BC', 'v1.x')");
+      await db.query("INSERT INTO tiktok_advertisers (business_center_id, advertiser_id, name) VALUES (1, '9001', 'Antiga')");
+      await runMigrations(db);
+      assert.equal((await one(db, "SELECT owner_bc_id FROM tiktok_advertisers WHERE advertiser_id = '9001'")).owner_bc_id, null, 'dados antigos preservados, sem ID');
+      const insert = (id, owner) => db.query('INSERT INTO tiktok_advertisers (business_center_id, advertiser_id, name, owner_bc_id) VALUES (1, $1, $1, $2)', [id, owner]);
+      await insert('9002', '7123450000000000001');
+      await insert('9003', null);
+      for (const bad of ['', 'abc', '12 34', "1'; --", '1'.repeat(25), '-1']) await assert.rejects(() => insert(`b${bad.length}`, bad), (e) => e.code === '23514', JSON.stringify(bad));
+    } finally {
+      await db.close();
+    }
+  });
+});
+
 describe('biblioteca de criativos: restrições do esquema (migração v2)', () => {
   it('tipos, coerência arquivo/referência, duplicidade por usuário e cascatas', async () => {
     const db = await freshDb();

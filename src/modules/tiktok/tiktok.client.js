@@ -11,6 +11,8 @@ const INFO_CHUNK = 100;
 const BC_ASSET_PAGE_SIZE = 50;
 const CAMPAIGN_PAGE_SIZE = 100;
 const CAMPAIGN_MAX_PAGES = 5;
+const BC_LIST_MAX_PAGES = 3;
+const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id'];
 // Códigos que indicam token revogado/inválido: é preciso trocar o token da Business Center.
 const TOKEN_ERROR_CODES = new Set([40104, 40105]);
 // Limite de requisições do TikTok (código 40100 e mensagens equivalentes).
@@ -29,6 +31,8 @@ function requireId(value, what) {
   return id;
 }
 
+/** ID numérico do TikTok (só dígitos) ou null: nunca guardamos texto livre vindo da resposta. */
+const digitsOrNull = (value) => (/^\d{1,24}$/.test(String(value ?? '')) ? String(value) : null);
 const chunk = (list, size) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 const num = (value) => {
   const n = Number(value);
@@ -119,21 +123,54 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
       return [...ids];
     },
 
-    /** Detalhes (nome, moeda, fuso) das contas de anúncio. */
+    /**
+     * Detalhes das contas de anúncio: nome, moeda, fuso e a Business Center DONA da conta (`owner_bc_id`), que é de onde a tela tira o
+     * ID da BC das conexões por link. Pede os campos explicitamente; se o TikTok recusar o pedido por campos, repete como antes
+     * (sem `fields`) para nunca quebrar a sincronização por causa do ID da BC.
+     */
     async getAdvertiserInfo(token, advertiserIds) {
       const result = [];
+      let withFields = true;
       for (const ids of chunk(advertiserIds, INFO_CHUNK)) {
-        const data = await call('/advertiser/info/', { token, query: { advertiser_ids: ids } });
+        let data;
+        if (withFields) {
+          try {
+            data = await call('/advertiser/info/', { token, query: { advertiser_ids: ids, fields: INFO_FIELDS } });
+          } catch (err) {
+            if (!(err instanceof HttpError && err.code === 'tiktok_error')) throw err; // token inválido, limite, rede: erro de verdade
+            withFields = false;
+          }
+        }
+        data ??= await call('/advertiser/info/', { token, query: { advertiser_ids: ids } });
         for (const a of data.list ?? []) {
           result.push({
             id: String(a.advertiser_id),
             name: String(a.name ?? a.advertiser_name ?? a.advertiser_id),
             currency: a.currency ?? null,
             timezone: a.timezone ?? null,
+            ownerBcId: digitsOrNull(a.owner_bc_id),
           });
         }
       }
       return result;
+    },
+
+    /**
+     * Business Centers a que o token tem acesso (`/bc/get/`): [{ id, name }]. Usado só como reserva para descobrir o ID da BC de uma
+     * conexão por link quando as contas não informam `owner_bc_id`. Lê o formato de forma defensiva.
+     */
+    async listBusinessCenters(token) {
+      const found = new Map();
+      for (let page = 1; page <= BC_LIST_MAX_PAGES; page += 1) {
+        const data = await call('/bc/get/', { token, query: { page, page_size: BC_ASSET_PAGE_SIZE } });
+        const list = Array.isArray(data.list) ? data.list : [];
+        for (const item of list) {
+          const id = digitsOrNull(item?.bc_info?.bc_id ?? item?.bc_id);
+          if (id) found.set(id, String(item?.bc_info?.name ?? item?.name ?? '').slice(0, 120));
+        }
+        if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
+      }
+      return [...found].map(([id, name]) => ({ id, name }));
     },
 
     /** Campanhas da conta (paginado: até CAMPAIGN_MAX_PAGES páginas; `total` é o total real no TikTok). */
