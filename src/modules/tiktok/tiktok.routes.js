@@ -3,6 +3,7 @@ import { MAX_LABEL_BATCH, isAccountLabel } from '../../../shared/account-labels.
 import { RateLimiter } from '../../lib/rate-limit.js';
 import { badRequest, tooMany } from '../../lib/http-error.js';
 import { asObject, parseId, parseText } from '../../lib/validation.js';
+import { requireArea } from '../../middleware/workspace.js';
 
 const PERIODS = new Set([7, 14, 30]);
 const NUMERIC_ID_RE = /^\d{1,24}$/;
@@ -59,21 +60,26 @@ export function createTiktokRouter({ service, limits = {} }) {
   const writeLimiter = new RateLimiter({ max: limits.tiktokWrite ?? 20, windowMs: 60 * 1000 });
 
   const throttle = (limiter) => (req, _res, next) => {
-    const result = limiter.consume(String(req.user.id));
+    const result = limiter.consume(String(req.actor.id));
     return result.allowed ? next() : next(tooMany(result.retryAfterSec));
   };
   const read = throttle(readLimiter);
   const write = [throttle(writeLimiter)];
+  // Permissões de colaborador (o dono sempre passa): gerenciar conexões = "accounts"; relatórios = "reports";
+  // a lista de contas de anúncio também serve a quem publica campanhas.
+  const accounts = requireArea('accounts');
+  const reports = requireArea('reports');
+  const anyAdvertiserArea = requireArea('accounts', 'campaigns', 'reports');
 
   // ---------- Business Centers ----------
-  router.get('/business-centers', read, async (req, res) => {
-    res.json({ configured: service.isConfigured(), oauth: service.oauthInfo(req.user), businessCenters: await service.listBusinessCenters(req.user) });
+  router.get('/business-centers', accounts, read, async (req, res) => {
+    res.json({ configured: service.isConfigured(), oauth: service.oauthInfo(req.actor), businessCenters: await service.listBusinessCenters(req.actor) });
   });
 
-  router.post('/business-centers', ...write, async (req, res) => {
+  router.post('/business-centers', accounts, ...write, async (req, res) => {
     service.ensureConfigured();
     const body = asObject(req.body);
-    const businessCenter = await service.addBusinessCenter(req.user, {
+    const businessCenter = await service.addBusinessCenter(req.actor, {
       bcId: parseBcId(body.bcId),
       name: parseText(body.name, 'Nome'),
       accessToken: parseToken(body.accessToken),
@@ -82,7 +88,7 @@ export function createTiktokRouter({ service, limits = {} }) {
     res.status(201).json({ businessCenter });
   });
 
-  router.patch('/business-centers/:id', ...write, async (req, res) => {
+  router.patch('/business-centers/:id', accounts, ...write, async (req, res) => {
     service.ensureConfigured();
     const id = parseId(req.params.id);
     const body = asObject(req.body);
@@ -92,57 +98,57 @@ export function createTiktokRouter({ service, limits = {} }) {
       shared: parseOptionalBool(body.shared, 'Compartilhamento'),
     };
     if (Object.values(changes).every((v) => v === undefined)) throw badRequest('Nada para atualizar.');
-    res.json({ businessCenter: await service.updateBusinessCenter(req.user, id, changes) });
+    res.json({ businessCenter: await service.updateBusinessCenter(req.actor, id, changes) });
   });
 
-  router.post('/business-centers/:id/sync', ...write, async (req, res) => {
-    res.json({ businessCenter: await service.syncBusinessCenter(req.user, parseId(req.params.id)) });
+  router.post('/business-centers/:id/sync', accounts, ...write, async (req, res) => {
+    res.json({ businessCenter: await service.syncBusinessCenter(req.actor, parseId(req.params.id)) });
   });
 
   // Etiqueta as contas de anúncio desta BC (ex.: "conta de agência"). Só o dono da BC ou o admin.
-  router.patch('/business-centers/:id/advertisers', ...write, async (req, res) => {
+  router.patch('/business-centers/:id/advertisers', accounts, ...write, async (req, res) => {
     const { advertiserIds, label } = parseLabelRequest(req.body);
-    res.json(await service.setAdvertiserLabels(req.user, parseId(req.params.id), advertiserIds, label));
+    res.json(await service.setAdvertiserLabels(req.actor, parseId(req.params.id), advertiserIds, label));
   });
 
-  router.delete('/business-centers/:id', ...write, async (req, res) => {
-    await service.removeBusinessCenter(req.user, parseId(req.params.id));
+  router.delete('/business-centers/:id', accounts, ...write, async (req, res) => {
+    await service.removeBusinessCenter(req.actor, parseId(req.params.id));
     res.status(204).end();
   });
 
   // ---------- Conexão por link de autorização ----------
   // Gera o link (15 min, uso único) que o usuário abre onde está logado na Business Center do TikTok.
-  router.post('/connect', ...write, async (req, res) => {
+  router.post('/connect', accounts, ...write, async (req, res) => {
     const name = parseText(asObject(req.body).name, 'Nome da conexão', { min: 1, max: 80 });
-    res.status(201).json(await service.startConnection(req.user, { name }));
+    res.status(201).json(await service.startConnection(req.actor, { name }));
   });
 
   // A tela consulta aqui até o TikTok devolver o resultado (só o dono enxerga a tentativa).
-  router.get('/connect/:attemptId', read, async (req, res) => {
-    res.json(await service.connectionStatus(req.user, req.params.attemptId));
+  router.get('/connect/:attemptId', accounts, read, async (req, res) => {
+    res.json(await service.connectionStatus(req.actor, req.params.attemptId));
   });
 
   // Cancelar invalida o link na hora.
-  router.delete('/connect/:attemptId', ...write, async (req, res) => {
-    await service.cancelConnection(req.user, req.params.attemptId);
+  router.delete('/connect/:attemptId', accounts, ...write, async (req, res) => {
+    await service.cancelConnection(req.actor, req.params.attemptId);
     res.status(204).end();
   });
 
   // ---------- Dados consumidos pelo resto do sistema ----------
-  router.get('/advertisers', read, async (req, res) => {
-    res.json({ advertisers: await service.listAdvertisers(req.user) });
+  router.get('/advertisers', anyAdvertiserArea, read, async (req, res) => {
+    res.json({ advertisers: await service.listAdvertisers(req.actor) });
   });
 
-  router.get('/advertisers/:advertiserId/campaigns', read, async (req, res) => {
-    res.json(await service.campaigns(req.user, parseAdvertiserId(req.params.advertiserId)));
+  router.get('/advertisers/:advertiserId/campaigns', reports, read, async (req, res) => {
+    res.json(await service.campaigns(req.actor, parseAdvertiserId(req.params.advertiserId)));
   });
 
-  router.get('/advertisers/:advertiserId/report', read, async (req, res) => {
-    res.json(await service.report(req.user, parseAdvertiserId(req.params.advertiserId), parseDays(req.query.days)));
+  router.get('/advertisers/:advertiserId/report', reports, read, async (req, res) => {
+    res.json(await service.report(req.actor, parseAdvertiserId(req.params.advertiserId), parseDays(req.query.days)));
   });
 
-  router.get('/overview', read, async (req, res) => {
-    res.json(await service.overview(req.user, parseDays(req.query.days)));
+  router.get('/overview', reports, read, async (req, res) => {
+    res.json(await service.overview(req.actor, parseDays(req.query.days)));
   });
 
   router.stop = () => {

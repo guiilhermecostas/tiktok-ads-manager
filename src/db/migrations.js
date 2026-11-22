@@ -306,6 +306,39 @@ export const MIGRATIONS = [
       ALTER TABLE tiktok_advertisers ADD COLUMN label TEXT CHECK (label IS NULL OR label IN ('agency'));
     `,
   },
+  {
+    version: 9,
+    description: 'Colaboradores: acesso ao espaço de outra conta por área, e convites por e-mail',
+    sql: `
+      -- Um colaborador tem a PRÓPRIA conta (e-mail e senha) e trabalha dentro do espaço (dados) do dono, só nas áreas liberadas.
+      -- Uma pessoa é colaboradora de UM dono (UNIQUE em user_id). Remover o colaborador apaga a conta dele (cascata) e as sessões.
+      -- Novas áreas entram aqui com uma migração que troca a restrição (a lista também existe em shared/permissions.js).
+      CREATE TABLE workspace_members (
+        id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        owner_id   INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_id    INTEGER     NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        areas      TEXT[]      NOT NULL CHECK (cardinality(areas) BETWEEN 1 AND 4 AND areas <@ ARRAY['creatives', 'campaigns', 'reports', 'accounts']::text[]),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CHECK (owner_id <> user_id)
+      );
+      CREATE INDEX idx_workspace_members_owner ON workspace_members (owner_id);
+
+      -- Convites pendentes. O token só existe no e-mail; aqui fica o hash SHA-256. Uso único (a linha é apagada ao aceitar).
+      CREATE TABLE workspace_invites (
+        id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        owner_id   INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        email      TEXT        NOT NULL,
+        name       TEXT        NOT NULL,
+        areas      TEXT[]      NOT NULL CHECK (cardinality(areas) BETWEEN 1 AND 4 AND areas <@ ARRAY['creatives', 'campaigns', 'reports', 'accounts']::text[]),
+        token_hash TEXT        NOT NULL UNIQUE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX workspace_invites_owner_email_key ON workspace_invites (owner_id, lower(email));
+
+      ${protectTables({ rls: ['workspace_members', 'workspace_invites'], revoke: ['workspace_members', 'workspace_invites'], identity: ['workspace_members', 'workspace_invites'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

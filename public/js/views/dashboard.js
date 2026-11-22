@@ -1,7 +1,7 @@
 import { get } from '../api.js';
 import { h } from '../dom.js';
 import { formatCurrency, formatMoney, formatNumber, formatPercent } from '../format.js';
-import { state } from '../state.js';
+import { can, isWorkspaceOwner, state } from '../state.js';
 import { button, emptyState } from '../ui.js';
 import { openCampaignWizard } from './campaign-wizard/index.js';
 import { pageHeader } from './layout.js';
@@ -67,12 +67,34 @@ function tiktokSection(overview) {
   return h('div', null, title, groups, notes.length ? h('p', { class: 'muted section-note section-note--lg' }, notes.join(' ')) : null);
 }
 
+/** Colaborador sem campanhas nem relatórios: o Início só aponta para o que ele pode usar. */
+function welcomeSection() {
+  const links = [
+    ['creatives', '/creatives', 'Criativos'],
+    ['accounts', '/business-centers', 'Contas TikTok'],
+  ].filter(([area]) => can(area));
+  return h(
+    'div',
+    { class: 'card' },
+    emptyState({
+      title: `Equipe de ${state.workspace.ownerName}`,
+      text: 'Você tem acesso às áreas liberadas no menu à esquerda. Se precisar de mais acesso, peça a quem convidou você.',
+      action: links.length ? h('div', { class: 'page-header__actions' }, links.map(([, href, label]) => h('a', { href, 'data-link': true, class: 'btn btn--primary' }, label))) : null,
+    }),
+  );
+}
+
 export async function dashboardView(ctx) {
-  const [{ summary }, overview] = await Promise.all([get('/campaigns/summary'), loadOverview()]);
+  const withCampaigns = can('campaigns');
+  const withReports = can('reports');
+  // Cada bloco só é pedido (e mostrado) se a pessoa tem a área; a visão do TikTok nunca derruba o Início.
+  const [summaryResult, overview] = await Promise.all([withCampaigns ? get('/campaigns/summary') : null, withReports ? loadOverview() : null]);
+  const summary = summaryResult?.summary ?? null;
   const firstName = state.user.name.split(' ')[0];
 
-  const body =
-    summary.total === 0
+  const body = !summary
+    ? null
+    : summary.total === 0
       ? h(
           'div',
           { class: 'card' },
@@ -86,7 +108,7 @@ export async function dashboardView(ctx) {
           'div',
           { class: 'card card--pad' },
           h('h2', { class: 'card__title' }, 'Resumo da operação'),
-          h('p', { class: 'muted' }, `Você tem ${summary.draft} rascunho(s), ${summary.active} campanha(s) ativa(s) e ${summary.paused} pausada(s).`),
+          h('p', { class: 'muted' }, `${isWorkspaceOwner() ? 'Você tem' : 'A equipe tem'} ${summary.draft} rascunho(s), ${summary.active} campanha(s) ativa(s) e ${summary.paused} pausada(s).`),
           h('div', { class: 'page-header__actions' }, button('Publicar campanha', { variant: 'primary', onClick: () => openCampaignWizard(ctx) }), h('a', { href: '/campaigns', 'data-link': true, class: 'btn btn--secondary' }, 'Gerenciar campanhas')),
         );
 
@@ -94,18 +116,23 @@ export async function dashboardView(ctx) {
     element: h(
       'div',
       null,
-      pageHeader(`Olá, ${firstName}`, 'Veja um resumo da sua operação de TikTok Ads.'),
-      tiktokSection(overview),
-      h('h2', { class: 'card__title section-title' }, 'Campanhas internas'),
-      h(
-        'div',
-        { class: 'grid grid--4' },
-        metric('Campanhas', String(summary.total), 'neutral'),
-        metric('Ativas', String(summary.active), 'cyan'),
-        metric('Pausadas', String(summary.paused), 'red'),
-        metric('Orçamento diário ativo', formatMoney(summary.activeBudget), 'neutral'),
-      ),
+      pageHeader(`Olá, ${firstName}`, withCampaigns || withReports ? 'Veja um resumo da sua operação de TikTok Ads.' : 'Bem-vindo(a) ao TikTok Ads Manager.'),
+      withReports ? tiktokSection(overview) : null,
+      summary
+        ? [
+            h('h2', { class: 'card__title section-title' }, 'Campanhas internas'),
+            h(
+              'div',
+              { class: 'grid grid--4' },
+              metric('Campanhas', String(summary.total), 'neutral'),
+              metric('Ativas', String(summary.active), 'cyan'),
+              metric('Pausadas', String(summary.paused), 'red'),
+              metric('Orçamento diário ativo', formatMoney(summary.activeBudget), 'neutral'),
+            ),
+          ]
+        : null,
       body,
+      withCampaigns || withReports ? null : welcomeSection(),
     ),
   };
 }

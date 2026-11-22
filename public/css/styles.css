@@ -617,3 +617,16 @@ body.modal-open { overflow: hidden; }
   .targets__filters select.input { flex: 1 1 100%; }
   .targets__filters .link-btn { margin-left: 0; }
 }
+
+/* ============ Colaboradores ============ */
+.team__areas { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.team__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.area-picker { border: 0; margin: 0 0 16px; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.area-picker legend { padding: 0; margin-bottom: 4px; }
+.area-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: #fff; }
+.area-option:hover { background: #fafafa; }
+.area-option input { margin-top: 3px; flex: none; }
+.area-option span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.area-option small { font-size: 12px; line-height: 1.4; }
+.area-option--full { background: #f2fffe; border-color: #b8f3ef; }
+.modal__actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 8px; }

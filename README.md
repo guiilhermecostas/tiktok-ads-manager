@@ -140,6 +140,33 @@ Segurança dos tokens: AES-256-GCM no banco, nunca enviados ao navegador nem reg
 > Ao usar um token real, confira em *Contas TikTok → Sincronizar* se as contas aparecem; ajustes de campo ficam isolados em
 > `src/modules/tiktok/tiktok.client.js`.
 
+## Colaboradores (acesso por e-mail, sem compartilhar login)
+
+O dono da conta convida pessoas em **Colaboradores** (menu “Gestão”). Cada colaborador entra com o **próprio e-mail e senha** e
+trabalha dentro do espaço do dono (mesmas Business Centers, criativos e campanhas), **só nas áreas liberadas**:
+
+| Área | Libera |
+|---|---|
+| **Criativos** | Biblioteca: enviar, renomear, excluir. |
+| **Campanhas** | Criar, editar e publicar campanhas; inclui ver os criativos e as contas de anúncio. |
+| **Relatórios** | Início e TikTok Ads (gasto, cliques, conversões). |
+| **Contas TikTok** | Business Centers, contas de anúncio, etiquetas e proxy. |
+| **Acesso total** | Todas as áreas acima. **Nunca** inclui gerenciar colaboradores nem a administração do sistema. |
+
+- **Fluxo:** o dono informa nome, e-mail e as áreas → o sistema envia o convite pelo **Resend** → a pessoa abre o link, define a senha
+  (mínimo de 10 caracteres) e já entra. O convite vale **7 dias**, é de **uso único** e pode ser reenviado (o link anterior morre) ou cancelado.
+  Mudar as áreas ou remover o colaborador vale **na hora** (a conta dele é apagada e as sessões caem). Os dados criados por ele ficam com o dono.
+- **Segurança:** token de 256 bits só no e-mail (no banco só o SHA-256); o link leva o token no fragmento `#…` (o navegador não o envia
+  em requisição nem aparece em log) e ele segue apenas no corpo de POSTs; a mesma resposta para convite inexistente, expirado ou já usado;
+  limites por IP e por conta (`429`); toda rota exige a área certa **no servidor** (o menu só esconde o que daria erro); colaborador nunca é
+  admin (nem no espaço de um admin), não compartilha BC com a equipe e não gerencia equipe; se o dono for bloqueado, a equipe cai junto.
+  Se o e-mail já tiver conta no sistema, o aceite avisa (o convite não é gasto). Limite de 30 colaboradores + convites por conta.
+- **Configuração do e-mail** (segredos do servidor, nunca no navegador nem no repositório): `RESEND_API_KEY` (a chave pode ser só de
+  envio), `EMAIL_FROM` (padrão `TikTok Ads Manager <convites@payfac.dev>`, o domínio precisa estar verificado no Resend) e `APP_URL`
+  (endereço público, usado nos links; **nunca** deduzido do cabeçalho Host). Sem elas o convite fica indisponível e a tela avisa.
+- **Para criar uma área nova:** acrescente-a em `shared/permissions.js`, proteja as rotas com `requireArea` e crie uma migração que
+  amplie o CHECK das colunas `areas`. Regras em `shared/permissions.js`; espaço de trabalho em `src/middleware/workspace.js`.
+
 ## Biblioteca de criativos
 
 - **Criativos** (menu lateral): cada usuário guarda os próprios arquivos (JPG/PNG até 10 MB, MP4/MOV até 200 MB, cota de 2 GB por padrão,
@@ -213,8 +240,10 @@ src/
     campaigns/         CRUD de campanhas internas (escopado por usuário)
     tiktok/            Business Centers (cliente da API, conexão por link/OAuth, repositórios, serviço, rotas)
     creatives/         biblioteca de criativos (armazenamento, validação por conteúdo, rotas)
+    team/              colaboradores: convites, aceite, áreas de acesso (repositório, serviço, rotas)
+    mail/              envio de e-mail pelo Resend e modelo do convite
 scripts/               utilitários: db (check/migrate), import-sqlite, supabase-setup.sql
-shared/                regras de campanha compartilhadas (navegador + servidor)
+shared/                regras compartilhadas (navegador + servidor): campanhas, etiquetas de conta, permissões por área
 public/                SPA em JS puro (sem innerHTML), CSS e views
 tests/                 testes de API, segurança, banco e utilitários (tests/live: opcionais, usam rede)
 certs/                 CA pública do Supabase (verificação do TLS)
@@ -249,7 +278,8 @@ exige plano pago). O banco continua no Supabase (schema `tiktok_ads`); as migra�
 
 1. Envie o código para um repositório **privado** no GitHub (o `.env` e a pasta `data/` já estão no `.gitignore`).
 2. No Render: **New → Blueprint** apontando para o repositório. Preencha os segredos pedidos (`DATABASE_URL`, `ADMIN_PASSWORD`,
-   `TOKEN_ENCRYPTION_KEY`, e `TIKTOK_APP_ID`/`TIKTOK_APP_SECRET`/`TIKTOK_REDIRECT_URI` para a conexão por link).
+   `TOKEN_ENCRYPTION_KEY`, `TIKTOK_APP_ID`/`TIKTOK_APP_SECRET`/`TIKTOK_REDIRECT_URI` para a conexão por link, e
+   `RESEND_API_KEY`/`APP_URL` para os convites de colaboradores).
 3. `TIKTOK_REDIRECT_URI` = `https://SEU-SERVICO.onrender.com/api/tiktok/callback` (a mesma URL cadastrada como Redirect URL no app do TikTok).
 4. **Guarde `TOKEN_ENCRYPTION_KEY` com o mesmo valor de antes**: trocar a chave impede ler os tokens já salvos.
 

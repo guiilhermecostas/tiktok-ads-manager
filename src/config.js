@@ -37,6 +37,36 @@ function loadOauthConfig({ port, isProduction, encryptionKey }) {
   return { appId, appSecret, redirectUri, enabled: Boolean(appId && appSecret && encryptionKey) };
 }
 
+const DEFAULT_EMAIL_FROM = 'TikTok Ads Manager <convites@payfac.dev>';
+
+/**
+ * E-mail transacional (convites de colaboradores) pelo Resend. Tudo é segredo/configuração do SERVIDOR:
+ *  - RESEND_API_KEY: chave da API (nunca vai ao navegador nem aos logs). Sem ela, o envio fica desligado.
+ *  - EMAIL_FROM: remetente, em domínio verificado no Resend (ex.: "TikTok Ads Manager <convites@payfac.dev>").
+ *  - APP_URL: endereço público do sistema, usado nos links dos e-mails. NUNCA é deduzido do cabeçalho Host da requisição
+ *    (isso permitiria forjar links de convite apontando para outro site).
+ */
+export function loadMailConfig({ port, isProduction }) {
+  const apiKey = (process.env.RESEND_API_KEY ?? '').trim();
+  const from = (process.env.EMAIL_FROM ?? '').trim() || DEFAULT_EMAIL_FROM;
+  const rawUrl = (process.env.APP_URL ?? '').trim();
+  if (apiKey && !/^re_[A-Za-z0-9_-]{16,200}$/.test(apiKey)) throw new Error('RESEND_API_KEY inválida (deve começar com "re_").');
+  if (!/^(?:[^<>\r\n"]{1,80} )?<?[^\s@<>"]{1,64}@[a-z0-9.-]{3,190}\.[a-z]{2,}>?$/i.test(from) || (from.includes('<') !== from.includes('>'))) throw new Error('EMAIL_FROM inválido (use "Nome <email@dominio>").');
+  let appUrl = '';
+  if (rawUrl || !isProduction) {
+    let url;
+    try {
+      url = new URL(rawUrl || `http://localhost:${port}`);
+    } catch {
+      throw new Error('APP_URL inválida.');
+    }
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('APP_URL deve ser só o endereço do sistema (ex.: https://meu-sistema.com).');
+    if (isProduction && url.protocol !== 'https:') throw new Error('Em produção, APP_URL precisa ser https.');
+    appUrl = url.origin;
+  }
+  return { apiKey, from, appUrl, enabled: Boolean(apiKey && appUrl) };
+}
+
 function loadTiktokConfig(context) {
   const rawKey = (process.env.TOKEN_ENCRYPTION_KEY ?? '').trim();
   const encryptionKey = rawKey ? parseEncryptionKey(rawKey) : null;
@@ -164,6 +194,7 @@ export function loadConfig(overrides = {}) {
     sessionTtlMs: 7 * 24 * 60 * 60 * 1000,
     cookieName: 'tt_sid',
     tiktok: loadTiktokConfig({ port, isProduction }),
+    mail: loadMailConfig({ port, isProduction }),
     proxy: loadProxyConfig({ isProduction }),
     creatives: loadCreativesConfig(),
     ...overrides,

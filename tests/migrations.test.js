@@ -5,7 +5,7 @@ import { MIGRATIONS, findTablesWithoutRls, runMigrations } from '../src/db/migra
 import { createPgliteDatabase } from '../src/db/adapters/pglite.js';
 import { all, one } from './helpers.js';
 
-const EXPECTED_TABLES = ['campaign_creative_assets', 'campaign_publications', 'campaigns', 'creative_tiktok_assets', 'creatives', 'proxies', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users'];
+const EXPECTED_TABLES = ['campaign_creative_assets', 'campaign_publications', 'campaigns', 'creative_tiktok_assets', 'creatives', 'proxies', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users', 'workspace_invites', 'workspace_members'];
 const config = { url: null, sslCaPath: null, poolMax: 1, devDataDir: null, requireRls: true };
 const silent = { info() {}, warn() {}, error() {} };
 
@@ -288,6 +288,45 @@ describe('Etiqueta das contas de anúncio (migração v8)', () => {
       for (const bad of ['', 'Agency', 'vip', 'agency ', "agency'; --"]) {
         await assert.rejects(() => db.query('UPDATE tiktok_advertisers SET label = $1 WHERE advertiser_id = $2', [bad, '9001']), (e) => e.code === '23514', JSON.stringify(bad));
       }
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('Colaboradores (migração v9)', () => {
+  it('vínculo e convite: áreas restritas, um dono por colaborador, cascatas e RLS ligado', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      assert.deepEqual(await findTablesWithoutRls(db), [], 'toda tabela nova com RLS');
+      const user = async (email) => (await db.query("INSERT INTO users (email, name, password_hash, status) VALUES ($1, 'U', 'x', 'approved') RETURNING id", [email])).rows[0].id;
+      const owner = await user('dono@example.com');
+      const other = await user('outro@example.com');
+      const collab = await user('colab@example.com');
+      const member = (ownerId, userId, areas) => db.query('INSERT INTO workspace_members (owner_id, user_id, areas) VALUES ($1, $2, $3)', [ownerId, userId, areas]);
+      const invite = (ownerId, email, areas, hash) => db.query("INSERT INTO workspace_invites (owner_id, email, name, areas, token_hash, expires_at) VALUES ($1, $2, 'N', $3, $4, now() + interval '1 day')", [ownerId, email, areas, hash]);
+
+      // áreas: de 1 a 4, só nomes conhecidos
+      for (const bad of [[], ['admin'], ['creatives', 'admin'], ['creatives', 'campaigns', 'reports', 'accounts', 'creatives'], ["creatives'; --"], ['Creatives']]) {
+        await assert.rejects(() => member(owner, collab, bad), (e) => e.code === '23514', `membro ${JSON.stringify(bad)}`);
+        await assert.rejects(() => invite(owner, 'c@example.com', bad, `h-${JSON.stringify(bad)}`), (e) => e.code === '23514', `convite ${JSON.stringify(bad)}`);
+      }
+      await assert.rejects(() => member(owner, owner, ['creatives']), (e) => e.code === '23514', 'ninguém é colaborador de si mesmo');
+      await member(owner, collab, ['creatives', 'reports']);
+      await assert.rejects(() => member(other, collab, ['creatives']), (e) => e.code === '23505', 'colaborador de UM dono só');
+
+      // convites: um por dono+e-mail (sem diferenciar maiúsculas) e token único
+      await invite(owner, 'Ana@Example.com', ['creatives'], 'hash-1');
+      await assert.rejects(() => invite(owner, 'ana@example.com', ['creatives'], 'hash-2'), (e) => e.code === '23505');
+      await assert.rejects(() => invite(other, 'ana@example.com', ['creatives'], 'hash-1'), (e) => e.code === '23505', 'hash do token é único');
+      await invite(other, 'ana@example.com', ['creatives'], 'hash-3'); // outro dono pode convidar o mesmo e-mail
+
+      // cascatas: apagar o colaborador remove o vínculo; apagar o dono remove tudo dele
+      await db.query('DELETE FROM users WHERE id = $1', [collab]);
+      assert.equal((await db.query('SELECT 1 FROM workspace_members')).rows.length, 0);
+      await db.query('DELETE FROM users WHERE id = $1', [owner]);
+      assert.deepEqual((await db.query('SELECT token_hash FROM workspace_invites')).rows.map((r) => r.token_hash), ['hash-3']);
     } finally {
       await db.close();
     }

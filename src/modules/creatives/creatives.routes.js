@@ -19,7 +19,7 @@ export function createCreativesRouter({ service, limits = {} }) {
   const readLimiter = new RateLimiter({ max: limits.creativesRead ?? 600, windowMs: 60 * 1000 });
   const writeLimiter = new RateLimiter({ max: limits.creativesWrite ?? 60, windowMs: 60 * 1000 });
   const throttle = (limiter) => (req, _res, next) => {
-    const result = limiter.consume(String(req.user.id));
+    const result = limiter.consume(String(req.actor.id));
     return result.allowed ? next() : next(tooMany(result.retryAfterSec));
   };
   const read = throttle(readLimiter);
@@ -32,7 +32,7 @@ export function createCreativesRouter({ service, limits = {} }) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw badRequest('Limite inválido (1 a 100).');
     if (!Number.isInteger(offset) || offset < 0 || offset > 100_000) throw badRequest('Deslocamento inválido.');
     res.json(
-      await service.list(req.user, {
+      await service.list(req.actor, {
         kind: kind === undefined ? undefined : parseEnum(kind, KINDS, 'Tipo'),
         q: q === undefined || q === '' ? undefined : parseText(q, 'Busca', { min: 1, max: 100 }),
         limit,
@@ -52,7 +52,7 @@ export function createCreativesRouter({ service, limits = {} }) {
     const filename = parseText(req.query.filename ?? 'arquivo', 'Nome do arquivo', { min: 1, max: 200 });
     const name = req.query.name === undefined || req.query.name === '' ? nameFromFilename(filename) : parseText(req.query.name, 'Nome', { min: 1, max: 100 });
 
-    const creative = await service.upload(req.user, { stream: req, contentType, contentLength, name, filename });
+    const creative = await service.upload(req.actor, { stream: req, contentType, contentLength, name, filename });
     res.set('Connection', 'keep-alive');
     res.status(201).json({ creative });
   });
@@ -63,7 +63,7 @@ export function createCreativesRouter({ service, limits = {} }) {
     const advertiserId = typeof body.advertiserId === 'string' ? body.advertiserId.trim() : '';
     if (!NUMERIC_ID_RE.test(advertiserId)) throw badRequest('Conta de anúncio inválida.');
     const tiktokId = typeof body.tiktokId === 'string' ? body.tiktokId.trim() : '';
-    const creative = await service.registerTikTok(req.user, {
+    const creative = await service.registerTikTok(req.actor, {
       name: parseText(body.name, 'Nome', { min: 1, max: 100 }),
       kind: parseEnum(body.kind, KINDS, 'Tipo'),
       advertiserId,
@@ -73,16 +73,16 @@ export function createCreativesRouter({ service, limits = {} }) {
   });
 
   router.get('/:id', read, async (req, res) => {
-    res.json({ creative: await service.get(req.user, parseId(req.params.id)) });
+    res.json({ creative: await service.get(req.actor, parseId(req.params.id)) });
   });
 
   router.patch('/:id', write, async (req, res) => {
     const name = parseText(asObject(req.body).name, 'Nome', { min: 1, max: 100 });
-    res.json({ creative: await service.rename(req.user, parseId(req.params.id), name) });
+    res.json({ creative: await service.rename(req.actor, parseId(req.params.id), name) });
   });
 
   router.delete('/:id', write, async (req, res) => {
-    await service.remove(req.user, parseId(req.params.id));
+    await service.remove(req.actor, parseId(req.params.id));
     res.status(204).end();
   });
 
@@ -92,7 +92,7 @@ export function createCreativesRouter({ service, limits = {} }) {
    */
   router.get('/:id/file', read, async (req, res, next) => {
     try {
-      const { filePath, mime, ext, id } = await service.openFile(req.user, parseId(req.params.id));
+      const { filePath, mime, ext, id } = await service.openFile(req.actor, parseId(req.params.id));
       res.set({
         'Content-Type': mime,
         'X-Content-Type-Options': 'nosniff',

@@ -10,6 +10,7 @@ import { createCampaignsRepository } from '../../src/modules/campaigns/campaigns
 import { createBusinessCentersRepository } from '../../src/modules/tiktok/business-centers.repository.js';
 import { createProxiesRepository } from '../../src/modules/proxies/proxies.repository.js';
 import { createOauthAttemptsRepository } from '../../src/modules/tiktok/oauth-attempts.repository.js';
+import { createTeamRepository } from '../../src/modules/team/team.repository.js';
 import { createUsersRepository } from '../../src/modules/users/users.repository.js';
 
 /**
@@ -175,9 +176,9 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
     const config = loadConfig();
     const db = await openDatabase(config.database, { migrate: false });
     try {
-      const own = ['creatives', 'creative_tiktok_assets', 'tiktok_oauth_attempts', 'campaign_publications', 'campaign_creative_assets', 'proxies'];
+      const own = ['creatives', 'creative_tiktok_assets', 'tiktok_oauth_attempts', 'campaign_publications', 'campaign_creative_assets', 'proxies', 'workspace_members', 'workspace_invites'];
       const { rows: versions } = await db.query('SELECT version FROM schema_migrations ORDER BY version');
-      assert.ok(versions.length >= 8, 'migrações v2 a v8 aplicadas');
+      assert.ok(versions.length >= 9, 'migrações v2 a v9 aplicadas');
       for (const table of own) {
         const rls = (await db.query('SELECT relrowsecurity FROM pg_class WHERE oid = $1::regclass', [table])).rows[0];
         assert.equal(rls.relrowsecurity, true, `${table}: RLS ligado`);
@@ -270,6 +271,51 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
 
         await tx.query('DELETE FROM users WHERE id = $1', [owner]);
         assert.equal((await tx.query('SELECT COUNT(*)::int AS c FROM proxies WHERE user_id = $1', [owner])).rows[0].c, 0, 'cascata do usuário');
+      });
+    } finally {
+      await db.close();
+    }
+  });
+  it('colaboradores no banco real: convite de uso único, vínculo, áreas, sessão com o espaço do dono e cascata (transação desfeita)', async () => {
+    const config = loadConfig();
+    const db = await openDatabase(config.database, { migrate: false });
+    try {
+      await withRollback(db, async (txDb, tx) => {
+        const users = createUsersRepository(txDb);
+        const team = createTeamRepository(txDb);
+        const sessions = createSessionsRepository(txDb, { ttlMs: 60_000 });
+        const tag = randomBytes(4).toString('hex');
+        const owner = await users.create({ email: `dono.${tag}@example.com`, name: 'Dono Live', passwordHash: 'x', role: 'user', status: 'approved' });
+
+        const hash = `live-hash-${tag}`;
+        const invite = await team.upsertInvite(owner, { email: `Colab.${tag}@Example.com`, name: 'Colab Live', areas: ['creatives', 'campaigns'], tokenHash: hash, expiresAt: Date.now() + 3_600_000 });
+        assert.equal((await team.findValidInvite(hash)).ownerName, 'Dono Live');
+        assert.equal(await team.findValidInvite('outro-hash'), null);
+        await expectDbError(tx, "INSERT INTO workspace_invites (owner_id, email, name, areas, token_hash, expires_at) VALUES ($1, 'x@example.com', 'X', ARRAY['admin'], 'h-x', now() + interval '1 day')", [owner], (e) => e.code === '23514', 'área desconhecida é recusada pelo banco');
+        await expectDbError(tx, "INSERT INTO workspace_invites (owner_id, email, name, areas, token_hash, expires_at) VALUES ($1, $2, 'X', ARRAY['creatives'], 'h-y', now() + interval '1 day')", [owner, invite.email.toUpperCase()], (e) => isUniqueViolation(e), 'um convite por dono e e-mail');
+
+        const accepted = await team.acceptInvite(hash, { name: 'Colab Live', passwordHash: 'hash-da-senha' });
+        assert.equal(accepted.status, 'ok');
+        assert.equal((await team.acceptInvite(hash, { name: 'Colab Live', passwordHash: 'hash-da-senha' })).status, 'invalid', 'uso único');
+        assert.equal((await team.listInvites(owner)).length, 0);
+        const [member] = await team.listMembers(owner);
+        assert.deepEqual([member.email.toLowerCase(), member.areas], [`colab.${tag}@example.com`, ['creatives', 'campaigns']]);
+
+        // a sessão do colaborador carrega o espaço do dono (e as áreas) numa única consulta
+        const session = await sessions.create(accepted.userId);
+        const found = await sessions.resolve(session.token);
+        assert.deepEqual([found.member.ownerId, found.member.areas, found.member.ownerStatus], [owner, ['creatives', 'campaigns'], 'approved']);
+        assert.ok(!('ws_owner_id' in found.user), 'colunas auxiliares não vazam para o usuário');
+        assert.equal((await sessions.resolve((await sessions.create(owner)).token)).member, null, 'o dono não é colaborador');
+
+        assert.equal((await team.updateMemberAreas(owner, member.id, ['reports'])).areas[0], 'reports');
+        assert.equal(await team.updateMemberAreas(999_999_999, member.id, ['reports']), null, 'só o dono altera');
+        await expectDbError(tx, 'UPDATE workspace_members SET areas = $1 WHERE id = $2', [[], member.id], (e) => e.code === '23514', 'lista vazia é recusada');
+
+        assert.equal(await team.removeMember(999_999_999, member.id), false, 'outro dono não remove');
+        assert.equal(await team.removeMember(owner, member.id), true);
+        assert.equal(await sessions.resolve(session.token), null, 'a sessão do colaborador caiu junto');
+        assert.equal((await tx.query('SELECT COUNT(*)::int AS c FROM users WHERE id = $1', [accepted.userId])).rows[0].c, 0);
       });
     } finally {
       await db.close();

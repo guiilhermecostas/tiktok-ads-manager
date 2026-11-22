@@ -77,11 +77,11 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
   };
 
   router.get('/summary', async (req, res) => {
-    res.json({ summary: await campaigns.summary(req.user.id) });
+    res.json({ summary: await campaigns.summary(req.actor.id) });
   });
 
   router.get('/', async (req, res) => {
-    res.json({ campaigns: await campaigns.list(req.user.id) });
+    res.json({ campaigns: await campaigns.list(req.actor.id) });
   });
 
   /** Os criativos escolhidos precisam ser do próprio usuário (e do tipo certo): nunca aceite IDs de terceiros. */
@@ -93,30 +93,30 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
   router.post('/', async (req, res) => {
     const body = asObject(req.body);
     if (body.config === undefined) {
-      res.status(201).json({ campaign: await campaigns.create(req.user.id, parseLegacyCampaign(body)) });
+      res.status(201).json({ campaign: await campaigns.create(req.actor.id, parseLegacyCampaign(body)) });
       return;
     }
     const parsed = parseWizardCampaign(body);
-    await assertCreativesOwned(req.user, parsed.config);
-    res.status(201).json({ campaign: await campaigns.createWizard(req.user.id, parsed) });
+    await assertCreativesOwned(req.actor, parsed.config);
+    res.status(201).json({ campaign: await campaigns.createWizard(req.actor.id, parsed) });
   });
 
   router.get('/:id', async (req, res) => {
-    const campaign = await campaigns.get(req.user.id, parseId(req.params.id));
+    const campaign = await campaigns.get(req.actor.id, parseId(req.params.id));
     if (!campaign) throw notFound('Campanha não encontrada.');
     res.json({ campaign });
   });
 
   router.put('/:id', async (req, res) => {
     const id = parseId(req.params.id);
-    rejectIfPublishing(req.user.id, id);
+    rejectIfPublishing(req.actor.id, id);
     const body = asObject(req.body);
-    const current = await campaigns.get(req.user.id, id);
+    const current = await campaigns.get(req.actor.id, id);
     if (!current) throw notFound('Campanha não encontrada.');
 
     if (body.config === undefined) {
       if (current.wizard) throw badRequest('Esta campanha usa o assistente: envie a configuração completa.', 'wizard_required');
-      res.json({ campaign: await campaigns.update(req.user.id, id, parseLegacyCampaign(body)) });
+      res.json({ campaign: await campaigns.update(req.actor.id, id, parseLegacyCampaign(body)) });
       return;
     }
     if (!current.wizard) throw badRequest('Campanhas simples não podem ser convertidas pelo assistente.', 'legacy_campaign');
@@ -124,14 +124,14 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
       throw new HttpError(409, 'Esta campanha já foi publicada no TikTok e não pode mais ser editada aqui. Para mudar o anúncio, crie uma nova campanha.', 'already_published');
     }
     const parsed = parseWizardCampaign(body, { lockedFrom: current });
-    await assertCreativesOwned(req.user, parsed.config);
-    res.json({ campaign: await campaigns.updateWizard(req.user.id, id, parsed) });
+    await assertCreativesOwned(req.actor, parsed.config);
+    res.json({ campaign: await campaigns.updateWizard(req.actor.id, id, parsed) });
   });
 
   router.delete('/:id', async (req, res) => {
     const id = parseId(req.params.id);
-    rejectIfPublishing(req.user.id, id);
-    if (!(await campaigns.remove(req.user.id, id))) throw notFound('Campanha não encontrada.');
+    rejectIfPublishing(req.actor.id, id);
+    if (!(await campaigns.remove(req.actor.id, id))) throw notFound('Campanha não encontrada.');
     res.status(204).end();
   });
 
@@ -142,7 +142,7 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
    * próprios daquela conta (pixel, app, catálogo, formulário, identidade).
    */
   router.post('/:id/publish', async (req, res) => {
-    const limit = publishLimiter.consume(String(req.user.id));
+    const limit = publishLimiter.consume(String(req.actor.id));
     if (!limit.allowed) throw tooMany(limit.retryAfterSec);
     const body = asObject(req.body);
     if (body.confirm !== true) throw badRequest('Confirme a publicação.', 'confirmation_required');
@@ -152,17 +152,17 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
     const id = parseId(req.params.id);
     // A trava é adquirida ANTES de qualquer await (verificar + registrar no mesmo "tick"): o acesso ao banco é
     // assíncrono, e uma segunda requisição não pode passar pela verificação enquanto a primeira ainda está lendo.
-    rejectIfPublishing(req.user.id, id);
-    const key = lockKey(req.user.id, id);
+    rejectIfPublishing(req.actor.id, id);
+    const key = lockKey(req.actor.id, id);
     publishing.add(key);
     try {
-      const current = await campaigns.get(req.user.id, id);
+      const current = await campaigns.get(req.actor.id, id);
       if (!current) throw notFound('Campanha não encontrada.');
       if (!current.wizard) throw badRequest('Somente campanhas criadas pelo assistente podem ser publicadas.', 'legacy_campaign');
 
       // A conta precisa ser de uma Business Center do usuário (ou compartilhada com ele): 404 se não for.
-      await tiktok.assertAdvertiserAccess(req.user, advertiserId);
-      const existing = await campaigns.getPublication(req.user.id, id, advertiserId);
+      await tiktok.assertAdvertiserAccess(req.actor, advertiserId);
+      const existing = await campaigns.getPublication(req.actor.id, id, advertiserId);
       if (existing?.status === 'published') throw new HttpError(409, 'Esta campanha já foi publicada nesta conta de anúncio.', 'already_published');
 
       // Configuração da campanha + ajustes desta conta, validada de novo no servidor com todos os campos obrigatórios.
@@ -178,14 +178,14 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
         tiktokAdId: existing?.tiktokAdId ?? null,
       };
       const persist = (extra) =>
-        campaigns.saveProgress(req.user.id, id, advertiserId, { overrides: Object.keys(overrides).length ? overrides : null, ...progress, ...extra });
+        campaigns.saveProgress(req.actor.id, id, advertiserId, { overrides: Object.keys(overrides).length ? overrides : null, ...progress, ...extra });
 
       try {
         // Criativos primeiro: se o envio de algum arquivo falhar, NADA foi criado no TikTok ainda.
-        await assertCreativesOwned(req.user, config);
-        const assets = await creatives.resolveForPublish({ actor: req.user, campaignId: id, advertiserId, config });
+        await assertCreativesOwned(req.actor, config);
+        const assets = await creatives.resolveForPublish({ actor: req.actor, campaignId: id, advertiserId, config });
         await tiktok.publishCampaign({
-          actor: req.user,
+          actor: req.actor,
           advertiserId,
           config,
           assets,
@@ -206,7 +206,7 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
 
       // Tudo criado nesta conta: a campanha local passa a "pausada" (é assim que nasce no TikTok).
       const publication = await persist({ error: null, publishedAt: new Date().toISOString() });
-      res.json({ campaign: await campaigns.setStatus(req.user.id, id, 'paused'), publication });
+      res.json({ campaign: await campaigns.setStatus(req.actor.id, id, 'paused'), publication });
     } finally {
       publishing.delete(key);
     }

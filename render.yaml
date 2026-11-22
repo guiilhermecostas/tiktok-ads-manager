@@ -42,3 +42,9 @@ services:
         sync: false
       - key: TIKTOK_REDIRECT_URI
         sync: false
+      - key: RESEND_API_KEY       # convites de colaboradores por e-mail (Resend)
+        sync: false
+      - key: APP_URL              # endereço público do sistema, usado nos links dos e-mails (https://SEU-SERVICO.onrender.com)
+        sync: false
+      - key: EMAIL_FROM
+        value: "TikTok Ads Manager <convites@payfac.dev>"

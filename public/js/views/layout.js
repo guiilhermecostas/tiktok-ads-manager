@@ -1,13 +1,15 @@
 import { post } from '../api.js';
 import { h, icon } from '../dom.js';
-import { state } from '../state.js';
+import { can, isWorkspaceOwner, state } from '../state.js';
 import { openCampaignWizard } from './campaign-wizard/index.js';
 
+// `areas`: o item aparece para quem tem ao menos uma destas áreas (o dono da conta tem todas); `ownerOnly`: só o dono do espaço.
 const NAV = [
   { path: '/', label: 'Início', icon: 'home' },
-  { path: '/creatives', label: 'Criativos', icon: 'image' },
-  { path: '/tiktok', label: 'TikTok Ads', icon: 'chart' },
-  { path: '/business-centers', label: 'Contas TikTok', icon: 'building' },
+  { path: '/creatives', label: 'Criativos', icon: 'image', areas: ['creatives'] },
+  { path: '/tiktok', label: 'TikTok Ads', icon: 'chart', areas: ['reports'] },
+  { path: '/business-centers', label: 'Contas TikTok', icon: 'building', areas: ['accounts'] },
+  { path: '/team', label: 'Colaboradores', icon: 'users', ownerOnly: true, section: 'Gestão' },
   { path: '/admin', label: 'Administração', icon: 'shield', adminOnly: true, section: 'Gestão' },
 ];
 
@@ -48,7 +50,7 @@ document.addEventListener('keydown', (event) => {
 export function renderLayout(ctx, currentPath, content) {
   const { user } = state;
   const isActive = (itemPath) => currentPath === itemPath || (itemPath !== '/' && currentPath.startsWith(`${itemPath}/`));
-  const visibleItems = NAV.filter((item) => !item.adminOnly || user.role === 'admin');
+  const visibleItems = NAV.filter((item) => (!item.adminOnly || (user.role === 'admin' && isWorkspaceOwner())) && (!item.ownerOnly || isWorkspaceOwner()) && (!item.areas || can(...item.areas)));
 
   async function logout() {
     try {
@@ -167,7 +169,7 @@ export function renderLayout(ctx, currentPath, content) {
         'div',
         { class: 'account' },
         h('span', { class: 'avatar', 'aria-hidden': 'true' }, initials(user.name)),
-        h('div', { class: 'account__text' }, h('span', { class: 'account__name' }, user.name), h('span', { class: 'account__sub' }, user.role === 'admin' ? user.email : (user.company ?? user.email))),
+        h('div', { class: 'account__text' }, h('span', { class: 'account__name' }, user.name), h('span', { class: 'account__sub' }, !isWorkspaceOwner() ? `Equipe de ${state.workspace.ownerName}` : user.role === 'admin' ? user.email : (user.company ?? user.email))),
       ),
       h('button', { type: 'button', class: 'logout', title: 'Sair', onClick: logout }, icon('logout', 18), h('span', { class: 'logout__label' }, 'Sair')),
     ),
@@ -195,7 +197,8 @@ export function renderLayout(ctx, currentPath, content) {
     'Publicar campanha',
   );
 
-  shell.append(sidebar, workspace, fab);
+  shell.append(sidebar, workspace);
+  if (can('campaigns')) shell.append(fab); // (append nativo imprimiria "null")
   return shell;
 }
 

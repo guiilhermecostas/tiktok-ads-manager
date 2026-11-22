@@ -1,6 +1,7 @@
 import { get } from '../../api.js';
 import { h, setChildren } from '../../dom.js';
 import { formatBytes } from '../../format.js';
+import { can } from '../../state.js';
 import { alertBox, button, emptyState, openModal, spinner } from '../../ui.js';
 import { creativeThumb } from './thumb.js';
 import { createUploader, uploadButton } from './uploader.js';
@@ -129,8 +130,8 @@ export function pickCreatives({ kind, multiple = false, max = 1, selected = [], 
       body: h(
         'div',
         { class: 'modal__body picker' },
-        h('div', { class: 'picker__toolbar' }, search, uploadButton(uploader, { label: kind === 'video' ? 'Enviar vídeo' : 'Enviar imagem', variant: 'secondary' })),
-        uploader.element,
+        h('div', { class: 'picker__toolbar' }, search, can('creatives') ? uploadButton(uploader, { label: kind === 'video' ? 'Enviar vídeo' : 'Enviar imagem', variant: 'secondary' }) : null), // quem só publica campanhas escolhe, mas não envia
+        can('creatives') ? uploader.element : null,
         grid,
         h('div', { class: 'modal__footer picker__footer' }, footerInfo, button('Cancelar', { onClick: () => done(null) }), confirm),
       ),

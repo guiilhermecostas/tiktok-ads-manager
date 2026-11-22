@@ -18,12 +18,20 @@ export function createSessionsRepository(db, { ttlMs }) {
       return { token, csrfToken, expiresAt };
     },
 
-    /** Retorna { session, user } (user = linha completa de `users`) ou null se inválida/expirada. */
+    /**
+     * Retorna { session, user, member } ou null se a sessão for inválida/expirada. `user` é a linha completa de `users`;
+     * `member` é null para donos de conta e, para colaboradores, { ownerId, ownerName, ownerStatus, areas } (relido a cada
+     * requisição: remover o colaborador ou mudar as áreas dele vale na hora).
+     */
     async resolve(token) {
       if (typeof token !== 'string' || token.length < 20 || token.length > 200) return null;
       const { rows } = await db.query(
-        `SELECT s.token_hash, s.csrf_token, s.expires_at, u.*
-           FROM sessions s JOIN users u ON u.id = s.user_id
+        `SELECT s.token_hash, s.csrf_token, s.expires_at, u.*,
+                m.owner_id AS ws_owner_id, m.areas AS ws_areas, o.name AS ws_owner_name, o.status AS ws_owner_status
+           FROM sessions s
+           JOIN users u ON u.id = s.user_id
+           LEFT JOIN workspace_members m ON m.user_id = u.id
+           LEFT JOIN users o ON o.id = m.owner_id
           WHERE s.token_hash = $1`,
         [hashToken(token)],
       );
@@ -33,8 +41,13 @@ export function createSessionsRepository(db, { ttlMs }) {
         await db.query('DELETE FROM sessions WHERE token_hash = $1', [row.token_hash]);
         return null;
       }
-      const { token_hash: tokenHash, csrf_token: csrfToken, expires_at: expiresAt, ...user } = row;
-      return { session: { tokenHash, csrfToken, expiresAt: new Date(expiresAt).getTime() }, user };
+      const {
+        token_hash: tokenHash, csrf_token: csrfToken, expires_at: expiresAt,
+        ws_owner_id: ownerId, ws_areas: areas, ws_owner_name: ownerName, ws_owner_status: ownerStatus,
+        ...user
+      } = row;
+      const member = ownerId ? { ownerId, ownerName, ownerStatus, areas: areas ?? [] } : null;
+      return { session: { tokenHash, csrfToken, expiresAt: new Date(expiresAt).getTime() }, user, member };
     },
 
     async destroy(token) {

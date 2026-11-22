@@ -63,39 +63,39 @@ export function createProxiesRouter({ service, limits = {} }) {
   // Testar abre conexões para fora e chama serviços externos: limite bem menor.
   const testLimiter = new RateLimiter({ max: limits.proxiesTest ?? 10, windowMs: 60 * 1000 });
   const throttle = (limiter) => (req, _res, next) => {
-    const result = limiter.consume(String(req.user.id));
+    const result = limiter.consume(String(req.actor.id));
     return result.allowed ? next() : next(tooMany(result.retryAfterSec));
   };
   const read = throttle(readLimiter);
   const write = throttle(writeLimiter);
 
   router.get('/', read, async (req, res) => {
-    res.json({ configured: service.isConfigured(), max: service.maxPerUser, proxies: await service.list(req.user) });
+    res.json({ configured: service.isConfigured(), max: service.maxPerUser, proxies: await service.list(req.actor) });
   });
 
   router.post('/', write, async (req, res) => {
-    res.status(201).json({ proxy: await service.create(req.user, parseProxy(req.body)) });
+    res.status(201).json({ proxy: await service.create(req.actor, parseProxy(req.body)) });
   });
 
   router.patch('/:id', write, async (req, res) => {
-    res.json({ proxy: await service.update(req.user, parseId(req.params.id), parseProxy(req.body)) });
+    res.json({ proxy: await service.update(req.actor, parseId(req.params.id), parseProxy(req.body)) });
   });
 
   router.delete('/:id', write, async (req, res) => {
-    await service.remove(req.user, parseId(req.params.id));
+    await service.remove(req.actor, parseId(req.params.id));
     res.status(204).end();
   });
 
   router.post('/:id/activate', write, async (req, res) => {
-    res.json({ proxy: await service.activate(req.user, parseId(req.params.id)) });
+    res.json({ proxy: await service.activate(req.actor, parseId(req.params.id)) });
   });
 
   router.post('/:id/deactivate', write, async (req, res) => {
-    res.json({ proxy: await service.deactivate(req.user, parseId(req.params.id)) });
+    res.json({ proxy: await service.deactivate(req.actor, parseId(req.params.id)) });
   });
 
   router.post('/:id/test', throttle(testLimiter), async (req, res) => {
-    res.json({ result: await service.test(req.user, parseId(req.params.id)) });
+    res.json({ result: await service.test(req.actor, parseId(req.params.id)) });
   });
 
   router.stop = () => {

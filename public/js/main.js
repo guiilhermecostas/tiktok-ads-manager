@@ -1,6 +1,6 @@
 import { get, onSessionInvalid } from './api.js';
 import { clear, h } from './dom.js';
-import { setSession, state } from './state.js';
+import { can, isWorkspaceOwner, setSession, state } from './state.js';
 import { spinner } from './ui.js';
 import { renderLayout } from './views/layout.js';
 import { loginView } from './views/login.js';
@@ -16,17 +16,22 @@ import { creativesView } from './views/creatives/library.js';
 import { adAccountsView } from './views/ad-accounts.js';
 import { proxySettingsView } from './views/proxy-settings.js';
 import { tiktokConnectedView } from './views/tiktok-connected.js';
+import { inviteView } from './views/invite.js';
+import { teamView } from './views/team.js';
 
 const root = document.getElementById('app');
 
+// `areas`: áreas liberadas para colaboradores (o dono da conta tem todas); `ownerOnly`: só o dono do espaço. O servidor é quem
+// realmente barra; aqui só evitamos mostrar telas que dariam erro.
 const PROTECTED_ROUTES = {
   '/': { title: 'Início', view: dashboardView },
-  '/campaigns': { title: 'Campanhas', view: campaignsView },
-  '/creatives': { title: 'Criativos', view: creativesView },
-  '/tiktok': { title: 'TikTok Ads', view: tiktokAdsView },
-  '/business-centers': { title: 'Contas TikTok', view: businessCentersView },
-  '/business-centers/accounts': { title: 'Contas de anúncio', view: adAccountsView },
-  '/business-centers/proxy': { title: 'Proxy', view: proxySettingsView },
+  '/campaigns': { title: 'Campanhas', view: campaignsView, areas: ['campaigns'] },
+  '/creatives': { title: 'Criativos', view: creativesView, areas: ['creatives'] },
+  '/tiktok': { title: 'TikTok Ads', view: tiktokAdsView, areas: ['reports'] },
+  '/business-centers': { title: 'Contas TikTok', view: businessCentersView, areas: ['accounts'] },
+  '/business-centers/accounts': { title: 'Contas de anúncio', view: adAccountsView, areas: ['accounts'] },
+  '/business-centers/proxy': { title: 'Proxy', view: proxySettingsView, areas: ['accounts'] },
+  '/team': { title: 'Colaboradores', view: teamView, ownerOnly: true },
   '/admin': { title: 'Administração', view: adminView, adminOnly: true },
 };
 const GUEST_ROUTES = { '/login': loginView, '/register': registerView };
@@ -62,6 +67,12 @@ async function render() {
     return mount(tiktokConnectedView());
   }
 
+  // 0b) Convite de colaborador: página pública (a pessoa ainda não tem conta; o token vem no fragmento "#" do link).
+  if (path === '/invite') {
+    document.title = 'Convite · TikTok Ads Manager';
+    return mount(inviteView(ctx));
+  }
+
   // 1) Visitante: só login/cadastro.
   if (!state.user) {
     if (path !== '/login' && path !== '/register') return navigate('/login', { replace: true });
@@ -80,7 +91,7 @@ async function render() {
   // 3) Conta aprovada.
   if (path === '/login' || path === '/register') return navigate('/', { replace: true });
   // Endereços antigos do assistente (agora é um pop-up): abrem a lista de campanhas e o pop-up por cima.
-  if (path === '/campaigns/new' || path === '/campaigns/edit') {
+  if ((path === '/campaigns/new' || path === '/campaigns/edit') && can('campaigns')) {
     const id = Number(new URLSearchParams(location.search).get('id'));
     history.replaceState({}, '', '/campaigns');
     await render();
@@ -88,7 +99,8 @@ async function render() {
     return undefined;
   }
   const route = PROTECTED_ROUTES[path];
-  if (!route || (route.adminOnly && state.user.role !== 'admin')) {
+  const allowed = route && (!route.adminOnly || (state.user.role === 'admin' && isWorkspaceOwner())) && (!route.ownerOnly || isWorkspaceOwner()) && (!route.areas || can(...route.areas));
+  if (!allowed) {
     document.title = 'Página não encontrada · TikTok Ads Manager';
     return mount(renderLayout(ctx, path, h('div', { class: 'card card--pad' }, h('h2', null, 'Página não encontrada'), h('p', { class: 'muted' }, 'O endereço acessado não existe ou você não tem permissão para vê-lo.'))));
   }

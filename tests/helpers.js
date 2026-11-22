@@ -42,7 +42,7 @@ async function truncateAll(db) {
  * `cleaner`: por padrão um limpador FALSO (os testes usam mídia de mentira); `'real'` usa o FFmpeg de verdade;
  * também aceita um objeto com o mesmo contrato.
  */
-export async function startTestServer({ limits, config: overrides, fetchFn, isolated = false, creatives, cleaner } = {}) {
+export async function startTestServer({ limits, config: overrides, fetchFn, isolated = false, creatives, cleaner, mailer } = {}) {
   const MB = 1024 * 1024;
   const creativesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'creatives-test-'));
   const config = loadConfig({
@@ -62,7 +62,7 @@ export async function startTestServer({ limits, config: overrides, fetchFn, isol
   }
   const tmpDir = path.join(creativesDir, '.tmp');
   const chosenCleaner = cleaner === 'real' ? createCreativeCleaner({ ffmpegPath, tmpDir, concurrency: 2, log: silentLog }) : (cleaner ?? createStubCleaner());
-  const built = createApp({ config, db, log: silentLog, limits, fetchFn, cleaner: chosenCleaner });
+  const built = createApp({ config, db, log: silentLog, limits, fetchFn, cleaner: chosenCleaner, mailer });
   await built.authService.ensureAdmin(silentLog);
   await built.creativeStorage.init();
 

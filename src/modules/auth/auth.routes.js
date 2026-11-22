@@ -4,7 +4,7 @@ import { tooMany } from '../../lib/http-error.js';
 import { asObject, parseEmail, parsePassword, parseText } from '../../lib/validation.js';
 import { requireAuth } from '../../middleware/guards.js';
 import { sessionCookieOptions } from '../../middleware/session.js';
-import { toPublicUser } from '../users/users.repository.js';
+import { presentSession } from './session-view.js';
 
 export function createAuthRouter({ authService, sessions, config, limits = {} }) {
   const router = Router();
@@ -50,13 +50,14 @@ export function createAuthRouter({ authService, sessions, config, limits = {} })
     // Anti session-fixation: descarta a sessão anterior e emite um token novo.
     if (req.sessionToken) await sessions.destroy(req.sessionToken);
     res.cookie(config.cookieName, session.token, sessionCookieOptions(config, session.expiresAt));
-    res.json({ user: toPublicUser(user), csrfToken: session.csrfToken });
+    const found = await sessions.resolve(session.token); // inclui o espaço de trabalho (colaborador ou dono)
+    res.json({ ...presentSession(found?.user ?? user, found?.member ?? null), csrfToken: session.csrfToken });
   });
 
   router.get('/me', (req, res) => {
     // Visitante não é erro: responde 200 com user nulo (evita ruído de 401 no console do navegador).
-    if (!req.user) return res.json({ user: null, csrfToken: null });
-    res.json({ user: toPublicUser(req.user), csrfToken: req.session.csrfToken });
+    if (!req.user) return res.json({ user: null, workspace: null, csrfToken: null });
+    res.json({ ...presentSession(req.user, req.member), csrfToken: req.session.csrfToken });
   });
 
   router.post('/logout', requireAuth, async (req, res) => {
