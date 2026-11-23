@@ -183,6 +183,24 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
 - API: `POST /api/profile/avatar` (corpo binário `image/jpeg` ou `image/png`), `DELETE /api/profile/avatar`, `PATCH /api/profile` (`{ name }`; e-mail,
   função e status nunca vêm do cliente). Limite de 20 trocas por minuto por pessoa.
 
+## Início (chat), Relatórios, Arquivos e demais telas
+
+- **Início** é um chat no estilo ChatGPT (por enquanto só o design: sugestões clicáveis, campo que cresce, "Enter envia", respostas de exemplo). A
+  conversa fica só na memória do navegador (nada vai ao servidor) e é descartada se outra pessoa entrar. O texto entra sempre como texto.
+- **Relatórios** (área "Relatórios" dos colaboradores) tem duas abas. **Visão geral**: 7 indicadores (gasto, impressões, cliques, CTR, CPC, conversões e
+  custo por conversão) com variação contra o período anterior e mini gráfico; gráfico de linha com **curva suave** (spline cúbica monótona, SVG puro, sem
+  biblioteca, com dica ao passar o mouse e navegação por setas); "O que chama atenção" (observações automáticas); ranking por conta com busca e ordenação.
+  Filtros: período (7/14/30 dias), conta, moeda (valores de moedas diferentes nunca se somam) e comparar. API: `GET /api/tiktok/overview?days=&advertiserId=&compare=1`
+  (série diária contínua por moeda, `previous`, `accounts`, `accountOptions`). **Por conta**: desempenho e campanhas de uma conta (o antigo "TikTok Ads"; `/tiktok` redireciona).
+- **Arquivos** (aba de Contas TikTok): anexos para a equipe (ex.: arquivos de logins). Gravados **criptografados** (AES-256-GCM, dono autenticado; desligado sem
+  `TOKEN_ENCRYPTION_KEY`), só txt/csv/log/md/pdf/png/jpg/docx/xlsx **conferidos pelo conteúdo**, sempre entregues como **download** (`octet-stream`, `attachment`,
+  `nosniff`, sem cache). Limites: 5 MB por arquivo, 50 arquivos e 100 MB por conta. Para senhas, um gerenciador de senhas é mais seguro.
+- **Moeda das contas**: selo por conta (BRL neutro, outras em amarelo), "Moedas das contas" no cartão da conexão, filtro por moeda, e o campo de valor do
+  assistente mostra a moeda ("BRL / USD") com o aviso de que o valor **não é convertido**.
+- **Pixels existentes**: no passo "Conversão" (e nos ajustes por conta) o assistente lista os pixels da conta (`GET /api/tiktok/advertisers/:id/pixels`, cache de
+  60 s, `?fresh=1` no botão Atualizar) e ainda permite digitar o ID.
+- **Passo "Público" compacto**: botões (poucas opções) e lista suspensa com busca e chips (muitas), com respeito ao máximo de itens.
+
 ## Biblioteca de criativos
 
 - **Criativos** (menu lateral): cada usuário guarda os próprios arquivos (JPG/PNG até 10 MB, MP4/MOV até 200 MB, cota de 2 GB por padrão,
@@ -258,6 +276,7 @@ src/
     creatives/         biblioteca de criativos (armazenamento, validação por conteúdo, rotas)
     team/              colaboradores: convites, aceite, áreas de acesso (repositório, serviço, rotas)
     profile/           Minha conta: foto de perfil (recodificada no FFmpeg) e nome
+    files/             arquivos anexados da conta (criptografados, só download)
     mail/              envio de e-mail pelo Resend e modelo do convite
 scripts/               utilitários: db (check/migrate), import-sqlite, supabase-setup.sql
 shared/                regras compartilhadas (navegador + servidor): campanhas, etiquetas de conta, permissões por área

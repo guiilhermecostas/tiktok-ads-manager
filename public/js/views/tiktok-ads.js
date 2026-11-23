@@ -2,7 +2,7 @@ import { get } from '../api.js';
 import { h } from '../dom.js';
 import { formatCurrency, formatNumber, formatPercent, tiktokObjective, tiktokStatus } from '../format.js';
 import { alertBox, badge, emptyState, field, spinner } from '../ui.js';
-import { pageHeader } from './layout.js';
+import { reportsLayout } from './reports.js';
 
 function metric(label, value) {
   return h('div', { class: 'card metric metric--sm' }, h('span', { class: 'metric__label' }, label), h('strong', { class: 'metric__value' }, value));
@@ -11,14 +11,12 @@ function metric(label, value) {
 /** Página alimentada pelas Business Centers cadastradas: contas, desempenho e campanhas do TikTok. */
 export async function tiktokAdsView() {
   const { advertisers } = await get('/tiktok/advertisers');
-  const header = pageHeader('TikTok Ads', 'Desempenho e campanhas direto das suas Business Centers.');
+  // Mesma estrutura da aba "Visão geral" (título e abas de Relatórios); aqui o foco é UMA conta: desempenho e campanhas dela.
+  const wrap = (...children) => reportsLayout({ active: '/reports/accounts', subtitle: 'Desempenho e campanhas de uma conta de anúncio, direto do TikTok.', children });
 
   if (!advertisers.length) {
     return {
-      element: h(
-        'div',
-        null,
-        header,
+      element: wrap(
         h(
           'div',
           { class: 'card' },
@@ -110,7 +108,7 @@ export async function tiktokAdsView() {
 
   if (!advertiser) {
     data.replaceChildren(alertBox('Todas as suas Business Centers estão com o token com erro. Atualize o token em Contas TikTok (Editar).'));
-    return { element: h('div', null, header, data) };
+    return { element: wrap(data) };
   }
 
   const advField = field('Conta de anúncio', {
@@ -130,5 +128,5 @@ export async function tiktokAdsView() {
   toolbar.append(advField.element, periodField.element);
 
   loadData();
-  return { element: h('div', null, header, toolbar, data), cleanup: () => { loadId += 1; } };
+  return { element: wrap(toolbar, data), cleanup: () => { loadId += 1; } };
 }

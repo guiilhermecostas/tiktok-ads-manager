@@ -10,6 +10,8 @@ import { createCampaignsRepository } from '../../src/modules/campaigns/campaigns
 import { createBusinessCentersRepository } from '../../src/modules/tiktok/business-centers.repository.js';
 import { createProxiesRepository } from '../../src/modules/proxies/proxies.repository.js';
 import { createOauthAttemptsRepository } from '../../src/modules/tiktok/oauth-attempts.repository.js';
+import { decryptBuffer, encryptBuffer } from '../../src/lib/crypto.js';
+import { createFilesRepository } from '../../src/modules/files/files.repository.js';
 import { createAvatarsRepository } from '../../src/modules/profile/avatars.repository.js';
 import { createTeamRepository } from '../../src/modules/team/team.repository.js';
 import { createUsersRepository } from '../../src/modules/users/users.repository.js';
@@ -183,9 +185,9 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
     const config = loadConfig();
     const db = await openDatabase(config.database, { migrate: false });
     try {
-      const own = ['creatives', 'creative_tiktok_assets', 'tiktok_oauth_attempts', 'campaign_publications', 'campaign_creative_assets', 'proxies', 'workspace_members', 'workspace_invites', 'user_avatars'];
+      const own = ['creatives', 'creative_tiktok_assets', 'tiktok_oauth_attempts', 'campaign_publications', 'campaign_creative_assets', 'proxies', 'workspace_members', 'workspace_invites', 'user_avatars', 'workspace_files'];
       const { rows: versions } = await db.query('SELECT version FROM schema_migrations ORDER BY version');
-      assert.ok(versions.length >= 10, 'migrações v2 a v10 aplicadas');
+      assert.ok(versions.length >= 11, 'migrações v2 a v11 aplicadas');
       for (const table of own) {
         const rls = (await db.query('SELECT relrowsecurity FROM pg_class WHERE oid = $1::regclass', [table])).rows[0];
         assert.equal(rls.relrowsecurity, true, `${table}: RLS ligado`);
@@ -365,6 +367,35 @@ describe('banco REAL (Supabase): repositórios, tipos e restrições (transaçã
         await avatars.save(member, Buffer.from([0xff, 0xd8, 0xff, 5]));
         assert.equal(await team.removeMember(owner, (await team.listMembers(owner))[0].id), true);
         assert.equal((await tx.query('SELECT COUNT(*)::int AS c FROM user_avatars WHERE user_id = $1', [member])).rows[0].c, 0, 'a foto some com a conta do colaborador');
+      });
+    } finally {
+      await db.close();
+    }
+  });
+  it('arquivos anexados no banco real: gravados cifrados, isolados por conta, com limites do tipo/tamanho e cascata (transação desfeita)', async () => {
+    const config = loadConfig();
+    const db = await openDatabase(config.database, { migrate: false });
+    try {
+      await withRollback(db, async (txDb, tx) => {
+        const users = createUsersRepository(txDb);
+        const files = createFilesRepository(txDb);
+        const key = randomBytes(32);
+        const tag = randomBytes(4).toString('hex');
+        const owner = await users.create({ email: `dono.${tag}@example.com`, name: 'Dono', passwordHash: 'x', role: 'user', status: 'approved' });
+        const other = await users.create({ email: `outro.${tag}@example.com`, name: 'Outro', passwordHash: 'x', role: 'user', status: 'approved' });
+        const secret = Buffer.from('usuario: a\nsenha: S3nh@-Live');
+        const id = await files.create(owner, { uploadedBy: owner, name: 'logins.txt', ext: 'txt', size: secret.length, data: encryptBuffer(secret, key, owner) });
+        const row = await files.get(owner, id);
+        assert.ok(!Buffer.from(row.data).includes(Buffer.from('S3nh@')), 'o banco só guarda o dado cifrado');
+        assert.deepEqual(decryptBuffer(row.data, key, owner), secret, 'BYTEA volta idêntico e decifra');
+        assert.throws(() => decryptBuffer(row.data, key, other), 'outro dono não decifra');
+        assert.equal(await files.get(other, id), null, 'isolamento por conta');
+        assert.equal(await files.remove(other, id), false);
+        assert.deepEqual((await files.usage(owner)), { count: 1, bytes: secret.length });
+        await expectDbError(tx, "INSERT INTO workspace_files (owner_id, name, ext, size, data) VALUES ($1, 'x', 'exe', 10, $2)", [owner, Buffer.alloc(40)], (e) => e.code === '23514', 'extensão fora da lista');
+        await expectDbError(tx, "INSERT INTO workspace_files (owner_id, name, ext, size, data) VALUES ($1, 'x', 'txt', 5242881, $2)", [owner, Buffer.alloc(40)], (e) => e.code === '23514', 'acima de 5 MB');
+        await tx.query('DELETE FROM users WHERE id = $1', [owner]);
+        assert.equal((await tx.query('SELECT COUNT(*)::int AS c FROM workspace_files WHERE owner_id = $1', [owner])).rows[0].c, 0, 'cascata ao apagar o dono');
       });
     } finally {
       await db.close();

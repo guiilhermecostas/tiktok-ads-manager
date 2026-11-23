@@ -9,7 +9,7 @@ import { openProfile } from './profile.js';
 const NAV = [
   { path: '/', label: 'Início', icon: 'home' },
   { path: '/creatives', label: 'Criativos', icon: 'image', areas: ['creatives'] },
-  { path: '/tiktok', label: 'TikTok Ads', icon: 'chart', areas: ['reports'] },
+  { path: '/reports', label: 'Relatórios', icon: 'chart', areas: ['reports'] },
   { path: '/business-centers', label: 'Contas TikTok', icon: 'building', areas: ['accounts'] },
   { path: '/team', label: 'Colaboradores', icon: 'users', ownerOnly: true, section: 'Gestão' },
   { path: '/admin', label: 'Administração', icon: 'shield', adminOnly: true, section: 'Gestão' },
@@ -192,7 +192,7 @@ export function renderLayout(ctx, currentPath, content) {
   );
 
   shell.append(sidebar, workspace);
-  if (can('campaigns')) shell.append(fab); // (append nativo imprimiria "null")
+  if (can('campaigns') && currentPath !== '/') shell.append(fab); // no Início (chat) o botão fica de fora para não cobrir o campo de mensagem // (append nativo imprimiria "null")
   return shell;
 }
 

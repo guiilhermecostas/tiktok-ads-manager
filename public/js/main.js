@@ -6,7 +6,8 @@ import { renderLayout } from './views/layout.js';
 import { loginView } from './views/login.js';
 import { registerView } from './views/register.js';
 import { statusView } from './views/status.js';
-import { dashboardView } from './views/dashboard.js';
+import { homeChatView } from './views/home-chat.js';
+import { reportsView } from './views/reports.js';
 import { campaignsView } from './views/campaigns.js';
 import { openCampaignWizard } from './views/campaign-wizard/index.js';
 import { adminView } from './views/admin.js';
@@ -25,10 +26,11 @@ const root = document.getElementById('app');
 // `areas`: áreas liberadas para colaboradores (o dono da conta tem todas); `ownerOnly`: só o dono do espaço. O servidor é quem
 // realmente barra; aqui só evitamos mostrar telas que dariam erro.
 const PROTECTED_ROUTES = {
-  '/': { title: 'Início', view: dashboardView },
+  '/': { title: 'Início', view: homeChatView },
   '/campaigns': { title: 'Campanhas', view: campaignsView, areas: ['campaigns'] },
   '/creatives': { title: 'Criativos', view: creativesView, areas: ['creatives'] },
-  '/tiktok': { title: 'TikTok Ads', view: tiktokAdsView, areas: ['reports'] },
+  '/reports': { title: 'Relatórios', view: reportsView, areas: ['reports'] },
+  '/reports/accounts': { title: 'Relatórios por conta', view: tiktokAdsView, areas: ['reports'] },
   '/business-centers': { title: 'Contas TikTok', view: businessCentersView, areas: ['accounts'] },
   '/business-centers/accounts': { title: 'Contas de anúncio', view: adAccountsView, areas: ['accounts'] },
   '/business-centers/proxy': { title: 'Proxy', view: proxySettingsView, areas: ['accounts'] },
@@ -91,6 +93,7 @@ async function render() {
   }
 
   // 3) Conta aprovada.
+  if (path === '/tiktok') return navigate('/reports/accounts', { replace: true }); // endereço antigo (TikTok Ads)
   if (path === '/login' || path === '/register') return navigate('/', { replace: true });
   // Endereços antigos do assistente (agora é um pop-up): abrem a lista de campanhas e o pop-up por cima.
   if ((path === '/campaigns/new' || path === '/campaigns/edit') && can('campaigns')) {
