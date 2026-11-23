@@ -442,6 +442,19 @@ describe('ID da Business Center nas conexões por link', () => {
     fake.state.ownerBc = { 9401: '700000000000000002', 9402: '700000000000000001', 9403: '700000000000000002' };
     const connection = await connect(user, { advertisers: ['9401', '9402', '9403'] });
     assert.deepEqual(connection.bcIds, ['700000000000000001', '700000000000000002']);
+    // quantas contas há em cada BC: a que tem mais vem primeiro (é o que a tela mostra, "ID — N contas")
+    assert.deepEqual(connection.bcGroups, [{ id: '700000000000000002', accounts: 2 }, { id: '700000000000000001', accounts: 1 }]);
+    assert.equal(connection.bcGroups.reduce((sum, g) => sum + g.accounts, 0), connection.advertiserCount);
+    assert.deepEqual((await listed(user))[0].bcGroups, connection.bcGroups, 'a lista de conexões traz o mesmo');
+  });
+
+  it('empate no número de contas: desempata pelo ID (ordem estável); conta sem BC informada fica fora dos grupos', async () => {
+    await reset();
+    const user = await createUser(ctx, { approve: true });
+    fake.state.ownerBc = { 9411: '700000000000000009', 9412: '700000000000000005', 9413: null };
+    const connection = await connect(user, { advertisers: ['9411', '9412', '9413'] });
+    assert.deepEqual(connection.bcGroups, [{ id: '700000000000000005', accounts: 1 }, { id: '700000000000000009', accounts: 1 }]);
+    assert.equal(connection.advertiserCount, 3, 'as 3 contas existem; só 2 têm BC informada');
   });
 
   it('conexão por token continua mostrando o ID informado no cadastro', async () => {
@@ -450,6 +463,7 @@ describe('ID da Business Center nas conexões por link', () => {
     const res = await user.client.post('/api/tiktok/business-centers', { name: 'Por token', bcId: '222', accessToken: OTHER_TOKEN });
     assert.equal(res.status, 201);
     assert.deepEqual([res.json.businessCenter.bcId, res.json.businessCenter.bcIds], ['222', ['222']]);
+    assert.deepEqual(res.json.businessCenter.bcGroups, [{ id: '222', accounts: 1 }], 'por token: o ID do cadastro com todas as contas');
   });
 
   it('as contas não informam a BC: usa a lista de BCs do token SÓ se houver exatamente uma (sem adivinhar)', async () => {

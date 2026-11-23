@@ -47,6 +47,8 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
     bcId: bc.bcId,
     // IDs da Business Center: o informado no cadastro por token, ou (conexão por link) o das BCs donas das contas autorizadas.
     bcIds: bc.bcId ? [bc.bcId] : bc.ownerBcIds,
+    // Quantas contas de anúncio há em cada Business Center do TikTok dentro desta conexão (uma conexão por link pode cobrir várias).
+    bcGroups: bc.bcId ? [{ id: bc.bcId, accounts: bc.advertiserCount }] : bc.ownerBcGroups,
     authType: bc.authType,
     viaProxy: bc.viaProxy,
     name: bc.name,

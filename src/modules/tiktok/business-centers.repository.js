@@ -1,6 +1,19 @@
 import { toIso } from '../../db/helpers.js';
 import { decrypt, encrypt } from '../../lib/crypto.js';
 
+/** O driver devolve JSON já convertido; por garantia aceita também texto. Só entra o que tem a forma esperada. */
+function parseGroups(value) {
+  let list = value ?? [];
+  if (typeof list === 'string') {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      list = [];
+    }
+  }
+  return Array.isArray(list) ? list.filter((g) => typeof g?.id === 'string' && Number.isInteger(g.accounts)).map((g) => ({ id: g.id, accounts: g.accounts })) : [];
+}
+
 /** Visão do repositório: NUNCA inclui o token. */
 function toRecord(row) {
   return {
@@ -9,7 +22,9 @@ function toRecord(row) {
     ownerName: row.owner_name ?? null,
     bcId: row.bc_id ?? null,
     viaProxy: row.via_proxy === true,
-    ownerBcIds: row.owner_bc_ids ?? [], // BCs donas das contas de anúncio (para conexões por link, que não têm bc_id)
+    // BCs donas das contas de anúncio (conexões por link não têm bc_id): [{ id, accounts }], da que tem mais contas para a que tem menos.
+    ownerBcGroups: parseGroups(row.owner_bc_groups),
+    ownerBcIds: parseGroups(row.owner_bc_groups).map((g) => g.id).sort(),
     authType: row.auth_type,
     name: row.name,
     shared: row.shared === true,
@@ -26,7 +41,9 @@ const SELECT_PUBLIC = `
          bc.last_synced_at, bc.created_at,
          (SELECT COUNT(*)::int FROM tiktok_advertisers a WHERE a.business_center_id = bc.id) AS advertiser_count,
          EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS via_proxy,
-         ARRAY(SELECT DISTINCT a.owner_bc_id FROM tiktok_advertisers a WHERE a.business_center_id = bc.id AND a.owner_bc_id IS NOT NULL ORDER BY a.owner_bc_id) AS owner_bc_ids
+         COALESCE((SELECT json_agg(json_build_object('id', g.owner_bc_id, 'accounts', g.total) ORDER BY g.total DESC, g.owner_bc_id)
+                     FROM (SELECT a.owner_bc_id, COUNT(*)::int AS total FROM tiktok_advertisers a
+                            WHERE a.business_center_id = bc.id AND a.owner_bc_id IS NOT NULL GROUP BY a.owner_bc_id) g), '[]'::json) AS owner_bc_groups
     FROM tiktok_business_centers bc JOIN users u ON u.id = bc.owner_id`;
 
 /**
