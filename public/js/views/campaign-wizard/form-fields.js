@@ -1,5 +1,5 @@
 import { ACCOUNT_FIELDS, OBJECTIVES, fieldsOfStep, findField, getOptions, getPath, isRequired, isVisible } from '/shared/campaign-spec.js';
-import { h } from '../../dom.js';
+import { h, icon } from '../../dom.js';
 import { centsToInput, parseMoneyToCents } from '../../format.js';
 import { creativeThumb } from '../creatives/thumb.js';
 
@@ -18,7 +18,8 @@ export function renderStepForm(stepId, ctx) {
 
   const groups = [];
   for (const entry of entries) {
-    const title = entry.field.type === 'objective' ? 'O que você quer alcançar?' : (entry.field.group ?? entry.field.label);
+    // O seletor de objetivo não repete título: o cabeçalho da etapa já diz "Escolha o que você quer alcançar".
+    const title = entry.field.type === 'objective' ? '' : (entry.field.group ?? entry.field.label);
     let group = groups.find((g) => g.title === title);
     if (!group) groups.push((group = { title, entries: [] }));
     group.entries.push(entry);
@@ -31,7 +32,7 @@ export function renderStepForm(stepId, ctx) {
       h(
         'section',
         { class: 'form-section' },
-        h('h3', { class: 'form-section__title' }, group.title),
+        group.title ? h('h3', { class: 'form-section__title' }, group.title) : null,
         h('div', { class: 'form-grid' }, group.entries.map((entry) => renderField(entry, ctx))),
       ),
     ),
@@ -124,13 +125,23 @@ function wrapper({ path, field, id, wide, error, control, required, hideLabel = 
   );
 }
 
+/** Ícone de cada objetivo (nome do desenho em dom.js). */
+const OBJECTIVE_ICONS = { TRAFFIC: 'cursor', WEB_CONVERSIONS: 'bag', PRODUCT_SALES: 'tag', LEAD_GENERATION: 'userplus', APP_PROMOTION: 'phone', REACH: 'megaphone', VIDEO_VIEWS: 'play', ENGAGEMENT: 'heart' };
+
+/**
+ * Objetivos como cartões compactos (ícone, nome, uma frase): grade de 4 por linha no computador, 2 no celular. O botão de
+ * opção continua real (teclado com as setas, leitor de tela), só fica invisível; o cartão mostra a seleção com um "✓".
+ */
 function objectiveCards(field, value, path, ctx, error) {
   const cards = getOptions(field, ctx.config).map(({ value: optionValue }) => {
     const meta = OBJECTIVE_META[optionValue];
+    const selected = value === optionValue;
     return h(
       'label',
-      { class: `objective-card${value === optionValue ? ' is-selected' : ''}` },
-      h('input', { type: 'radio', name: 'objective', value: optionValue, checked: value === optionValue, disabled: ctx.readOnly, onChange: () => ctx.set(path, optionValue, { rerender: true }) }),
+      { class: `objective-card${selected ? ' is-selected' : ''}` },
+      h('input', { type: 'radio', name: 'objective', value: optionValue, checked: selected, disabled: ctx.readOnly, onChange: () => ctx.set(path, optionValue, { rerender: true }) }),
+      h('span', { class: 'objective-card__check', 'aria-hidden': 'true' }, '✓'),
+      h('span', { class: 'objective-card__icon', 'aria-hidden': 'true' }, icon(OBJECTIVE_ICONS[optionValue] ?? 'chart', 20)),
       h('span', { class: 'objective-card__title' }, OBJECTIVES.find((o) => o.value === optionValue).label),
       h('span', { class: 'objective-card__text' }, meta),
     );

@@ -7,11 +7,13 @@ import { accountsTabs } from './accounts-tabs.js';
  */
 
 /**
- * Estrutura da página: título e subtítulo centralizados, abas, aviso opcional, barra (resumo à esquerda, ações à direita)
- * e o conteúdo, tudo numa coluna central.
- * `summary` e `actions` aceitam texto ou nós; `children` é a lista de blocos da página.
+ * Estrutura da página, em 3 faixas bem separadas:
+ *  1) título e subtítulo centralizados;
+ *  2) UMA barra com as abas à esquerda e, à direita, o resumo ("1 conexão · 7 contas") e o botão principal, na mesma linha;
+ *  3) (opcional) uma linha de filtros/busca, e depois o conteúdo.
+ * No celular tudo empilha com largura total. `summary`, `actions` e `filters` aceitam texto ou nós; `children` é a lista de blocos.
  */
-export function hubLayout({ active, subtitle, summary, actions, notice, children = [] }) {
+export function hubLayout({ active, subtitle, summary, actions, filters, notice, children = [] }) {
   let summaryEl = null;
   if (summary instanceof Node) {
     summary.classList.add('hub__summary');
@@ -19,13 +21,14 @@ export function hubLayout({ active, subtitle, summary, actions, notice, children
   } else if (summary) {
     summaryEl = h('p', { class: 'hub__summary', 'aria-live': 'polite' }, summary);
   }
+  const hasSide = Boolean(summaryEl || actions);
   return h(
     'div',
     { class: 'hub' },
     h('header', { class: 'hub__header' }, h('h1', { class: 'hub__title' }, 'Contas TikTok'), subtitle ? h('p', { class: 'hub__subtitle' }, subtitle) : null),
-    accountsTabs(active),
     notice,
-    summaryEl || actions ? h('div', { class: 'hub__bar' }, summaryEl ?? h('span'), actions ? h('div', { class: 'hub__actions' }, actions) : null) : null,
+    h('div', { class: `hub__toolbar${hasSide ? '' : ' hub__toolbar--solo'}` }, accountsTabs(active), hasSide ? h('div', { class: 'hub__side' }, summaryEl, actions) : null),
+    filters ? h('div', { class: 'hub__filters' }, filters) : null,
     ...children,
   );
 }

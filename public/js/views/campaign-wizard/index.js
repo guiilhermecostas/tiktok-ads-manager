@@ -400,7 +400,7 @@ export function openCampaignWizard(ctx, { campaignId = null } = {}) {
 
       setChildren(stepperSlot, stepper());
       drawBanner();
-      setChildren(scroll, h('div', { class: 'wizard-card' }, h('h2', { class: 'wizard-card__title' }, meta.title), h('p', { class: 'muted' }, meta.description), lockedNotice, content));
+      setChildren(scroll, h('div', { class: 'wizard-card' }, h('p', { class: 'wizard-card__step' }, onReview ? 'Última etapa' : `Etapa ${st.step + 1} de ${STEPS.length}`), h('h2', { class: 'wizard-card__title' }, meta.title), h('p', { class: 'wizard-card__subtitle' }, meta.description), lockedNotice, content));
       drawFooter();
 
       if (focusPath) {

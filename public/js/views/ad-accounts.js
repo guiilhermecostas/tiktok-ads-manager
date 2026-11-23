@@ -223,7 +223,7 @@ export async function adAccountsView() {
       active: '/business-centers/accounts',
       subtitle,
       summary,
-      actions: [search, bcFilter, ...filter.controls],
+      filters: [search, bcFilter, ...filter.controls],
       children: [
         advertisers.some(labelable) ? h('p', { class: 'hub__note' }, 'Marque uma conta como “Conta de agência” para ela aparecer identificada (e filtrável) na hora de publicar campanhas.') : null,
         bulkBar,
