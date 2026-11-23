@@ -158,15 +158,36 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
     return advertiser;
   }
 
-  function periodRange(days) {
-    const end = new Date();
+  /** Período de `days` dias terminando hoje; com `offsetDays`, o mesmo tamanho terminando antes (período anterior). */
+  function periodRange(days, offsetDays = 0) {
+    const end = new Date(Date.now() - offsetDays * DAY_MS);
     return { startDate: isoDate(new Date(end.getTime() - (days - 1) * DAY_MS)), endDate: isoDate(end) };
   }
 
-  function cachedReport(advertiser, days) {
-    return dataCache.remember(`report:${advertiser.businessCenterId}:${advertiser.id}:${days}`, () =>
-      withBusinessCenterToken(advertiser.businessCenterId, (token, api) => api.getDailyReport(token, advertiser.id, periodRange(days))),
+  /** Relatório diário da conta no período atual ou (`previous`) no período imediatamente anterior, em cache. */
+  function cachedReport(advertiser, days, { previous = false } = {}) {
+    return dataCache.remember(`report:${advertiser.businessCenterId}:${advertiser.id}:${days}${previous ? ':prev' : ''}`, () =>
+      withBusinessCenterToken(advertiser.businessCenterId, (token, api) => api.getDailyReport(token, advertiser.id, periodRange(days, previous ? days : 0))),
     );
+  }
+
+  /** Série diária contínua (um ponto por dia do período, mesmo sem gasto) somando as contas, com CTR e CPC do dia. */
+  function buildDaily(rows, range) {
+    const byDate = new Map();
+    for (let t = Date.parse(`${range.startDate}T00:00:00Z`); t <= Date.parse(`${range.endDate}T00:00:00Z`); t += DAY_MS) {
+      byDate.set(isoDate(new Date(t)), { date: isoDate(new Date(t)), spend: 0, impressions: 0, clicks: 0, conversions: 0 });
+    }
+    for (const row of rows) {
+      const day = byDate.get(row.date) ?? { date: row.date, spend: 0, impressions: 0, clicks: 0, conversions: 0 };
+      day.spend += row.spend;
+      day.impressions += row.impressions;
+      day.clicks += row.clicks;
+      day.conversions += row.conversions;
+      byDate.set(row.date, day);
+    }
+    return [...byDate.values()]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((d) => ({ ...d, ctr: d.impressions ? (d.clicks / d.impressions) * 100 : 0, cpc: d.clicks ? d.spend / d.clicks : 0 }));
   }
 
   function ensureOauthEnabled() {
@@ -404,40 +425,65 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
     report: async (actor, advertiserId, days) => cachedReport(await requireAdvertiser(actor, advertiserId), days),
 
     /** Visão geral das contas do usuário, agrupada por moeda (valores em moedas diferentes não se somam). */
-    async overview(actor, days) {
-      return overviewCache.remember(`overview:${actor.id}:${days}`, async () => {
+    /**
+     * Visão geral dos relatórios, agrupada por MOEDA (valores de moedas diferentes nunca se somam). Por moeda: totais, série
+     * diária contínua e, com `compare`, os totais do período anterior. Também devolve o ranking por conta e a lista de contas
+     * (para o filtro). `advertiserId` restringe a uma conta (que precisa ser de uma BC ativa do usuário).
+     */
+    async overview(actor, days, { advertiserId = null, compare = false } = {}) {
+      return overviewCache.remember(`overview:${actor.id}:${days}:${advertiserId ?? 'all'}:${compare ? 1 : 0}`, async () => {
         const all = (await repo.advertisers(actor.id)).filter((a) => a.businessCenterStatus === 'active');
-        const selected = all.slice(0, MAX_OVERVIEW_ADVERTISERS).map((a) => ({
-          id: a.id,
-          currency: a.currency,
-          businessCenterId: a.businessCenterId,
-        }));
-        const results = [];
-        for (let i = 0; i < selected.length; i += OVERVIEW_CONCURRENCY) {
-          const batch = selected.slice(i, i + OVERVIEW_CONCURRENCY);
-          results.push(...(await Promise.allSettled(batch.map((a) => cachedReport(a, days)))));
-        }
+        if (advertiserId && !all.some((a) => a.id === advertiserId)) throw notFound('Conta de anúncio não encontrada ou Business Center com erro.');
+        const pool = advertiserId ? all.filter((a) => a.id === advertiserId) : all;
+        const selected = pool.slice(0, MAX_OVERVIEW_ADVERTISERS).map((a) => ({ id: a.id, name: a.name, currency: a.currency, businessCenterId: a.businessCenterId }));
+        const fetchAll = async (options) => {
+          const out = [];
+          for (let i = 0; i < selected.length; i += OVERVIEW_CONCURRENCY) {
+            out.push(...(await Promise.allSettled(selected.slice(i, i + OVERVIEW_CONCURRENCY).map((a) => cachedReport(a, days, options)))));
+          }
+          return out;
+        };
+        const results = await fetchAll({});
+        const previousResults = compare ? await fetchAll({ previous: true }) : [];
 
         const groups = new Map();
+        const accounts = [];
         let failed = 0;
         results.forEach((result, index) => {
           if (result.status !== 'fulfilled') {
             failed += 1;
             return;
           }
-          const currency = selected[index].currency ?? 'UNKNOWN';
-          const group = groups.get(currency) ?? { currency, advertisers: 0, days: [] };
+          const account = selected[index];
+          const currency = account.currency ?? 'UNKNOWN';
+          const group = groups.get(currency) ?? { currency, advertisers: 0, days: [], previousDays: [] };
           group.advertisers += 1;
           group.days.push(...result.value.days);
+          if (previousResults[index]?.status === 'fulfilled') group.previousDays.push(...previousResults[index].value.days);
           groups.set(currency, group);
+          accounts.push({ id: account.id, name: account.name, currency: account.currency, totals: sumTotals(result.value.days) });
         });
 
+        const range = periodRange(days);
         return {
           days,
+          range,
+          compare,
           totalAdvertisers: all.length,
           analyzed: selected.length,
           failed,
-          groups: [...groups.values()].map((g) => ({ currency: g.currency, advertisers: g.advertisers, totals: sumTotals(g.days) })),
+          // Todas as contas ativas, para o filtro de conta (mesmo as que passaram do limite de análise).
+          accountOptions: all.map((a) => ({ id: a.id, name: a.name, currency: a.currency })),
+          groups: [...groups.values()]
+            .map((g) => ({
+              currency: g.currency,
+              advertisers: g.advertisers,
+              totals: sumTotals(g.days),
+              previous: compare ? sumTotals(g.previousDays) : null,
+              daily: buildDaily(g.days, range),
+            }))
+            .sort((x, y) => y.totals.spend - x.totals.spend),
+          accounts: accounts.sort((x, y) => y.totals.spend - x.totals.spend),
         };
       });
     },

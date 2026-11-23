@@ -49,15 +49,15 @@ export async function teamView() {
 
   // ---------- convidar ----------
   function inviteForm() {
-    const name = field('Nome da pessoa', { name: 'name', required: true, maxlength: 80, autocomplete: 'off' });
-    const email = field('E-mail dela', { type: 'email', name: 'email', required: true, maxlength: 254, autocomplete: 'off' }, { hint: 'O convite com o link para criar a senha é enviado para este e-mail.' });
+    const name = field('Nome da pessoa', { name: 'name', required: true, maxlength: 80, autocomplete: 'off', placeholder: 'Ex.: Maria Souza' });
+    const email = field('E-mail dela', { type: 'email', name: 'email', required: true, maxlength: 254, autocomplete: 'off', placeholder: 'pessoa@empresa.com' }, { hint: 'O link para criar a senha vai para este e-mail.' });
     const picker = createAreaPicker({ initial: [] });
     const errorSlot = h('div');
     const submit = button('Enviar convite', { variant: 'primary', type: 'submit' });
     const form = h(
       'form',
       {
-        class: 'form',
+        class: 'form modal__body',
         novalidate: true,
         onSubmit: async (event) => {
           event.preventDefault();
@@ -80,10 +80,9 @@ export async function teamView() {
         },
       },
       errorSlot,
-      name.element,
-      email.element,
+      h('div', { class: 'invite-fields' }, name.element, email.element),
       picker.element,
-      h('div', { class: 'modal__actions' }, button('Cancelar', { onClick: () => modal.close() }), submit),
+      h('div', { class: 'modal__actions modal__actions--bar' }, button('Cancelar', { onClick: () => modal.close() }), submit),
     );
     const modal = openModal({ title: 'Convidar colaborador', body: form, size: 'md', dismissOnOverlay: false });
     name.control.focus();
@@ -97,7 +96,7 @@ export async function teamView() {
     const form = h(
       'form',
       {
-        class: 'form',
+        class: 'form modal__body',
         novalidate: true,
         onSubmit: async (event) => {
           event.preventDefault();
@@ -121,7 +120,7 @@ export async function teamView() {
       errorSlot,
       h('p', { class: 'muted' }, `${member.name} · ${member.email}. A mudança vale na hora, sem precisar entrar de novo.`),
       picker.element,
-      h('div', { class: 'modal__actions' }, button('Cancelar', { onClick: () => modal.close() }), save),
+      h('div', { class: 'modal__actions modal__actions--bar' }, button('Cancelar', { onClick: () => modal.close() }), save),
     );
     const modal = openModal({ title: 'Editar acesso', body: form, size: 'md', dismissOnOverlay: false });
   }

@@ -153,7 +153,8 @@ export function createTiktokRouter({ service, limits = {} }) {
   });
 
   router.get('/overview', reports, read, async (req, res) => {
-    res.json(await service.overview(req.actor, parseDays(req.query.days)));
+    const advertiserId = req.query.advertiserId === undefined || req.query.advertiserId === '' ? null : parseAdvertiserId(req.query.advertiserId);
+    res.json(await service.overview(req.actor, parseDays(req.query.days), { advertiserId, compare: req.query.compare === '1' }));
   });
 
   router.stop = () => {

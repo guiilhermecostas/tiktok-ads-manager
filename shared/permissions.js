@@ -7,10 +7,10 @@
  * CHECK das colunas `areas` (workspace_members e workspace_invites).
  */
 export const AREAS = Object.freeze([
-  { id: 'creatives', label: 'Criativos', description: 'Biblioteca: enviar, renomear e excluir vídeos e imagens.' },
-  { id: 'campaigns', label: 'Campanhas', description: 'Criar, editar e publicar campanhas (inclui ver os criativos e as contas de anúncio).' },
-  { id: 'reports', label: 'Relatórios', description: 'Início e TikTok Ads: gasto, cliques e conversões das contas.' },
-  { id: 'accounts', label: 'Contas TikTok', description: 'Business Centers, contas de anúncio, etiquetas e proxy.' },
+  { id: 'creatives', label: 'Criativos', description: 'Enviar, renomear e excluir vídeos e imagens.' },
+  { id: 'campaigns', label: 'Campanhas', description: 'Criar, editar e publicar campanhas.' },
+  { id: 'reports', label: 'Relatórios', description: 'Ver gasto, cliques e conversões.' },
+  { id: 'accounts', label: 'Contas TikTok', description: 'Business Centers, contas, proxy e arquivos.' },
 ]);
 
 export const ALL_AREAS = Object.freeze(AREAS.map((a) => a.id));
