@@ -2,7 +2,7 @@ import { ACCOUNT_LABELS, MAX_LABEL_BATCH, countByKind, isAccountLabel } from '/s
 import { get, patch } from '../api.js';
 import { h, setChildren } from '../dom.js';
 import { alertBox, badge, button, emptyState, toast } from '../ui.js';
-import { createAccountFilter, labelBadge } from './account-filter.js';
+import { createAccountFilter, currencyBadge, labelBadge } from './account-filter.js';
 import { hubLayout, plural } from './hub.js';
 
 const normalize = (text) => String(text ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -26,7 +26,7 @@ export async function adAccountsView() {
   const bulkCount = h('span', { class: 'acc-bulk__count', 'aria-live': 'polite' });
   const bulkButtons = h('div', { class: 'hub__actions' });
   const bulkBar = h('div', { class: 'acc-bulk', hidden: true, role: 'region', 'aria-label': 'Etiquetar contas selecionadas' }, bulkCount, bulkButtons);
-  const filter = createAccountFilter({ onChange: () => draw() });
+  const filter = createAccountFilter({ onChange: () => draw(), accounts: advertisers });
   let visibleRows = [];
   const checkboxes = new Map(); // rowKey -> input (atualizados no lugar, sem redesenhar a tabela)
   let headCheckbox = null;
@@ -189,7 +189,7 @@ export async function adAccountsView() {
                 h('td', { 'data-label': 'ID da conta' }, h('span', { class: 'code' }, a.id)),
                 h('td', { 'data-label': 'Business Center' }, origin(a)),
                 h('td', { 'data-label': 'Tipo' }, kindCell(a)),
-                h('td', { 'data-label': 'Moeda' }, a.currency ?? '—'),
+                h('td', { 'data-label': 'Moeda' }, currencyBadge(a.currency) ?? h('span', { class: 'muted' }, '—')),
                 h('td', { class: 'muted', 'data-label': 'Fuso horário' }, a.timezone ?? '—'),
                 h('td', { 'data-label': 'Status' }, a.businessCenterStatus === 'active' ? badge('Ativa', 'success') : badge('Acesso com erro', 'danger')),
               ),

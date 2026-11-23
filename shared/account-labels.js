@@ -34,7 +34,8 @@ export const STATUS_FILTERS = Object.freeze([
 
 export const isActiveAccount = (account) => account.businessCenterStatus === 'active';
 
-export function matchesAccountFilter(account, { kind = 'all', status = 'all' } = {}) {
+export function matchesAccountFilter(account, { kind = 'all', status = 'all', currency = 'all' } = {}) {
+  if (currency !== 'all' && account.currency !== currency) return false;
   if (kind === 'standard' && account.label) return false;
   if (kind !== 'all' && kind !== 'standard' && account.label !== kind) return false;
   if (status === 'active' && !isActiveAccount(account)) return false;

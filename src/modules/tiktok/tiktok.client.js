@@ -12,6 +12,8 @@ const BC_ASSET_PAGE_SIZE = 50;
 const CAMPAIGN_PAGE_SIZE = 100;
 const CAMPAIGN_MAX_PAGES = 5;
 const BC_LIST_MAX_PAGES = 3;
+const PIXEL_PAGE_SIZE = 50;
+const PIXEL_MAX_PAGES = 4;
 const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id'];
 // Códigos que indicam token revogado/inválido: é preciso trocar o token da Business Center.
 const TOKEN_ERROR_CODES = new Set([40104, 40105]);
@@ -171,6 +173,24 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
       }
       return [...found].map(([id, name]) => ({ id, name }));
+    },
+
+    /**
+     * Pixels que já existem na conta de anúncio (`/pixel/list/`): [{ id, code, name }]. `id` é o que o grupo de anúncios usa
+     * (`pixel_id`); `code` é o código do pixel e `name` o nome dado no Gerenciador de Eventos. Lê o formato de forma defensiva.
+     */
+    async listPixels(token, advertiserId) {
+      const found = new Map();
+      for (let page = 1; page <= PIXEL_MAX_PAGES; page += 1) {
+        const data = await call('/pixel/list/', { token, query: { advertiser_id: advertiserId, page, page_size: PIXEL_PAGE_SIZE } });
+        const list = Array.isArray(data.pixels) ? data.pixels : Array.isArray(data.list) ? data.list : [];
+        for (const item of list) {
+          const id = digitsOrNull(item?.pixel_id);
+          if (id && !found.has(id)) found.set(id, { id, code: String(item?.pixel_code ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64), name: String(item?.pixel_name ?? '').slice(0, 120) });
+        }
+        if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
+      }
+      return [...found.values()];
     },
 
     /** Campanhas da conta (paginado: até CAMPAIGN_MAX_PAGES páginas; `total` é o total real no TikTok). */

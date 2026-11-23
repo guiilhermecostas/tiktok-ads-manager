@@ -1,8 +1,10 @@
 import { countByKind } from '/shared/account-labels.js';
+import { countByCurrency, currencySymbol, distinctCurrencies, isMainCurrency } from '/shared/currency.js';
 import { ACCOUNT_FIELDS, applyAccountOverrides, getPath, validateConfig } from '/shared/campaign-spec.js';
 import { h, setChildren } from '../../dom.js';
+import { centsToInput } from '../../format.js';
 import { badge } from '../../ui.js';
-import { createAccountFilter, labelBadge } from '../account-filter.js';
+import { createAccountFilter, currencyBadge, labelBadge } from '../account-filter.js';
 import { renderAccountFields } from './form-fields.js';
 
 const normalize = (text) => String(text ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -79,7 +81,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
   const searchRow = h('div', { class: 'targets__search-row' }, search);
 
   // Filtros por tipo e situação + atalho "marcar todas as listadas" (valem para o que está na tela, já com busca e filtros).
-  const filter = createAccountFilter({ onChange: () => renderList() });
+  const filter = createAccountFilter({ onChange: () => renderList(), accounts: advertisers });
   const selectListed = h('button', { type: 'button', class: 'link-btn' });
   selectListed.addEventListener('click', () => {
     const listed = listedSelectable();
@@ -105,6 +107,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
         errors,
         creatives: new Map(),
         moneyText: {},
+        pixelAccounts: [account], // nos ajustes de UMA conta, o seletor mostra só os pixels dela
         // O que pertence ao grupo de anúncios não muda depois que o grupo existe no TikTok (o anúncio ainda pode mudar).
         readOnly: (path) => busy || (groupCreated && path.startsWith('adGroup.')),
         pickCreatives: async () => null,
@@ -165,7 +168,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
         checkbox,
         h('span', { class: 'targets__name' }, account.name),
         h('span', { class: 'code' }, id),
-        account.currency ? h('span', { class: 'targets__currency' }, account.currency) : null,
+        currencyBadge(account.currency), // BRL neutro; qualquer outra moeda em amarelo
         labelBadge(account),
       ),
       h('div', { class: 'targets__status' }, statusChip(account)),
@@ -222,6 +225,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
         badge(first.businessCenterAuthType === 'oauth' ? 'Por link' : 'Token', 'neutral'),
         first.businessCenterViaProxy ? badge('Via proxy', 'success') : null,
         badge(first.businessCenterShared ? 'Compartilhada' : first.businessCenterOwned ? 'Só você' : 'Privada', first.businessCenterShared ? 'success' : 'neutral'),
+        distinctCurrencies(center.accounts).length > 1 ? h('span', { class: 'muted targets__count' }, countByCurrency(center.accounts).map((c) => `${c.accounts} ${c.code ?? '—'}`).join(' · ')) : null,
         h('span', { class: 'muted targets__count' }, plural(center.accounts.length, 'conta', 'contas')),
       ),
       h('ul', { class: 'targets__accounts' }, center.accounts.map(accountRow)),
@@ -246,18 +250,25 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     const picked = advertisers.filter((a) => selected.has(a.id));
     const centers = new Set(picked.map((a) => a.businessCenterId)).size;
     const kinds = countByKind(picked);
+    const currencyList = countByCurrency(picked).filter((c) => c.code);
+    const currencyText = currencyList.length > 1 || currencyList.some((c) => !isMainCurrency(c.code)) ? ` · moeda: ${currencyList.map((c) => `${c.accounts} em ${c.code}`).join(', ')}` : '';
     const kindText = kinds.agency ? ` (${kinds.agency} de agência${kinds.standard ? `, ${plural(kinds.standard, 'comum', 'comuns')}` : ''})` : '';
     const hidden = picked.filter((a) => !isListed(a)).length;
     summary.textContent = picked.length
-      ? `${plural(picked.length, 'conta selecionada', 'contas selecionadas')} em ${plural(centers, 'Business Center', 'Business Centers')}${kindText}${hidden ? ` · ${hidden} fora da lista atual` : ''}`
+      ? `${plural(picked.length, 'conta selecionada', 'contas selecionadas')} em ${plural(centers, 'Business Center', 'Business Centers')}${kindText}${currencyText}${hidden ? ` · ${hidden} fora da lista atual` : ''}`
       : 'Nenhuma conta selecionada.';
     // O botão de atalho acompanha o que está listado (com busca e filtros).
     const listed = listedSelectable();
     const allListed = listed.length > 0 && listed.every((a) => selected.has(a.id));
     selectListed.textContent = allListed ? `Desmarcar as ${listed.length} listadas` : `Marcar todas as ${listed.length} listadas`;
     selectListed.disabled = busy || !listed.length;
-    const currencies = [...new Set(picked.map((a) => a.currency).filter(Boolean))];
-    const unusual = currencies.length > 1 || currencies.some((c) => c !== 'BRL');
+    const currencies = distinctCurrencies(picked);
+    const unusual = currencies.length > 1 || currencies.some((c) => !isMainCurrency(c));
+    // O mesmo número vale em cada conta, na moeda dela: mostra o valor digitado em cada moeda para não haver surpresa.
+    const cents = getConfig().adGroup?.budget ?? getConfig().campaign?.budget;
+    const example = Number.isInteger(cents) && cents > 0
+      ? ` Ex.: o orçamento ${centsToInput(cents)} vira ${currencies.map((c) => `${currencySymbol(c)} ${centsToInput(cents)}`).join(' e ')}.`
+      : '';
     const mixed = kinds.agency > 0 && kinds.standard > 0;
     setChildren(
       warning,
@@ -267,8 +278,8 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
             'div',
             { class: 'alert alert--warning' },
             currencies.length > 1
-              ? `Atenção: as contas selecionadas usam moedas diferentes (${currencies.join(', ')}). Orçamentos e lances são enviados como o mesmo número em cada conta, na moeda dela.`
-              : `Atenção: a conta usa ${currencies[0]}. Orçamentos e lances da campanha são enviados como o mesmo número, na moeda da conta (não são convertidos).`,
+              ? `Atenção: as contas selecionadas usam moedas diferentes (${currencies.join(', ')}). Orçamentos e lances são enviados como o mesmo número em cada conta, na moeda dela (não são convertidos).${example}`
+              : `Atenção: a conta usa ${currencies[0]}. Orçamentos e lances da campanha são enviados como o mesmo número, na moeda da conta (não são convertidos).${example}`,
           )
         : null,
     );

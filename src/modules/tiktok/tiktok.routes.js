@@ -143,6 +143,11 @@ export function createTiktokRouter({ service, limits = {} }) {
     res.json(await service.campaigns(req.actor, parseAdvertiserId(req.params.advertiserId)));
   });
 
+  // Pixels já criados na conta (seletor do passo "Conversão"): quem publica campanhas ou gerencia as contas.
+  router.get('/advertisers/:advertiserId/pixels', requireArea('campaigns', 'accounts'), read, async (req, res) => {
+    res.json({ pixels: await service.pixels(req.actor, parseAdvertiserId(req.params.advertiserId), { fresh: req.query.fresh === '1' }) });
+  });
+
   router.get('/advertisers/:advertiserId/report', reports, read, async (req, res) => {
     res.json(await service.report(req.actor, parseAdvertiserId(req.params.advertiserId), parseDays(req.query.days)));
   });

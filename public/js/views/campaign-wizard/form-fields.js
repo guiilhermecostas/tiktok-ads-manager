@@ -2,6 +2,7 @@ import { ACCOUNT_FIELDS, OBJECTIVES, fieldsOfStep, findField, getOptions, getPat
 import { h } from '../../dom.js';
 import { centsToInput, parseMoneyToCents } from '../../format.js';
 import { creativeThumb } from '../creatives/thumb.js';
+import { createPixelPicker } from './pixel-picker.js';
 
 let uid = 0;
 const nextId = () => `wz-${++uid}`;
@@ -61,6 +62,12 @@ function renderField({ section, field }, ctx) {
   const describedBy = [error ? `${id}-err` : null, field.help ? `${id}-help` : null].filter(Boolean).join(' ') || null;
   const disabled = typeof ctx.readOnly === 'function' ? ctx.readOnly(path) : ctx.readOnly; // por campo (ajustes por conta) ou geral
 
+  // Pixel: escolhe entre os que já existem na conta (e ainda dá para digitar o ID). Só quando o contexto traz contas usáveis.
+  if (field.key === 'pixelId' && ctx.pixelAccounts?.length) {
+    const picker = createPixelPicker({ id, value, disabled, error: Boolean(error), describedBy, accounts: ctx.pixelAccounts, onPick: (v) => ctx.set(path, v) });
+    return wrapper({ path, field, id, wide: true, error, describedBy, control: picker, required });
+  }
+
   let control;
   switch (field.type) {
     case 'objective':
@@ -111,16 +118,17 @@ function renderField({ section, field }, ctx) {
       control = field.multiline ? h('textarea', { ...props, class: `${props.class} input--area`, rows: 3 }) : h('input', { ...props, type: 'text' });
     }
   }
-  return wrapper({ path, field, id, wide, error, describedBy, control, required });
+  return wrapper({ path, field, id, wide, error, describedBy, control, required, note: field.type === 'money' ? ctx.currencyNote : null });
 }
 
-function wrapper({ path, field, id, wide, error, control, required, hideLabel = false }) {
+function wrapper({ path, field, id, wide, error, control, required, hideLabel = false, note = null }) {
   return h(
     'div',
     { class: `field${wide ? ' field--wide' : ''}`, 'data-path': path },
     hideLabel ? null : h('label', { for: id, class: 'field__label' }, field.label, required ? h('span', { class: 'req', 'aria-hidden': 'true' }, ' *') : null),
     control,
     field.help ? h('p', { id: `${id}-help`, class: 'field__hint' }, field.help) : null,
+    note ? h('p', { class: 'field__hint field__hint--currency' }, note) : null,
     error ? h('p', { id: `${id}-err`, class: 'field__error', role: 'alert' }, error) : null,
   );
 }
@@ -211,7 +219,7 @@ function moneyInput(path, value, ctx, { id, describedBy, error, disabled }) {
   return h(
     'div',
     { class: 'money' },
-    h('span', { class: 'money__prefix' }, 'R$'),
+    h('span', { class: 'money__prefix' }, ctx.moneyPrefix ?? 'R$'), // símbolo da moeda das contas (ou "BRL / USD" quando há mais de uma)
     h('input', {
       id, class: `input${error ? ' input--error' : ''}`, type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: '0,00', disabled, value: shown,
       'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy,

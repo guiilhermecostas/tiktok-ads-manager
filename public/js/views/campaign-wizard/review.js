@@ -13,7 +13,7 @@ const fieldFor = (path) => {
  * Passo final: resumo legível de tudo o que foi configurado (com atalhos para corrigir cada parte) e, abaixo,
  * o painel `targets` para escolher em quais contas de anúncio publicar.
  */
-export function renderReview({ config, creatives, errors, publish, readOnly, goTo, targets }) {
+export function renderReview({ config, creatives, errors, publish, readOnly, goTo, targets, moneyPrefix = 'R$' }) {
   const problems = errors.length
     ? h(
         'div',
@@ -48,7 +48,7 @@ export function renderReview({ config, creatives, errors, publish, readOnly, goT
         if (field.type === 'creative') formatted = value ? creativeName(value) : '—';
         else if (field.type === 'creativeList') formatted = value?.length ? value.map(creativeName).join(', ') : '—';
         else formatted = formatValue(field, value, config);
-        const text = field.type === 'money' && formatted !== '—' ? `R$ ${formatted}` : formatted;
+        const text = field.type === 'money' && formatted !== '—' ? `${moneyPrefix} ${formatted}` : formatted;
         return h('div', { class: 'review-row' }, h('dt', null, field.label), h('dd', { class: text === '—' ? 'muted' : null }, text));
       });
     return h(

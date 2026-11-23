@@ -33,6 +33,11 @@ export class TtlCache {
     return value;
   }
 
+  /** Esquece uma chave (ex.: a pessoa pediu para atualizar). */
+  delete(key) {
+    this.entries.delete(key);
+  }
+
   clear() {
     this.entries.clear();
   }

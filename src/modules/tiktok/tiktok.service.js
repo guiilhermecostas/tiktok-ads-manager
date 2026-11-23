@@ -49,6 +49,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
     bcIds: bc.bcId ? [bc.bcId] : bc.ownerBcIds,
     // Quantas contas de anúncio há em cada Business Center do TikTok dentro desta conexão (uma conexão por link pode cobrir várias).
     bcGroups: bc.bcId ? [{ id: bc.bcId, accounts: bc.advertiserCount }] : bc.ownerBcGroups,
+    currencies: bc.currencies, // moedas das contas desta conexão e quantas contas há em cada uma
     authType: bc.authType,
     viaProxy: bc.viaProxy,
     name: bc.name,
@@ -387,6 +388,16 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       const advertiser = await requireAdvertiser(actor, advertiserId);
       return dataCache.remember(`campaigns:${advertiser.businessCenterId}:${advertiserId}`, () =>
         withBusinessCenterToken(advertiser.businessCenterId, (token, api) => api.getCampaigns(token, advertiserId)),
+      );
+    },
+
+    /** Pixels que já existem na conta de anúncio (para escolher na campanha em vez de digitar o ID). Em cache por 60 s. */
+    async pixels(actor, advertiserId, { fresh = false } = {}) {
+      const advertiser = await requireAdvertiser(actor, advertiserId);
+      const key = `pixels:${advertiser.businessCenterId}:${advertiserId}`;
+      if (fresh) dataCache.delete(key); // "Atualizar": quem acabou de criar um pixel no TikTok quer vê-lo agora
+      return dataCache.remember(key, () =>
+        withBusinessCenterToken(advertiser.businessCenterId, (token, api) => api.listPixels(token, advertiserId)),
       );
     },
 

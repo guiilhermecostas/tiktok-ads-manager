@@ -700,3 +700,14 @@ body.modal-open { overflow: hidden; }
 .photo-editor__zoom { flex: 1; min-width: 0; accent-color: var(--tt-black); }
 .photo-editor__tools { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .team__person { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+/* Moeda das contas */
+.hub-currencies { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.hub-currencies__item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.field__hint--currency { color: #7a5200; background: #fff8e1; border: 1px solid #ffe08a; border-radius: 8px; padding: 6px 10px; }
+
+/* Seletor de pixel existente */
+.pixel-picker { display: flex; flex-direction: column; gap: 8px; max-width: 560px; }
+.pixel-picker__row { display: flex; gap: 8px; align-items: center; }
+.pixel-picker__select { flex: 1; min-width: 0; }
+.pixel-picker__status { margin: 0; }

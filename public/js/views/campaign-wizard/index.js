@@ -1,4 +1,5 @@
 import { countByKind } from '/shared/account-labels.js';
+import { distinctCurrencies, isMainCurrency, moneyPrefix } from '/shared/currency.js';
 import { STEPS, collectCreativeRefs, defaultConfig, findField, reconcileConfig, stepOfPath, validateConfig } from '/shared/campaign-spec.js';
 import { get, post, put } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
@@ -163,12 +164,21 @@ export function openCampaignWizard(ctx, { campaignId = null } = {}) {
     body.replaceChildren(stepperSlot, bannerSlot, scroll, footerSlot);
 
     let focusPath = null;
+    const usableCurrencies = () => distinctCurrencies(st.advertisers.filter((a) => a.businessCenterStatus === 'active'));
     const formCtx = {
       get config() { return st.config; },
       get errors() { return st.errors; },
       creatives: creativeMap,
       pickCreatives: (options) => pickCreatives({ ...options, cache: creativeMap }),
       moneyText: st.moneyText,
+      // Moeda das contas que o usuário pode usar: o campo de valor mostra o símbolo certo (ou "BRL / USD") e avisa quando não é só BRL.
+      get moneyPrefix() { return moneyPrefix(usableCurrencies()); },
+      get currencyNote() {
+        const codes = usableCurrencies();
+        return codes.some((c) => !isMainCurrency(c)) ? `Você tem contas em ${codes.join(' e ')}. O valor é usado como está, na moeda de cada conta onde publicar (não é convertido). As contas são escolhidas no último passo.` : null;
+      },
+      // Contas usáveis: o campo de pixel lista os pixels que já existem nelas.
+      get pixelAccounts() { return st.advertisers.filter((a) => a.businessCenterStatus === 'active'); },
       get readOnly() { return readOnlyAll() || locked().has(FORM_STEPS[st.step]); },
       set(path, value, { rerender = false } = {}) {
         const [section, key] = path.split('.');
@@ -395,7 +405,7 @@ export function openCampaignWizard(ctx, { campaignId = null } = {}) {
         ? alertBox(readOnlyAll() ? 'Esta campanha já foi publicada no TikTok e não pode mais ser editada aqui. Para mudar o anúncio, crie uma nova campanha.' : 'Este nível já foi criado no TikTok e não pode mais ser alterado. Ajuste as próximas etapas e publique novamente para concluir.', 'warning')
         : null;
       const content = onReview
-        ? renderReview({ config: st.config, creatives: creativeMap, errors: st.allErrors, publish: st.publish, readOnly: readOnlyAll(), goTo, targets: targets.element })
+        ? renderReview({ config: st.config, creatives: creativeMap, errors: st.allErrors, publish: st.publish, readOnly: readOnlyAll(), goTo, targets: targets.element, moneyPrefix: formCtx.moneyPrefix })
         : renderStepForm(meta.id, formCtx);
 
       setChildren(stepperSlot, stepper());

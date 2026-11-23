@@ -43,6 +43,8 @@ export function createFakeTiktok() {
     failUploadOnCall: {}, // ex.: { image: 2 } derruba só a 2ª imagem enviada desde o último `uploadCalls = {}`
     uploadCalls: {},
     createDelayMs: 0, // simula latência nas criações (testes de concorrência)
+    pixels: {}, // conta de anúncio -> [{ pixel_id, pixel_code, pixel_name }] devolvidos por /pixel/list/
+    failPixels: false, // true: /pixel/list/ responde erro do TikTok
     manyCampaigns: 0, // >0: devolve essa quantidade de campanhas, paginadas
     // Autorização por link: auth_code -> { token, advertisers } (uso único, como no TikTok).
     authCodes: new Map(),
@@ -125,6 +127,13 @@ export function createFakeTiktok() {
         if (state.rejectFields && query.fields) return reply({}, 40002, 'The value of fields is invalid');
         const ownerOf = (id) => state.ownerBc[id] ?? Object.entries(state.bcs).find(([, accounts]) => accounts.includes(id))?.[0];
         return reply({ list: ids.map((id) => ({ advertiser_id: id, name: `Conta ${id}`, currency: state.currencies[id] ?? 'BRL', timezone: 'America/Sao_Paulo', ...(state.omitOwnerBc || !ownerOf(id) ? {} : { owner_bc_id: ownerOf(id) }) })) });
+      }
+      case '/pixel/list/': {
+        if (state.failPixels) return reply(null, 40002, 'No permission to access pixels');
+        const all = state.pixels[query.advertiser_id] ?? [];
+        const size = Number(query.page_size);
+        const page = Number(query.page);
+        return reply({ pixels: all.slice((page - 1) * size, page * size), page_info: { page, page_size: size, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / size)) } });
       }
       case '/campaign/get/': {
         if (state.manyCampaigns) {

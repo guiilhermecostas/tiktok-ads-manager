@@ -3,6 +3,7 @@ import { h, icon } from '../dom.js';
 import { formatDate } from '../format.js';
 import { state } from '../state.js';
 import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, toast } from '../ui.js';
+import { currencyBadge } from './account-filter.js';
 import { connectByLink } from './connect-link.js';
 import { hubCard, hubGrid, hubLayout, plural } from './hub.js';
 
@@ -179,6 +180,13 @@ export async function businessCentersView() {
     );
   }
 
+  /** Moeda das contas da conexão: um selo por moeda com quantas contas (BRL neutro; outra moeda, amarelo). */
+  function currencyValue(bc) {
+    const list = bc.currencies ?? [];
+    if (!list.length) return h('span', { class: 'muted' }, '—');
+    return h('span', { class: 'hub-currencies' }, list.map((c) => h('span', { class: 'hub-currencies__item' }, c.code ? currencyBadge(c.code) : badge('Não informada', 'neutral'), list.length > 1 ? h('span', { class: 'muted' }, plural(c.accounts, 'conta', 'contas')) : null)));
+  }
+
   /** Cartão de uma conexão: nome e situação, quantas contas, de quais BCs, e botões com nomes que dizem o que fazem. */
   function businessCenterCard(bc, oauth) {
     const active = bc.status === 'active';
@@ -199,6 +207,7 @@ export async function businessCentersView() {
       stats: [
         { label: 'Contas de anúncio', value: String(bc.advertiserCount), big: true },
         { label: 'Atualizado em', value: bc.lastSyncedAt ? formatDate(bc.lastSyncedAt) : 'Ainda não' },
+        { label: (bc.currencies?.length ?? 0) > 1 ? 'Moedas das contas' : 'Moeda das contas', value: currencyValue(bc), wide: true },
         isAdmin() ? { label: 'Dono', value: bc.owned ? 'Você' : (bc.ownerName ?? '—') } : null,
       ],
       body: bcList(bc),

@@ -14,6 +14,18 @@ function parseGroups(value) {
   return Array.isArray(list) ? list.filter((g) => typeof g?.id === 'string' && Number.isInteger(g.accounts)).map((g) => ({ id: g.id, accounts: g.accounts })) : [];
 }
 
+function parseCurrencies(value) {
+  let list = value ?? [];
+  if (typeof list === 'string') {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      list = [];
+    }
+  }
+  return Array.isArray(list) ? list.filter((g) => (g?.code === null || typeof g?.code === 'string') && Number.isInteger(g?.accounts)).map((g) => ({ code: g.code, accounts: g.accounts })) : [];
+}
+
 /** Visão do repositório: NUNCA inclui o token. */
 function toRecord(row) {
   return {
@@ -24,6 +36,7 @@ function toRecord(row) {
     viaProxy: row.via_proxy === true,
     // BCs donas das contas de anúncio (conexões por link não têm bc_id): [{ id, accounts }], da que tem mais contas para a que tem menos.
     ownerBcGroups: parseGroups(row.owner_bc_groups),
+    currencies: parseCurrencies(row.currency_groups), // [{ code, accounts }]: moeda de cada conta (code nulo = não informada)
     ownerBcIds: parseGroups(row.owner_bc_groups).map((g) => g.id).sort(),
     authType: row.auth_type,
     name: row.name,
@@ -43,7 +56,9 @@ const SELECT_PUBLIC = `
          EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS via_proxy,
          COALESCE((SELECT json_agg(json_build_object('id', g.owner_bc_id, 'accounts', g.total) ORDER BY g.total DESC, g.owner_bc_id)
                      FROM (SELECT a.owner_bc_id, COUNT(*)::int AS total FROM tiktok_advertisers a
-                            WHERE a.business_center_id = bc.id AND a.owner_bc_id IS NOT NULL GROUP BY a.owner_bc_id) g), '[]'::json) AS owner_bc_groups
+                            WHERE a.business_center_id = bc.id AND a.owner_bc_id IS NOT NULL GROUP BY a.owner_bc_id) g), '[]'::json) AS owner_bc_groups,
+         COALESCE((SELECT json_agg(json_build_object('code', c.currency, 'accounts', c.total) ORDER BY c.total DESC, c.currency NULLS LAST)
+                     FROM (SELECT a.currency, COUNT(*)::int AS total FROM tiktok_advertisers a WHERE a.business_center_id = bc.id GROUP BY a.currency) c), '[]'::json) AS currency_groups
     FROM tiktok_business_centers bc JOIN users u ON u.id = bc.owner_id`;
 
 /**
