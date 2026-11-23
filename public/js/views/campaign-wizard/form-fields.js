@@ -2,6 +2,7 @@ import { ACCOUNT_FIELDS, OBJECTIVES, fieldsOfStep, findField, getOptions, getPat
 import { h } from '../../dom.js';
 import { centsToInput, parseMoneyToCents } from '../../format.js';
 import { creativeThumb } from '../creatives/thumb.js';
+import { createMultiChoice } from './choice-controls.js';
 import { createPixelPicker } from './pixel-picker.js';
 
 let uid = 0;
@@ -57,7 +58,9 @@ function renderField({ section, field }, ctx) {
   const value = getPath(ctx.config, path);
   const error = ctx.errors[path];
   const required = isRequired(field, ctx.config);
-  const wide = ['objective', 'enumList', 'stringList', 'creative', 'creativeList'].includes(field.type) || field.multiline || field.type === 'url';
+  // Lista de botões (até 6 opções) cabe em meia linha; lista suspensa e demais campos longos ocupam a linha toda.
+  const compactChips = field.type === 'enumList' && getOptions(field, ctx.config).length <= 6;
+  const wide = (['objective', 'enumList', 'stringList', 'creative', 'creativeList'].includes(field.type) && !compactChips) || field.multiline || field.type === 'url';
   const id = nextId();
   const describedBy = [error ? `${id}-err` : null, field.help ? `${id}-help` : null].filter(Boolean).join(' ') || null;
   const disabled = typeof ctx.readOnly === 'function' ? ctx.readOnly(path) : ctx.readOnly; // por campo (ajustes por conta) ou geral
@@ -174,7 +177,7 @@ function enumControl(field, initialValue, path, ctx, { id, describedBy, error, d
     const name = nextId();
     return h(
       'div',
-      { class: 'choice-list', role: 'radiogroup', 'aria-label': field.label },
+      { class: 'choice-list choice-list--segmented', role: 'radiogroup', 'aria-label': field.label },
       options.map((o) =>
         h('label', { class: `choice${value === o.value ? ' is-selected' : ''}` }, h('input', { type: 'radio', name, value: o.value, checked: value === o.value, disabled, onChange: () => ctx.set(path, o.value, { rerender: true }) }), h('span', null, o.label)),
       ),
@@ -190,28 +193,13 @@ function enumControl(field, initialValue, path, ctx, { id, describedBy, error, d
   return select;
 }
 
+/** Lista de escolha múltipla compacta: botões (poucas opções) ou lista suspensa com busca (muitas). */
 function checkGroup(field, selected, path, ctx, { disabled }) {
   const options = getOptions(field, ctx.config);
-  return h(
-    'div',
-    { class: 'check-grid', role: 'group', 'aria-label': field.label },
-    options.map((o) =>
-      h(
-        'label',
-        { class: 'check' },
-        h('input', {
-          type: 'checkbox', value: o.value, checked: selected.includes(o.value), disabled,
-          onChange: (e) => {
-            const current = new Set(getPath(ctx.config, path) ?? []);
-            if (e.target.checked) current.add(o.value);
-            else current.delete(o.value);
-            ctx.set(path, [...current].sort((a, b) => options.findIndex((x) => x.value === a) - options.findIndex((x) => x.value === b)));
-          },
-        }),
-        h('span', null, o.label),
-      ),
-    ),
-  );
+  return createMultiChoice({
+    options, selected, maxItems: field.maxItems, disabled, label: field.label,
+    onChange: (next) => ctx.set(path, next),
+  });
 }
 
 function moneyInput(path, value, ctx, { id, describedBy, error, disabled }) {
