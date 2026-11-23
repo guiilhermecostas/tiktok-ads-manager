@@ -58,12 +58,10 @@ function parseCreateAdvertisersRequest(body) {
   const registeredArea = normalizeCountry(b.registeredArea);
   if (!registeredArea) throw badRequest('País de registro inválido (código de 2 letras, ex.: BR).');
   const hasValue = (value) => value !== undefined && value !== null && value !== '';
-  let industry = null;
-  if (hasValue(b.industry)) {
-    const n = typeof b.industry === 'string' && /^\d{1,9}$/.test(b.industry.trim()) ? Number(b.industry.trim()) : b.industry;
-    if (!Number.isSafeInteger(n) || n < 1 || n > 999_999_999) throw badRequest('Ramo de atividade inválido (informe o ID numérico do TikTok).');
-    industry = n;
-  }
+  // Ramo de atividade: o TikTok exige (ID numérico da tabela de ramos do TikTok). Aceita número ou texto só com dígitos.
+  const rawIndustry = typeof b.industry === 'string' ? b.industry.trim() : b.industry;
+  const industry = typeof rawIndustry === 'string' && /^\d{1,9}$/.test(rawIndustry) ? Number(rawIndustry) : rawIndustry;
+  if (!Number.isSafeInteger(industry) || industry < 1 || industry > 999_999_999) throw badRequest('Informe o ramo de atividade (ID numérico do TikTok, copiado de uma conta que já existe).');
   return {
     bcId: parseBcId(b.bcId),
     count,

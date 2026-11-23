@@ -438,6 +438,27 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['creative_hooks'], revoke: ['creative_hooks'], identity: ['creative_hooks'] })}
     `,
   },
+  {
+    version: 14,
+    description: 'Pastas da biblioteca de criativos (organizar por oferta)',
+    sql: `
+      -- Uma pasta por oferta (um nível só). O nome é único por usuário, sem diferenciar maiúsculas de minúsculas.
+      -- Apagar a pasta NÃO apaga criativos: eles voltam para "sem pasta" (ON DELETE SET NULL). Apagar o usuário apaga as pastas dele.
+      CREATE TABLE creative_folders (
+        id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id    INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name       TEXT        NOT NULL CHECK (char_length(name) BETWEEN 1 AND 60),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX creative_folders_user_name_key ON creative_folders (user_id, lower(name));
+
+      ALTER TABLE creatives ADD COLUMN folder_id INTEGER REFERENCES creative_folders(id) ON DELETE SET NULL;
+      CREATE INDEX idx_creatives_folder ON creatives (user_id, folder_id, created_at DESC, id DESC);
+
+      ${protectTables({ rls: ['creative_folders'], revoke: ['creative_folders'], identity: ['creative_folders'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

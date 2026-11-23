@@ -36,6 +36,8 @@ import { createTiktokClient } from './modules/tiktok/tiktok.client.js';
 import { createBusinessCentersRepository } from './modules/tiktok/business-centers.repository.js';
 import { createOauthAttemptsRepository } from './modules/tiktok/oauth-attempts.repository.js';
 import { createTiktokCallbackRouter, createTiktokRouter } from './modules/tiktok/tiktok.routes.js';
+import { createBalanceRouter } from './modules/tiktok/balance.routes.js';
+import { createBalanceService } from './modules/tiktok/balance.service.js';
 import { createHourlyRepository } from './modules/tiktok/hourly.repository.js';
 import { createHourlyRouter } from './modules/tiktok/hourly.routes.js';
 import { createHourlyService } from './modules/tiktok/hourly.service.js';
@@ -64,6 +66,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Proxies do usuário: com uma ativa, TODAS as chamadas ao TikTok feitas com as BCs dele saem por ela.
   const proxiesService = createProxiesService({ repo: createProxiesRepository(db, { encryptionKey: config.tiktok.encryptionKey }), config, fetchFn: fetchFn ?? fetch, log });
   const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, config, log });
+  // Saldo (BCs e contas de anúncio) direto da API do TikTok, em cache curto.
+  const balanceService = createBalanceService({ tiktok: tiktokService, connections: businessCenters, log, now: clock });
   // Gasto por hora: coleta a cada 30 min (ligada só pelo servidor, em server.js) e leitura para a aba Relatórios → Por hora.
   const hourlyService = createHourlyService({ tiktok: tiktokService, connections: businessCenters, repo: createHourlyRepository(db), log, now: clock, pauseMs: hourlyPauseMs });
   const creativeStorage = createLocalCreativeStorage({ dir: config.creatives.dir });
@@ -168,6 +172,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const proxiesRouter = createProxiesRouter({ service: proxiesService, limits });
   protectedApi.use('/proxies', requireArea('accounts'), proxiesRouter);
   // As áreas de cada rota do TikTok (contas, relatórios, lista de contas de anúncio) são exigidas dentro do próprio roteador.
+  const balanceRouter = createBalanceRouter({ service: balanceService, limits });
+  protectedApi.use('/tiktok/balance', balanceRouter);
   const hourlyRouter = createHourlyRouter({ service: hourlyService, limits });
   protectedApi.use('/tiktok/hourly', hourlyRouter);
   const tiktokRouter = createTiktokRouter({ service: tiktokService, limits });
@@ -223,6 +229,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
     hooks: hooksService,
     close: () => {
       hourlyService.stop();
+      balanceRouter.stop();
       hooksService.stop();
       hooksRouter.stop();
       hourlyRouter.stop();

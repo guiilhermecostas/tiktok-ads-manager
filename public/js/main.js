@@ -8,6 +8,7 @@ import { registerView } from './views/register.js';
 import { statusView } from './views/status.js';
 import { homeChatView } from './views/home-chat.js';
 import { reportsView } from './views/reports.js';
+import { balanceAccountsView, balanceBcView } from './views/balance.js';
 import { reportsHourlyView } from './views/reports-hourly.js';
 import { campaignsView } from './views/campaigns.js';
 import { openCampaignWizard } from './views/campaign-wizard/index.js';
@@ -33,6 +34,8 @@ const PROTECTED_ROUTES = {
   '/reports': { title: 'Relatórios', view: reportsView, areas: ['reports'] },
   '/reports/hourly': { title: 'Gasto por hora', view: reportsHourlyView, areas: ['reports'] },
   '/reports/accounts': { title: 'Relatórios por conta', view: tiktokAdsView, areas: ['reports'] },
+  '/balance': { title: 'Saldo', view: balanceBcView, areas: ['accounts'] },
+  '/balance/accounts': { title: 'Saldo das contas de anúncio', view: balanceAccountsView, areas: ['accounts'] },
   '/business-centers': { title: 'Contas TikTok', view: businessCentersView, areas: ['accounts'] },
   '/business-centers/accounts': { title: 'Contas de anúncio', view: adAccountsView, areas: ['accounts'] },
   '/business-centers/proxy': { title: 'Proxy', view: proxySettingsView, areas: ['accounts'] },

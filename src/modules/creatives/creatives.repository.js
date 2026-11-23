@@ -13,6 +13,7 @@ function toCreative(row) {
     mimeType: row.mime_type ?? null,
     sizeBytes: row.size_bytes ?? null,
     hasFile: row.storage_key !== null && row.storage_key !== undefined,
+    folderId: row.folder_id ?? null, // pasta (oferta) em que o criativo está; nulo = sem pasta
     aiGenerated: row.ai_generated === true, // contém trecho gerado por IA (hook): lembrar da divulgação de conteúdo de IA do TikTok
     tiktokAdvertisers: row.tiktok_advertisers ?? [],
     createdAt: toIso(row.created_at),
@@ -30,9 +31,15 @@ const escapeLike = (text) => text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 
 export function createCreativesRepository(db) {
   return {
-    async list(userId, { kind, q, limit = 60, offset = 0 } = {}) {
+    /** `folderId`: número = só essa pasta; 'none' = só os sem pasta; ausente = todos. */
+    async list(userId, { kind, q, folderId, limit = 60, offset = 0 } = {}) {
       const where = ['c.user_id = $1'];
       const params = [userId];
+      if (folderId === 'none') where.push('c.folder_id IS NULL');
+      else if (folderId !== undefined && folderId !== null) {
+        params.push(folderId);
+        where.push(`c.folder_id = $${params.length}`);
+      }
       if (kind) {
         params.push(kind);
         where.push(`c.kind = $${params.length}`);
@@ -74,11 +81,12 @@ export function createCreativesRepository(db) {
       return Number(rows[0].used);
     },
 
-    async createUpload(userId, { name, kind, originalFilename, mimeType, sizeBytes, sha256, md5, storageKey, aiGenerated = false }) {
+    async createUpload(userId, { name, kind, originalFilename, mimeType, sizeBytes, sha256, md5, storageKey, aiGenerated = false, folderId = null }) {
+      // A pasta só vale se for DESTE usuário (a própria instrução confere: nunca grava a pasta de outra pessoa).
       const { rows } = await db.query(
-        `INSERT INTO creatives (user_id, name, kind, source, original_filename, mime_type, size_bytes, sha256, md5, storage_key, ai_generated)
-         VALUES ($1, $2, $3, 'upload', $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-        [userId, name, kind, originalFilename, mimeType, sizeBytes, sha256, md5, storageKey, aiGenerated],
+        `INSERT INTO creatives (user_id, name, kind, source, original_filename, mime_type, size_bytes, sha256, md5, storage_key, ai_generated, folder_id)
+         VALUES ($1, $2, $3, 'upload', $4, $5, $6, $7, $8, $9, $10, (SELECT id FROM creative_folders WHERE id = $11 AND user_id = $1)) RETURNING id`,
+        [userId, name, kind, originalFilename, mimeType, sizeBytes, sha256, md5, storageKey, aiGenerated, folderId],
       );
       return rows[0].id;
     },
@@ -90,6 +98,57 @@ export function createCreativesRepository(db) {
         await tx.query('INSERT INTO creative_tiktok_assets (creative_id, advertiser_id, tiktok_id) VALUES ($1, $2, $3)', [rows[0].id, advertiserId, tiktokId]);
         return rows[0].id;
       });
+    },
+
+    // ---------- pastas ----------
+    /** Pastas do usuário com quantos criativos há em cada uma, mais os totais (todos e sem pasta). */
+    async folders(userId) {
+      const { rows } = await db.query(
+        `SELECT f.id, f.name, f.created_at, COUNT(c.id)::int AS total
+           FROM creative_folders f LEFT JOIN creatives c ON c.folder_id = f.id AND c.user_id = f.user_id
+          WHERE f.user_id = $1 GROUP BY f.id ORDER BY lower(f.name), f.id`,
+        [userId],
+      );
+      const counts = (await db.query('SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE folder_id IS NULL)::int AS unfiled FROM creatives WHERE user_id = $1', [userId])).rows[0];
+      return { folders: rows.map((r) => ({ id: r.id, name: r.name, count: r.total, createdAt: toIso(r.created_at) })), total: counts.total, unfiledCount: counts.unfiled };
+    },
+    async getFolder(userId, id) {
+      const { rows } = await db.query('SELECT id, name FROM creative_folders WHERE user_id = $1 AND id = $2', [userId, id]);
+      return rows[0] ?? null;
+    },
+    async countFolders(userId) {
+      const { rows } = await db.query('SELECT COUNT(*)::int AS n FROM creative_folders WHERE user_id = $1', [userId]);
+      return rows[0].n;
+    },
+    async createFolder(userId, name) {
+      const { rows } = await db.query('INSERT INTO creative_folders (user_id, name) VALUES ($1, $2) RETURNING id', [userId, name]);
+      return rows[0].id;
+    },
+    async renameFolder(userId, id, name) {
+      const { rowCount } = await db.query('UPDATE creative_folders SET name = $3, updated_at = now() WHERE user_id = $1 AND id = $2', [userId, id, name]);
+      return rowCount > 0;
+    },
+    /** Apaga a pasta; os criativos dela ficam sem pasta (devolve quantos eram, ou null se a pasta não existe). */
+    async deleteFolder(userId, id) {
+      return db.transaction(async (tx) => {
+        const { rows } = await tx.query('SELECT COUNT(*)::int AS n FROM creatives WHERE user_id = $1 AND folder_id = $2', [userId, id]);
+        const { rowCount } = await tx.query('DELETE FROM creative_folders WHERE user_id = $1 AND id = $2', [userId, id]);
+        return rowCount > 0 ? rows[0].n : null;
+      });
+    },
+    /**
+     * Move criativos para uma pasta (ou, com `folderId` nulo, para "sem pasta"), TUDO OU NADA em uma instrução: se algum ID não for do
+     * usuário (ou a pasta não for dele), nada muda e devolve 0.
+     */
+    async moveToFolder(userId, ids, folderId) {
+      const { rowCount } = await db.query(
+        `UPDATE creatives SET folder_id = $3, updated_at = now()
+          WHERE user_id = $1 AND id = ANY($2::int[])
+            AND (SELECT COUNT(*) FROM creatives WHERE user_id = $1 AND id = ANY($2::int[])) = cardinality($2::int[])
+            AND ($3::int IS NULL OR EXISTS (SELECT 1 FROM creative_folders WHERE id = $3 AND user_id = $1))`,
+        [userId, ids, folderId],
+      );
+      return rowCount;
     },
 
     async rename(userId, id, name) {

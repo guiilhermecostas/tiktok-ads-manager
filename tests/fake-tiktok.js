@@ -50,10 +50,14 @@ export function createFakeTiktok() {
     advertiserCreateError: 'No permission to create ad accounts', // mensagem desse erro
     hideCreatedAdvertisers: false, // true: a conta criada ainda NÃO aparece nas listas (atraso do TikTok)
     omitCreatedAdvertiserId: false, // true: a criação funciona mas a resposta não traz o ID
-    advertiserProfile: { company: 'Acme Ltda', country: 'BR', contact_email: 'ads@acme.example' }, // dados cadastrais de qualquer conta
+    advertiserProfile: { company: 'Acme Ltda', country: 'BR', contact_email: 'ads@acme.example', industry: '291905' }, // dados cadastrais de qualquer conta
     hourly: {}, // relatório por hora: conta de anúncio -> { 'YYYY-MM-DD': { 14: { spend: 5.5, impressions: 900, clicks: 30, conversion: 1 } } } (hora no fuso da conta)
     hourlyDelayMs: 0, // latência do relatório por hora (testes de coleta simultânea)
     failHourlyFor: new Set(), // contas cujo relatório por hora responde erro do TikTok
+    balances: { bc: {}, advertisers: {} }, // BC -> campos de saldo | BC -> [contas com saldo] (formato inferido: o TikTok não documenta a resposta)
+    balanceListKey: 'advertiser_account_list', // nome da lista na resposta de /advertiser/balance/get/ (o TikTok não documenta)
+    failBalanceBc: new Set(), // BCs cujo /bc/balance/get/ responde "sem permissão"
+    failBalanceAdvertisers: new Set(), // BCs cujo /advertiser/balance/get/ responde "sem permissão"
     manyCampaigns: 0, // >0: devolve essa quantidade de campanhas, paginadas
     // Autorização por link: auth_code -> { token, advertisers } (uso único, como no TikTok).
     authCodes: new Map(),
@@ -145,12 +149,26 @@ export function createFakeTiktok() {
         const info = body.advertiser_info ?? {};
         const customer = body.customer_info ?? {};
         if (!info.name || !info.currency || !info.timezone || !customer.company || !customer.registered_area) return reply({}, 40002, 'Missing required parameter');
+        // Comportamento real observado: o TikTok exige UM parâmetro de ramo de atividade.
+        if (!Number.isInteger(customer.industry)) return reply({}, 40002, 'You need to set only one industry param.');
         const id = String(++state.nextId);
         state.createdNames ??= {};
         state.createdNames[id] = info.name;
         state.currencies[id] = info.currency;
         if (!state.hideCreatedAdvertisers) state.bcs[body.bc_id].push(id);
         return reply(state.omitCreatedAdvertiserId ? {} : { advertiser_id: id });
+      }
+      case '/bc/balance/get/': {
+        if (state.failBalanceBc.has(query.bc_id) || !state.balances.bc[query.bc_id]) return reply({}, 40001, 'No permission to get the balance of this business center');
+        return reply(state.balances.bc[query.bc_id]);
+      }
+      case '/advertiser/balance/get/': {
+        if (Number(query.page_size) > 50) return reply({}, 40002, 'page_size must be less than or equal to 50');
+        if (state.failBalanceAdvertisers.has(query.bc_id) || !state.balances.advertisers[query.bc_id]) return reply({}, 40001, 'No permission to get balances in this business center');
+        const all = state.balances.advertisers[query.bc_id];
+        const size = Number(query.page);
+        const per = Number(query.page_size);
+        return reply({ [state.balanceListKey]: all.slice((size - 1) * per, size * per), page_info: { page: size, page_size: per, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / per)) } });
       }
       case '/pixel/list/': {
         if (state.failPixels) return reply(null, 40002, 'No permission to access pixels');

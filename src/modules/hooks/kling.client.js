@@ -19,7 +19,7 @@ const BUSY_CODES = new Set([1302, 1303, 5001, 5002]);
 
 function klingError(httpStatus, code) {
   if (AUTH_CODES.has(code) || httpStatus === 401) return new HttpError(502, 'A chave da Kling foi recusada. Avise o administrador do sistema.', 'kling_auth');
-  if (CREDIT_CODES.has(code)) return new HttpError(503, 'O saldo (créditos) da Kling acabou ou a conta está com restrição. Avise o administrador do sistema.', 'kling_credits');
+  if (CREDIT_CODES.has(code)) return new HttpError(503, 'Avise o administrador do sistema.', 'kling_credits');
   if (POLICY_CODES.has(code)) return new HttpError(422, 'A Kling recusou esta ideia pela política de conteúdo. Tente uma ideia diferente.', 'kling_policy');
   if (BUSY_CODES.has(code) || httpStatus === 429 || httpStatus === 503 || httpStatus === 504) return new HttpError(429, 'A Kling está ocupada agora. O sistema tenta de novo sozinho.', 'kling_busy');
   return new HttpError(502, 'A Kling não conseguiu atender o pedido agora.', 'kling_error');

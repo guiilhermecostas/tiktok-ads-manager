@@ -3,6 +3,7 @@ import { h, setChildren } from '../../dom.js';
 import { formatBytes } from '../../format.js';
 import { can } from '../../state.js';
 import { alertBox, button, emptyState, openModal, spinner } from '../../ui.js';
+import { FOLDER_ALL, folderIdOf } from './folders.js';
 import { creativeThumb } from './thumb.js';
 import { createUploader, uploadButton } from './uploader.js';
 
@@ -16,7 +17,7 @@ const PAGE = 60;
  */
 export function pickCreatives({ kind, multiple = false, max = 1, selected = [], title, cache }) {
   return new Promise((resolve) => {
-    const st = { chosen: [...selected], q: '', items: [], total: 0, limits: { maxImageBytes: 0, maxVideoBytes: 0 }, loading: true, error: null };
+    const st = { chosen: [...selected], q: '', folder: FOLDER_ALL, folders: [], items: [], total: 0, limits: { maxImageBytes: 0, maxVideoBytes: 0 }, loading: true, error: null };
     let settled = false;
     let timer;
     let loadId = 0;
@@ -48,6 +49,7 @@ export function pickCreatives({ kind, multiple = false, max = 1, selected = [], 
       try {
         const params = new URLSearchParams({ kind, limit: String(PAGE) });
         if (st.q) params.set('q', st.q);
+        if (st.folder !== FOLDER_ALL) params.set('folderId', String(st.folder));
         const data = await get(`/creatives?${params}`);
         if (current !== loadId) return;
         st.items = data.creatives;
@@ -67,6 +69,7 @@ export function pickCreatives({ kind, multiple = false, max = 1, selected = [], 
 
     const uploader = createUploader({
       getLimits: () => st.limits,
+      getFolderId: () => folderIdOf(st.folder), // enviar com uma pasta escolhida já coloca o arquivo nela
       onUploaded: (creative) => {
         if (creative.kind !== kind) return; // o seletor só mostra o tipo pedido
         remember(creative);
@@ -123,6 +126,19 @@ export function pickCreatives({ kind, multiple = false, max = 1, selected = [], 
       },
     });
 
+    // Filtro por pasta (oferta): só aparece se o usuário tem pastas.
+    const folderSelect = h('select', { class: 'input picker__folder', 'aria-label': 'Filtrar por pasta', hidden: true, onChange: (event) => {
+      const value = event.target.value;
+      st.folder = value === '' || value === 'none' ? value : Number(value);
+      load();
+    } });
+    get('/creatives/folders').then((data) => {
+      st.folders = data.folders;
+      if (!st.folders.length) return;
+      setChildren(folderSelect, h('option', { value: '' }, 'Todas as pastas'), h('option', { value: 'none' }, 'Sem pasta'), st.folders.map((f) => h('option', { value: String(f.id) }, `${f.name} (${f.count})`)));
+      folderSelect.hidden = false;
+    }).catch(() => {});
+
     const modal = openModal({
       title,
       size: 'wide',
@@ -130,7 +146,7 @@ export function pickCreatives({ kind, multiple = false, max = 1, selected = [], 
       body: h(
         'div',
         { class: 'modal__body picker' },
-        h('div', { class: 'picker__toolbar' }, search, can('creatives') ? uploadButton(uploader, { label: kind === 'video' ? 'Enviar vídeo' : 'Enviar imagem', variant: 'secondary' }) : null), // quem só publica campanhas escolhe, mas não envia
+        h('div', { class: 'picker__toolbar' }, search, folderSelect, can('creatives') ? uploadButton(uploader, { label: kind === 'video' ? 'Enviar vídeo' : 'Enviar imagem', variant: 'secondary' }) : null), // quem só publica campanhas escolhe, mas não envia
         can('creatives') ? uploader.element : null,
         grid,
         h('div', { class: 'modal__footer picker__footer' }, footerInfo, button('Cancelar', { onClick: () => done(null) }), confirm),

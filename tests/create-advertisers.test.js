@@ -6,7 +6,7 @@ import { GOOD_TOKEN, createFakeTiktok, tiktokTestConfig } from './fake-tiktok.js
 import { createUser, one, run, startTestServer } from './helpers.js';
 
 const LIMITS = { register: 1000, loginIp: 1000, loginAccount: 1000, tiktokRead: 1000, tiktokWrite: 1000, tiktokCreate: 1000, tiktokCallback: 1000, teamRead: 1000, teamWrite: 1000, teamInvite: 1000, inviteLookup: 1000, inviteAccept: 1000 };
-const FORM = { bcId: '111', count: 1, name: 'Loja Nova', currency: 'USD', timezone: 'America/Sao_Paulo', company: 'Acme Ltda', registeredArea: 'BR' };
+const FORM = { bcId: '111', count: 1, name: 'Loja Nova', currency: 'USD', timezone: 'America/Sao_Paulo', company: 'Acme Ltda', registeredArea: 'BR', industry: '291905' };
 let counter = 0;
 const emailOf = () => `ca${++counter}@example.com`;
 
@@ -76,7 +76,7 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
     assert.deepEqual(call.body, {
       bc_id: '111',
       advertiser_info: { name: 'Loja Nova', currency: 'USD', timezone: 'America/Sao_Paulo', type: 'AUCTION' },
-      customer_info: { company: 'Acme Ltda', registered_area: 'BR' },
+      customer_info: { company: 'Acme Ltda', registered_area: 'BR', industry: 291905 },
     });
     const list = (await user.client.get('/api/tiktok/advertisers')).json.advertisers;
     const made = list.find((a) => a.id === res.json.created[0].id);
@@ -99,6 +99,26 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
     assert.equal(createCalls()[0].body.customer_info.industry, 280102);
   });
 
+  it('o TikTok exige o ramo: sem ele o pedido é recusado aqui mesmo (nunca chega ao TikTok com o erro "only one industry param")', async () => {
+    const user = await owner();
+    const bc = await connect(user);
+    const res = await create(user, bc, { industry: undefined });
+    assert.equal(res.status, 400);
+    assert.match(res.json.error.message, /ramo de atividade/);
+    assert.equal(createCalls().length, 0);
+  });
+
+  it('o ramo é lido da conta existente (advertiser/info) para vir preenchido, e se o TikTok recusar esse campo o restante ainda vem', async () => {
+    const user = await owner();
+    const bc = await connect(user);
+    const ok = await user.client.get(`/api/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=111`);
+    assert.equal(ok.json.defaults.industry, '291905');
+    assert.ok(JSON.parse(fake.callsTo('/advertiser/info/').at(-1).query.fields).includes('industry'));
+    fake.state.advertiserProfile = { company: 'Outra', country: 'US', industry: 'abc;drop' }; // valor estranho nunca é repassado
+    assert.equal((await user.client.get(`/api/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=111`)).json.defaults.industry, null);
+    fake.state.advertiserProfile = { company: 'Acme Ltda', country: 'BR', contact_email: 'ads@acme.example', industry: '291905' };
+  });
+
   it('valida TUDO antes de falar com o TikTok (nada é enviado quando algo está errado)', async () => {
     const user = await owner();
     const bc = await connect(user);
@@ -109,7 +129,7 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
       { currency: 'US' }, { currency: 'REAL' }, { currency: '' },
       { timezone: 'Marte/Olimpo' }, { timezone: '' }, { company: '' }, { company: 'a' },
       { registeredArea: 'BRA' }, { registeredArea: '' },
-      { contactEmail: 'sem-arroba' }, { industry: 'abc' }, { industry: -4 }, { industry: 1.5 },
+      { contactEmail: 'sem-arroba' }, { industry: 'abc' }, { industry: -4 }, { industry: 1.5 }, { industry: undefined }, { industry: '' }, { industry: null }, { industry: '12345678901' },
       { bcId: 'abc' }, { bcId: '' },
     ];
     for (const patch of bad) {
@@ -257,7 +277,7 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
       fake.state.currencies = { ...fake.state.currencies, 9001: 'USD' }; // a conta modelo (a de menor ID) está em dólar
       const res = await user.client.get(`/api/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=111`);
       assert.equal(res.status, 200, res.text);
-      assert.deepEqual(res.json.defaults, { currency: 'USD', timezone: 'America/Sao_Paulo', company: 'Acme Ltda', country: 'BR', contactEmail: 'ads@acme.example' });
+      assert.deepEqual(res.json.defaults, { currency: 'USD', timezone: 'America/Sao_Paulo', company: 'Acme Ltda', country: 'BR', contactEmail: 'ads@acme.example', industry: '291905' });
       const info = fake.callsTo('/advertiser/info/').at(-1);
       assert.deepEqual(JSON.parse(info.query.advertiser_ids), ['9001']);
     });
@@ -271,6 +291,7 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
       assert.equal(res.json.defaults.currency, 'BRL');
       assert.equal(res.json.defaults.timezone, 'America/Sao_Paulo');
       assert.equal(res.json.defaults.company, null);
+      assert.equal(res.json.defaults.industry, null);
     });
 
     it('recusa BC que não é da conexão e ID inválido', async () => {

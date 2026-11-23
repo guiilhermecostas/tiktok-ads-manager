@@ -11,6 +11,11 @@ const MEDIA_ID_RE = /^(?!.*(?:\.\.|\/\/))[A-Za-z0-9][\w\-./:]{2,198}[A-Za-z0-9]$
 /** Teto do arquivo LIMPO enviado ao TikTok (limites do próprio TikTok; a recodificação pode aumentar o arquivo). */
 const CLEAN_OUTPUT_MAX_BYTES = { video: 500 * 1024 * 1024, image: 10 * 1024 * 1024 };
 
+/** Pastas por usuário (uma por oferta). */
+export const MAX_FOLDERS = 100;
+/** Criativos movidos de uma vez. */
+export const MAX_MOVE_BATCH = 100;
+
 /**
  * Regras de negócio da biblioteca de criativos.
  * Todo acesso é escopado ao usuário autenticado (`actor`): criativo de outro usuário é sempre "não encontrado".
@@ -23,6 +28,12 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
     const row = await repo.getInternal(actor.id, id);
     if (!row) throw notFound('Criativo não encontrado.');
     return row;
+  }
+
+  async function requireFolder(actor, id) {
+    const folder = await repo.getFolder(actor.id, id);
+    if (!folder) throw notFound('Pasta não encontrada.');
+    return folder;
   }
 
   /** Remove o arquivo sem derrubar a requisição: sobra de disco não pode virar erro para o usuário. */
@@ -42,11 +53,52 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
       return creative;
     },
 
+    // ---------- pastas (uma por oferta, um nível só) ----------
+    listFolders: (actor) => repo.folders(actor.id),
+
+    async createFolder(actor, name) {
+      if ((await repo.countFolders(actor.id)) >= MAX_FOLDERS) throw new HttpError(409, `Você já tem ${MAX_FOLDERS} pastas (o máximo). Apague alguma para criar outra.`, 'too_many_folders');
+      try {
+        const id = await repo.createFolder(actor.id, name);
+        return { id, name, count: 0 };
+      } catch (err) {
+        if (isUniqueViolation(err)) throw new HttpError(409, `Já existe uma pasta chamada "${name}".`, 'folder_exists');
+        throw err;
+      }
+    },
+
+    async renameFolder(actor, id, name) {
+      try {
+        if (!(await repo.renameFolder(actor.id, id, name))) throw notFound('Pasta não encontrada.');
+      } catch (err) {
+        if (isUniqueViolation(err)) throw new HttpError(409, `Já existe uma pasta chamada "${name}".`, 'folder_exists');
+        throw err;
+      }
+      return { id, name };
+    },
+
+    /** Apaga só a pasta: os criativos dela NÃO são apagados, voltam para "sem pasta". */
+    async deleteFolder(actor, id) {
+      const moved = await repo.deleteFolder(actor.id, id);
+      if (moved === null) throw notFound('Pasta não encontrada.');
+      return { moved };
+    },
+
+    /** Move 1 a 100 criativos para uma pasta (ou `null` = sem pasta). Tudo ou nada: ID de outra pessoa ou pasta inexistente = 404, nada muda. */
+    async move(actor, ids, folderId) {
+      const unique = [...new Set(ids)];
+      if (folderId !== null) await requireFolder(actor, folderId);
+      const changed = await repo.moveToFolder(actor.id, unique, folderId);
+      if (changed !== unique.length) throw notFound('Algum criativo não foi encontrado na sua biblioteca.');
+      return { moved: changed };
+    },
+
     /**
      * Recebe o arquivo (fluxo bruto), valida pelo CONTEÚDO, aplica limites/cota/duplicidade e grava.
      * @param {{ stream: import('node:stream').Readable, contentType: string, contentLength: number|null, name: string, filename: string }} upload
      */
-    async upload(actor, { stream, contentType, contentLength, name, filename }) {
+    async upload(actor, { stream, contentType, contentLength, name, filename, folderId = null }) {
+      if (folderId !== null) await requireFolder(actor, folderId); // 404 se a pasta não for do usuário (antes de gastar banda)
       const declaredKind = DECLARED_TYPES[contentType];
       if (!declaredKind) throw new HttpError(415, 'Tipo de arquivo não suportado. Use JPG, PNG, MP4 ou MOV.', 'unsupported_media_type');
       const maxBytes = maxBytesFor(declaredKind);
@@ -86,7 +138,7 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
         try {
           id = await repo.createUpload(actor.id, {
             name, kind: actual.kind, originalFilename: filename, mimeType: actual.mime, sizeBytes: received.size,
-            sha256: received.sha256, md5: received.md5, storageKey: committedKey,
+            sha256: received.sha256, md5: received.md5, storageKey: committedKey, folderId,
           });
         } catch (err) {
           await discardFile(committedKey);
@@ -103,7 +155,7 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
      * Guarda na biblioteca um VÍDEO gerado pelo próprio sistema (ex.: hook + vídeo), vindo de um arquivo local. Mesmas regras do
      * envio: confere o conteúdo, a cota e a duplicidade, e grava com nome aleatório. Fica marcado como "gerado por IA".
      */
-    async adoptGenerated(actor, { name, sourcePath, filename }) {
+    async adoptGenerated(actor, { name, sourcePath, filename, folderId = null }) {
       const used = await repo.usedBytes(actor.id);
       const tempFile = storage.tempPath();
       try {
@@ -122,7 +174,7 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
         try {
           id = await repo.createUpload(actor.id, {
             name, kind: 'video', originalFilename: filename, mimeType: actual.mime, sizeBytes: received.size,
-            sha256: received.sha256, md5: received.md5, storageKey: committedKey, aiGenerated: true,
+            sha256: received.sha256, md5: received.md5, storageKey: committedKey, aiGenerated: true, folderId,
           });
         } catch (err) {
           await discardFile(committedKey);

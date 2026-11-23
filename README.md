@@ -90,6 +90,8 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
    tentadas (o resultado diz o que já foi criado). Ao final a conexão é relida para as contas aparecerem; se não aparecerem (o TikTok pode demorar, ou o
    token do link só lista contas autorizadas), a tela orienta a usar “Atualizar contas”/“Renovar acesso”. API: `POST /api/tiktok/business-centers/:id/advertisers`
    com `{ bcId, count, name, currency, timezone, company, registeredArea, industry?, contactEmail?, contactName? }`. Regras em `shared/advertiser-create.js`.
+   **Ramo de atividade (obrigatório):** o TikTok recusa a criação sem ele ("You need to set only one industry param"). O formulário traz o campo preenchido com o ramo de uma
+   conta que a BC já tem (lido de `advertiser/info`, campo `industry`); se vier vazio, copie o ID de uma conta existente. Não há endpoint público para listar os ramos.
    **Pendente de conferência com o TikTok real:** a permissão do token (precisa ser de administrador da BC com acesso à gestão de contas), o formato da
    resposta (o ID é lido de forma defensiva) e as exigências por país (ex.: Brasil, México e França pedem documentos/CNPJ e e-mail; o sistema mostra o
    erro do TikTok quando faltarem — ainda não há envio de documentos).
@@ -225,8 +227,22 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
   pronto só aceita https em domínios da lista (`KLING_DOWNLOAD_HOSTS`), nunca IP/localhost/redirecionamento, com limite de tamanho; limites por usuário (`KLING_DAILY_LIMIT`,
   padrão 20 a cada 24 h), no sistema (`KLING_GLOBAL_DAILY_LIMIT`, 100), 6 pedidos ativos por usuário e `KLING_CONCURRENCY` tarefas simultâneas (3). Prompts em `hook-prompts.js`
   (sempre com "sem texto, marcas, pessoas reais, violência ou nudez"). API: `GET/POST /api/hooks`, `GET /api/hooks/:id/file`, `POST /api/hooks/:id/apply`, `DELETE /api/hooks/:id`.
-  **Atenção:** a API da Kling cobra por um pacote de créditos próprio; sem saldo ela responde "Account balance not enough" (a tela mostra "o saldo da Kling acabou"). Se o sistema avisar
+  **Atenção:** a API da Kling cobra por um pacote de créditos próprio; sem saldo ela responde "Account balance not enough" (a tela mostra só "Avise o administrador do sistema.", sem detalhes da conta). Se o sistema avisar
   que um endereço de vídeo foi recusado, acrescente o domínio em `KLING_DOWNLOAD_HOSTS`.
+- **Pastas de criativos** (biblioteca de Criativos): uma pasta por oferta (um nível), com contagem, "Sem pasta" e "Todos". Criar, renomear (nome único por usuário, sem
+  diferenciar maiúsculas; até 100 pastas) e apagar (**apagar a pasta não apaga criativos**: voltam para "Sem pasta"). Enviar com uma pasta aberta já coloca o arquivo nela;
+  mover um criativo (ícone da pasta no cartão), vários de uma vez (caixas de seleção → "Mover para pasta…", com opção de criar a pasta na hora) ou **arrastando** o cartão
+  até o nome da pasta. O seletor de criativos da campanha tem filtro por pasta, e o vídeo "hook + vídeo" fica na mesma pasta do original. API: `GET/POST /api/creatives/folders`,
+  `PATCH/DELETE /api/creatives/folders/:id`, `POST /api/creatives/move` (`{ ids, folderId|null }`, tudo ou nada), `PATCH /api/creatives/:id` (`{ name?, folderId? }`),
+  `GET /api/creatives?folderId=ID|none` e `POST /api/creatives?folderId=ID`. Tabela `creative_folders` + `creatives.folder_id` (migração v14). Nomes entram sempre como texto.
+- **Saldo** (menu "Saldo", área "Contas TikTok"): duas subabas SEPARADAS, **Business Centers** (`/balance`) e **Contas de anúncio** (`/balance/accounts`). Cada linha mostra o saldo
+  disponível, a situação (**com saldo**, **sem saldo** ou **sem informação**, com o motivo ao passar o mouse) e, em "Detalhes", **todos** os valores que o TikTok devolveu (saldo total,
+  dinheiro, bônus, bloqueado, impostos, orçamento…). Uma BC sem saldo com contas com saldo (e o contrário) aparecem normalmente, e cada conta diz se a BC dela tem saldo. Filtros: busca,
+  situação, moeda e conexão; resumo por moeda (moedas diferentes nunca se somam). Dados da API real: `GET /bc/balance/get/` e `GET /advertiser/balance/get/` (confirmados com token falso;
+  o TikTok **não documenta o formato da resposta**, então o sistema lê todos os campos numéricos de forma tolerante e usa nomes em português só para os conhecidos). Só as conexões do
+  PRÓPRIO usuário (nada compartilhado), cache de 60 s que muda sozinho ao conectar/remover/sincronizar, "Atualizar agora" com limite (6 por 5 minutos) e consulta de poucas BCs ao
+  mesmo tempo; falha em uma BC (ex.: sem permissão financeira) aparece naquela BC e não derruba as outras. API: `GET /api/tiktok/balance[?refresh=1]`. **Pendente de conferência com um
+  token real:** o formato exato da resposta e se o token da conexão tem permissão financeira na BC.
 - **Arquivos** (aba de Contas TikTok): anexos para a equipe (ex.: arquivos de logins). Gravados **criptografados** (AES-256-GCM, dono autenticado; desligado sem
   `TOKEN_ENCRYPTION_KEY`), só txt/csv/log/md/pdf/png/jpg/docx/xlsx **conferidos pelo conteúdo**, sempre entregues como **download** (`octet-stream`, `attachment`,
   `nosniff`, sem cache). Limites: 5 MB por arquivo, 50 arquivos e 100 MB por conta. Para senhas, um gerenciador de senhas é mais seguro.

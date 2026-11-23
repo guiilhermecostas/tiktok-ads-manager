@@ -46,9 +46,10 @@ export function createAdvertisersDialog({ bc, onDone }) {
   const company = field('Empresa', { type: 'text', maxlength: 255, required: true, autocomplete: 'off', placeholder: 'Razão social ou nome fantasia' });
   const country = field('País de registro', { type: 'text', maxlength: 2, required: true, autocomplete: 'off', placeholder: 'BR' });
   const email = field('E-mail de contato (opcional)', { type: 'email', maxlength: 254, autocomplete: 'off' });
-  const industry = field('Ramo de atividade (opcional)', { type: 'text', inputmode: 'numeric', maxlength: 9, autocomplete: 'off' }, { hint: 'ID numérico do ramo no TikTok. Deixe vazio se não souber.' });
+  const industry = field('Ramo de atividade (ID do TikTok)', { type: 'text', inputmode: 'numeric', required: true, maxlength: 9, autocomplete: 'off', placeholder: 'Ex.: 291905' }, { hint: 'O TikTok exige. Vem preenchido com o ramo de uma conta que esta Business Center já tem; se ficar vazio, copie o ID de uma conta existente.' });
+  industry.element.classList.add('create-ca__wide');
 
-  const prefill = { currency, timezone, company, country, contactEmail: email };
+  const prefill = { currency, timezone, company, country, contactEmail: email, industry };
   for (const f of [name, currency, timezone, company, country, email, industry]) f.control.addEventListener('input', () => { f.control.dataset.touched = '1'; });
 
   const preview = h('p', { class: 'create-ca__preview' });
@@ -90,9 +91,9 @@ export function createAdvertisersDialog({ bc, onDone }) {
           filled += 1;
         }
       }
-      status.textContent = filled ? 'Preenchido com os dados de uma conta que esta Business Center já tem. Confira antes de criar.' : 'Não foi possível sugerir os dados. Preencha moeda, fuso, empresa e país.';
+      status.textContent = filled ? 'Preenchido com os dados de uma conta que esta Business Center já tem. Confira antes de criar.' : 'Não foi possível sugerir os dados. Preencha moeda, fuso, empresa, país e ramo.';
     } catch {
-      if (ticket === defaultsRequest) status.textContent = 'Não foi possível sugerir os dados. Preencha moeda, fuso, empresa e país.';
+      if (ticket === defaultsRequest) status.textContent = 'Não foi possível sugerir os dados. Preencha moeda, fuso, empresa, país e ramo.';
     }
   }
   const selectedBc = () => (bcSelect ? bcSelect.control.value : bcIds[0]);
@@ -114,7 +115,7 @@ export function createAdvertisersDialog({ bc, onDone }) {
     if (company.control.value.trim().length < 2) throw new Error('Informe a empresa.');
     const area = normalizeCountry(country.control.value);
     if (!area) throw new Error('Informe o país de registro com 2 letras (ex.: BR).');
-    if (industry.control.value.trim() && !/^\d{1,9}$/.test(industry.control.value.trim())) throw new Error('O ramo de atividade é um número (ID do TikTok). Deixe vazio se não souber.');
+    if (!/^\d{1,9}$/.test(industry.control.value.trim())) throw new Error('Informe o ramo de atividade: é um número (ID do TikTok), copiado de uma conta que já existe.');
     return {
       bcId: selectedBc(),
       count: n,
@@ -124,7 +125,7 @@ export function createAdvertisersDialog({ bc, onDone }) {
       company: company.control.value.trim(),
       registeredArea: area,
       ...(email.control.value.trim() ? { contactEmail: email.control.value.trim() } : {}),
-      ...(industry.control.value.trim() ? { industry: industry.control.value.trim() } : {}),
+      industry: industry.control.value.trim(),
     };
   }
 
@@ -196,8 +197,8 @@ export function createAdvertisersDialog({ bc, onDone }) {
     bcSelect ? bcSelect.element : h('p', { class: 'create-ca__bc' }, 'Business Center do TikTok: ', h('strong', null, bcIds[0])),
     h('div', { class: 'create-ca__qty' }, qtyField, name.element),
     preview,
-    h('div', { class: 'invite-fields' }, currency.element, timezone.element, company.element, country.element),
-    h('details', { class: 'create-ca__more' }, h('summary', null, 'Mais opções'), h('div', { class: 'invite-fields' }, email.element, industry.element)),
+    h('div', { class: 'invite-fields' }, currency.element, timezone.element, company.element, country.element, industry.element),
+    h('details', { class: 'create-ca__more' }, h('summary', null, 'Mais opções'), h('div', { class: 'invite-fields' }, email.element)),
     status,
     h('div', { class: 'modal__footer' }, button('Cancelar', { onClick: () => modal.requestClose() }), submit),
   );

@@ -2,6 +2,7 @@ import { del, get, patch, post } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
 import { formatBytes, formatDate } from '../../format.js';
 import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, spinner, toast } from '../../ui.js';
+import { DRAG_TYPE, FOLDER_ALL, FOLDER_NONE, createFolders, folderIdOf } from './folders.js';
 import { openHookDialog } from './hook-dialog.js';
 import { creativeThumb } from './thumb.js';
 import { createUploader, uploadButton } from './uploader.js';
@@ -15,14 +16,30 @@ const TABS = [
 
 /** Biblioteca de criativos: guarde uma vez, use em qualquer campanha. */
 export async function creativesView() {
-  const st = { kind: '', q: '', creatives: [], total: 0, usedBytes: 0, quotaBytes: 0, limits: { maxImageBytes: 0, maxVideoBytes: 0 }, loading: false, error: null };
+  const st = { kind: '', q: '', creatives: [], total: 0, usedBytes: 0, quotaBytes: 0, limits: { maxImageBytes: 0, maxVideoBytes: 0 }, loading: false, error: null, selected: new Set() };
   const root = h('div');
   let searchTimer;
   let loadId = 0;
 
+  // Pastas (uma por oferta): trocar de pasta recarrega a lista; criativos movidos/pastas alteradas também.
+  const folders = createFolders({
+    onSelect: () => {
+      st.selected.clear();
+      reload();
+    },
+    onChanged: () => {
+      st.selected.clear(); // depois de mover/renomear/apagar, começa uma seleção nova
+      reload();
+    },
+  });
+
   const uploader = createUploader({
     getLimits: () => st.limits,
-    onUploaded: () => reload(),
+    getFolderId: () => folderIdOf(folders.current), // com uma pasta aberta, os envios já entram nela
+    onUploaded: () => {
+      folders.refresh();
+      reload();
+    },
   });
 
   // ---------- dados ----------
@@ -35,9 +52,11 @@ export async function creativesView() {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(append ? st.creatives.length : 0) });
       if (st.kind) params.set('kind', st.kind);
       if (st.q) params.set('q', st.q);
+      if (folders.current !== FOLDER_ALL) params.set('folderId', String(folders.current));
       const data = await get(`/creatives?${params}`);
       if (current !== loadId) return;
       st.creatives = append ? [...st.creatives, ...data.creatives] : data.creatives;
+      for (const id of [...st.selected]) if (!st.creatives.some((c) => c.id === id)) st.selected.delete(id); // seleção só vale para o que está na tela
       Object.assign(st, { total: data.total, usedBytes: data.usedBytes, quotaBytes: data.quotaBytes, limits: data.limits });
     } catch (err) {
       if (current === loadId) st.error = err.message;
@@ -49,7 +68,7 @@ export async function creativesView() {
       }
     }
   }
-  const reload = () => load();
+  const reload = () => load().then(drawSelection);
 
   // ---------- ações ----------
   function rename(creative) {
@@ -96,7 +115,8 @@ export async function creativesView() {
     try {
       await del(`/creatives/${creative.id}`);
       toast('Criativo excluído.');
-      await reload();
+      st.selected.delete(creative.id);
+      await Promise.all([reload(), folders.refresh()]);
     } catch (err) {
       toast(err.message, 'danger');
     }
@@ -170,28 +190,62 @@ export async function creativesView() {
   }
 
   const grid = h('div');
+
+  // ---------- seleção (para mover vários de uma vez) ----------
+  const selectionBar = h('div', { class: 'selection-bar', hidden: true, role: 'region', 'aria-label': 'Criativos selecionados' });
+  function drawSelection() {
+    const n = st.selected.size;
+    selectionBar.hidden = n === 0;
+    setChildren(
+      selectionBar,
+      h('strong', null, `${n} ${n === 1 ? 'selecionado' : 'selecionados'}`),
+      button('Mover para pasta…', { small: true, variant: 'primary', onClick: () => folders.openMove([...st.selected]) }),
+      button('Limpar seleção', { small: true, onClick: () => { st.selected.clear(); drawGrid(); drawSelection(); } }),
+    );
+  }
+  /** Marca/desmarca só aquele cartão (sem redesenhar a grade, que recarregaria as miniaturas dos vídeos). */
+  function toggleSelected(creative, article) {
+    if (st.selected.has(creative.id)) st.selected.delete(creative.id);
+    else st.selected.add(creative.id);
+    article.classList.toggle('is-selected', st.selected.has(creative.id));
+    drawSelection();
+  }
+
   function card(creative) {
     const used = creative.tiktokAdvertisers.length;
-    return h(
+    const folderName = creative.folderId !== null && folders.current === FOLDER_ALL ? folders.folderName(creative.folderId) : null;
+    const selected = st.selected.has(creative.id);
+    const article = h(
       'article',
-      { class: 'creative-card' },
+      { class: `creative-card${selected ? ' is-selected' : ''}`, draggable: true },
+      h('label', { class: 'creative-card__select', title: 'Selecionar' }, h('input', { type: 'checkbox', checked: selected, 'aria-label': `Selecionar ${creative.name}`, onChange: (event) => toggleSelected(creative, event.currentTarget.closest('article')) })),
       h('button', { type: 'button', class: 'creative-card__preview', 'aria-label': `Ver ${creative.name}`, onClick: () => preview(creative) }, creativeThumb(creative)),
       h(
         'div',
         { class: 'creative-card__body' },
         h('p', { class: 'creative-card__name', title: creative.name }, creative.name),
         h('p', { class: 'muted creative-card__meta' }, `${creative.sizeBytes === null ? 'No TikTok' : formatBytes(creative.sizeBytes)} · ${formatDate(creative.createdAt)}`),
-        used || creative.aiGenerated
-          ? h('p', { class: 'creative-card__tags' }, creative.aiGenerated ? badge('Gerado por IA', 'neutral') : null, used ? badge(`Enviado a ${used} conta${used > 1 ? 's' : ''}`, 'success') : null)
+        used || creative.aiGenerated || folderName
+          ? h('p', { class: 'creative-card__tags' }, folderName ? h('span', { class: 'folder-tag', title: `Pasta: ${folderName}` }, icon('folder', 12), h('span', null, folderName)) : null, creative.aiGenerated ? badge('Gerado por IA', 'neutral') : null, used ? badge(`Enviado a ${used} conta${used > 1 ? 's' : ''}`, 'success') : null)
           : null,
       ),
       h(
         'div',
         { class: 'creative-card__actions' },
+        h('button', { type: 'button', class: 'icon-btn', title: 'Mover para pasta', 'aria-label': `Mover ${creative.name} para uma pasta`, onClick: () => folders.openMove([creative.id], { current: creative.folderId }) }, icon('folder', 16)),
         h('button', { type: 'button', class: 'icon-btn', title: 'Renomear', 'aria-label': `Renomear ${creative.name}`, onClick: () => rename(creative) }, icon('edit', 16)),
         h('button', { type: 'button', class: 'icon-btn icon-btn--danger', title: 'Excluir', 'aria-label': `Excluir ${creative.name}`, onClick: () => remove(creative) }, icon('trash', 16)),
       ),
     );
+    // Arrastar para uma pasta: leva a seleção inteira, se este criativo estiver nela; senão, só ele.
+    article.addEventListener('dragstart', (event) => {
+      const ids = st.selected.has(creative.id) ? [...st.selected] : [creative.id];
+      event.dataTransfer.setData(DRAG_TYPE, JSON.stringify(ids));
+      event.dataTransfer.effectAllowed = 'move';
+      article.classList.add('is-dragging');
+    });
+    article.addEventListener('dragend', () => article.classList.remove('is-dragging'));
+    return article;
   }
 
   function drawGrid() {
@@ -199,12 +253,17 @@ export async function creativesView() {
     if (st.loading && !st.creatives.length) return setChildren(grid, spinner());
     if (!st.creatives.length) {
       const filtered = st.kind || st.q;
+      const inFolder = typeof folders.current === 'number';
+      const unfiled = folders.current === FOLDER_NONE;
+      if (inFolder && !filtered) {
+        return setChildren(grid, h('div', { class: 'card' }, emptyState({ title: 'Esta pasta está vazia', text: 'Envie arquivos aqui (eles entram nesta pasta) ou arraste criativos da lista para o nome dela.', action: uploadButton(uploader, { label: 'Enviar para esta pasta' }) })));
+      }
       return setChildren(
         grid,
         h('div', { class: 'card' }, emptyState({
-          title: filtered ? 'Nenhum criativo encontrado' : 'Sua biblioteca está vazia',
-          text: filtered ? 'Tente outro filtro ou outra busca.' : 'Envie imagens (JPG, PNG) e vídeos (MP4, MOV) uma vez e use em qualquer campanha, sem digitar IDs.',
-          action: filtered ? null : uploadButton(uploader, { label: 'Enviar primeiros arquivos' }),
+          title: filtered ? 'Nenhum criativo encontrado' : unfiled ? 'Nenhum criativo sem pasta' : 'Sua biblioteca está vazia',
+          text: filtered ? 'Tente outro filtro ou outra busca.' : unfiled ? 'Todos os seus criativos já estão em pastas.' : 'Envie imagens (JPG, PNG) e vídeos (MP4, MOV) uma vez e use em qualquer campanha, sem digitar IDs. Crie pastas para organizar por oferta.',
+          action: filtered || unfiled ? null : uploadButton(uploader, { label: 'Enviar primeiros arquivos' }),
         })),
       );
     }
@@ -260,11 +319,12 @@ export async function creativesView() {
   document.addEventListener('dragover', onDragOver);
   document.addEventListener('drop', onDrop);
 
-  const actions = h('div', { class: 'page-header__actions' }, button('Hook com IA', { onClick: () => openHookDialog({ onCreated: reload }) }), button('Já está no TikTok? Adicionar por ID', { onClick: addFromTikTok }), uploadButton(uploader));
-  setChildren(root, h('div', { class: 'page-header' }, h('div', null, h('h1', { class: 'page-title' }, 'Criativos'), h('p', { class: 'muted' }, 'Guarde suas imagens e vídeos e selecione nas campanhas.')), actions), meter, uploader.element, h('div', { class: 'toolbar toolbar--row' }, tabs, search), grid, dropHint);
+  const actions = h('div', { class: 'page-header__actions' }, button('Hook com IA', { onClick: () => openHookDialog({ onCreated: () => { folders.refresh(); reload(); } }) }), button('Já está no TikTok? Adicionar por ID', { onClick: addFromTikTok }), uploadButton(uploader));
+  setChildren(root, h('div', { class: 'page-header' }, h('div', null, h('h1', { class: 'page-title' }, 'Criativos'), h('p', { class: 'muted' }, 'Guarde suas imagens e vídeos, organize por oferta em pastas e selecione nas campanhas.')), actions), meter, folders.element, uploader.element, h('div', { class: 'toolbar toolbar--row' }, tabs, search), selectionBar, grid, dropHint);
   drawTabs();
   drawMeter();
-  await load();
+  drawSelection();
+  await Promise.all([folders.refresh(), load()]);
 
   return {
     element: root,

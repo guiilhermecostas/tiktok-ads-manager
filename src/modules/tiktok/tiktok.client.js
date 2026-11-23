@@ -15,10 +15,16 @@ const BC_LIST_MAX_PAGES = 3;
 const HOURLY_PAGE_SIZE = 100; // um dia tem no máximo 24 horas
 const HOURLY_MAX_PAGES = 2;
 const HOUR_LABEL_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+const BALANCE_PAGE_SIZE = 50;
+const BALANCE_MAX_PAGES = 20;
+const MAX_AMOUNT_FIELDS = 40;
+const NUMERIC_TEXT_RE = /^-?\d{1,15}(?:\.\d{1,6})?$/;
+// Campos que são identificação, data, situação ou paginação (não são valores em dinheiro).
+const NOT_AMOUNT_RE = /(^|_)(id|ids|time|date|status|type|code|count|number|page|size|name|currency)($|_)/;
 const PIXEL_PAGE_SIZE = 50;
 const PIXEL_MAX_PAGES = 4;
 const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id'];
-const PROFILE_FIELDS = ['advertiser_id', 'company', 'country', 'currency', 'timezone', 'contact_email'];
+const PROFILE_FIELDS = ['advertiser_id', 'company', 'country', 'currency', 'timezone', 'contact_email', 'industry'];
 // Códigos que indicam token revogado/inválido: é preciso trocar o token da Business Center.
 const TOKEN_ERROR_CODES = new Set([40104, 40105]);
 // Limite de requisições do TikTok (código 40100 e mensagens equivalentes).
@@ -35,6 +41,28 @@ function requireId(value, what) {
   const id = String(value ?? '');
   if (!/^\d{1,24}$/.test(id)) throw new HttpError(502, `O TikTok não retornou o ID ${what}.`, 'tiktok_bad_response');
   return id;
+}
+
+/**
+ * Valores numéricos de um objeto do TikTok (campos de saldo), como [{ key, value }]. Aceita número ou texto numérico, olha também um
+ * nível de objetos aninhados e ignora ids, datas, situação e paginação. O TikTok não documenta cada campo, então lê TUDO que for número.
+ */
+export function numericFields(object) {
+  const found = [];
+  const seen = new Set();
+  const add = (key, raw) => {
+    const text = typeof raw === 'string' ? raw.trim() : raw;
+    const value = typeof text === 'number' ? text : typeof text === 'string' && NUMERIC_TEXT_RE.test(text) ? Number(text) : null;
+    if (value === null || !Number.isFinite(value) || NOT_AMOUNT_RE.test(key) || !/^[a-z][a-z0-9_.]{0,60}$/i.test(key) || seen.has(key) || found.length >= MAX_AMOUNT_FIELDS) return;
+    seen.add(key);
+    found.push({ key: key.toLowerCase(), value: Math.round(value * 10_000) / 10_000 });
+  };
+  for (const [key, raw] of Object.entries(object ?? {})) {
+    if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [inner, innerRaw] of Object.entries(raw)) add(inner, innerRaw);
+    } else if (!Array.isArray(raw)) add(key, raw);
+  }
+  return found;
 }
 
 /** ID numérico do TikTok (só dígitos) ou null: nunca guardamos texto livre vindo da resposta. */
@@ -167,12 +195,16 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
      */
     async getAdvertiserProfile(token, advertiserId) {
       let data;
-      try {
-        data = await call('/advertiser/info/', { token, query: { advertiser_ids: [advertiserId], fields: PROFILE_FIELDS } });
-      } catch (err) {
-        if (!(err instanceof HttpError && err.code === 'tiktok_error')) throw err;
-        return {};
+      // Se o TikTok recusar algum campo pedido (ex.: um nome de campo que mudou), tenta de novo sem o ramo para ao menos trazer o resto.
+      for (const fields of [PROFILE_FIELDS, PROFILE_FIELDS.filter((f) => f !== 'industry')]) {
+        try {
+          data = await call('/advertiser/info/', { token, query: { advertiser_ids: [advertiserId], fields } });
+          break;
+        } catch (err) {
+          if (!(err instanceof HttpError && err.code === 'tiktok_error')) throw err;
+        }
       }
+      if (!data) return {};
       const a = data.list?.[0] ?? {};
       return {
         company: typeof a.company === 'string' ? a.company.slice(0, 255) : null,
@@ -180,6 +212,7 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         currency: typeof a.currency === 'string' ? a.currency.slice(0, 3).toUpperCase() : null,
         timezone: typeof a.timezone === 'string' ? a.timezone.slice(0, 64) : null,
         contactEmail: typeof a.contact_email === 'string' ? a.contact_email.slice(0, 254) : null,
+        industry: /^\d{1,9}$/.test(String(a.industry ?? '')) ? String(a.industry) : null, // ID do ramo de atividade (obrigatório ao criar contas)
       };
     },
 
@@ -195,7 +228,7 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         body: {
           bc_id: bcId,
           advertiser_info: { name, currency, timezone, type: 'AUCTION' },
-          customer_info: { company, registered_area: registeredArea, ...(industry ? { industry } : {}) },
+          customer_info: { company, registered_area: registeredArea, industry }, // o TikTok exige o ramo (um único parâmetro de ramo)
           ...(contact ? { contact_info: contact } : {}),
         },
       });
@@ -236,6 +269,42 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
       }
       return [...found.values()];
+    },
+
+    /**
+     * Saldo de uma Business Center (`/bc/balance/get/`): { currency, amounts: [{ key, value }] }. Lê todos os campos numéricos da
+     * resposta (o TikTok não documenta o formato): cada um vira uma linha de saldo na tela.
+     */
+    async getBcBalance(token, bcId) {
+      const data = await call('/bc/balance/get/', { token, query: { bc_id: bcId } });
+      return { currency: /^[A-Z]{3}$/.test(String(data?.currency ?? '')) ? data.currency : null, amounts: numericFields(data) };
+    },
+
+    /**
+     * Saldo e orçamento das contas de anúncio de uma Business Center (`/advertiser/balance/get/`, paginado):
+     * [{ id, name, status, currency, amounts: [{ key, value }] }]. A lista é procurada em `advertiser_account_list`/`list`/`advertisers`
+     * (ou na primeira lista de objetos com `advertiser_id`), e cada conta tem todos os campos numéricos lidos.
+     */
+    async listAdvertiserBalances(token, bcId) {
+      const accounts = new Map();
+      for (let page = 1; page <= BALANCE_MAX_PAGES; page += 1) {
+        const data = await call('/advertiser/balance/get/', { token, query: { bc_id: bcId, page, page_size: BALANCE_PAGE_SIZE } });
+        const list = [data?.advertiser_account_list, data?.list, data?.advertisers, ...Object.values(data ?? {})].find((v) => Array.isArray(v) && v.some((x) => x && typeof x === 'object' && ('advertiser_id' in x || 'advertiser' in x))) ?? [];
+        for (const item of list) {
+          const id = digitsOrNull(item?.advertiser_id ?? item?.advertiser?.advertiser_id);
+          if (!id || accounts.has(id)) continue;
+          accounts.set(id, {
+            id,
+            name: String(item?.advertiser_name ?? item?.name ?? item?.advertiser?.advertiser_name ?? '').slice(0, 120),
+            status: typeof (item?.advertiser_status ?? item?.status) === 'string' ? String(item.advertiser_status ?? item.status).slice(0, 40) : null,
+            currency: /^[A-Z]{3}$/.test(String(item?.currency ?? '')) ? item.currency : null,
+            amounts: numericFields(item),
+          });
+        }
+        const totalPages = num(data?.page_info?.total_page);
+        if (!list.length || page >= (totalPages || 1)) break;
+      }
+      return [...accounts.values()];
     },
 
     /** Campanhas da conta (paginado: até CAMPAIGN_MAX_PAGES páginas; `total` é o total real no TikTok). */

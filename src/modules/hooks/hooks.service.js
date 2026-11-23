@@ -181,7 +181,7 @@ export function createHooksService({ repo, kling, video, storage, creatives, con
         const creative = await creatives.get(actor, creativeId); // 404 se não for do usuário
         if (creative.kind !== 'video') throw badRequest('Escolha um vídeo da biblioteca (hook só se junta a vídeo).');
         const file = await creatives.openFile(actor, creativeId); // 404 se for só referência do TikTok (sem arquivo)
-        main = { path: file.filePath, name: creative.name };
+        main = { path: file.filePath, name: creative.name, folderId: creative.folderId ?? null };
       }
       const resultName = (name ?? (main ? `${main.name} + Hook IA` : `Hook IA – ${hookStyleLabel(row.style)}`)).slice(0, 100);
       if (!(await repo.beginApply(actor.id, id))) throw new HttpError(409, 'Este hook já está sendo aplicado.', 'hook_apply_running');
@@ -193,7 +193,7 @@ export function createHooksService({ repo, kling, video, storage, creatives, con
           if (main) {
             output = video.tempFile('mp4');
             await video.combine({ hookPath: storage.pathFor(row.storage_key), mainPath: main.path, outputPath: output, maxBytes: creatives.limits.maxVideoBytes });
-            created = await creatives.adoptGenerated(actor, { name: resultName, sourcePath: output, filename: `hook-${id}.mp4` });
+            created = await creatives.adoptGenerated(actor, { name: resultName, sourcePath: output, filename: `hook-${id}.mp4`, folderId: main.folderId }); // fica na mesma pasta do vídeo original
           } else {
             created = await creatives.adoptGenerated(actor, { name: resultName, sourcePath: storage.pathFor(row.storage_key), filename: `hook-${id}.mp4` });
           }

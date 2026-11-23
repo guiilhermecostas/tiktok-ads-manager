@@ -103,7 +103,7 @@ describe('Biblioteca de criativos: envio, listagem, arquivo, isolamento', () => 
       assert.equal(row.sha256, createHash('sha256').update(bytes).digest('hex'));
       assert.equal(row.md5, createHash('md5').update(bytes).digest('hex'));
       for (const secret of ['storage_key', 'storageKey', 'sha256', 'md5', row.sha256, row.md5]) assert.ok(!res.text.includes(secret), `vazou: ${secret}`);
-      assert.deepEqual(Object.keys(res.json.creative).sort(), ['aiGenerated', 'createdAt', 'hasFile', 'id', 'kind', 'mimeType', 'name', 'originalFilename', 'sizeBytes', 'source', 'tiktokAdvertisers', 'updatedAt']);
+      assert.deepEqual(Object.keys(res.json.creative).sort(), ['aiGenerated', 'createdAt', 'folderId', 'hasFile', 'id', 'kind', 'mimeType', 'name', 'originalFilename', 'sizeBytes', 'source', 'tiktokAdvertisers', 'updatedAt']);
     });
 
     it('o nome padrão vem do arquivo (sem extensão); nome do arquivo malicioso nunca vira caminho', async () => {

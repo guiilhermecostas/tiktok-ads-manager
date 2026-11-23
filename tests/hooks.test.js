@@ -336,6 +336,19 @@ describe('Hook com IA: criar, gerar, aplicar', () => {
     assert.deepEqual(listed.map((c) => [c.name, c.aiGenerated]).sort((a, b) => a[0].length - b[0].length), [['Meu anúncio', false], ['Meu anúncio + Hook IA', true]]);
   });
 
+  it('o vídeo novo (hook + vídeo) fica na MESMA pasta do vídeo original', async () => {
+    const user = await owner();
+    const main = await uploadVideo(user, { name: 'Da oferta X' });
+    const folderId = (await user.client.post('/api/creatives/folders', { name: 'Oferta X' })).json.folder.id;
+    await user.client.patch(`/api/creatives/${main.id}`, { folderId });
+    const hook = await ready(user, { durationMs: 2000 });
+    assert.equal((await user.client.post(`/api/hooks/${hook.id}/apply`, { creativeId: main.id })).status, 202);
+    await ctx.hooks.idle();
+    const done = await get(user, hook.id);
+    assert.equal(done.applyError, null);
+    assert.equal((await user.client.get(`/api/creatives/${done.creativeId}`)).json.creative.folderId, folderId);
+  });
+
   it('vídeo sem áudio e vídeo horizontal também funcionam (som mudo no hook; hook cobre o quadro)', async () => {
     const user = await owner();
     const silent = await uploadVideo(user, { audio: false, width: 960, height: 540, name: 'Horizontal mudo' });
@@ -409,14 +422,14 @@ describe('Hook com IA: criar, gerar, aplicar', () => {
       assert.ok(!JSON.stringify(hook).includes('generation failed'));
     });
 
-    it('sem saldo na Kling: falha com aviso ao administrador e os demais da fila nem são tentados', async () => {
+    it('sem saldo na Kling: falha só com "Avise o administrador do sistema." e os demais da fila nem são tentados', async () => {
       const user = await owner();
       fake.state.createError = { http: 429, code: 1102, message: 'Account balance not enough' };
       fake.state.createErrorTimes = 99;
       const res = await create(user, { count: 3 });
       const hooks = await Promise.all(res.json.hooks.map((h) => until(user, h.id, ['failed', 'ready'])));
       assert.deepEqual(hooks.map((h) => h.status), ['failed', 'failed', 'failed']);
-      for (const h of hooks) assert.match(h.errorMessage, /saldo|créditos/i);
+      for (const h of hooks) assert.equal(h.errorMessage, 'Avise o administrador do sistema.', 'só o aviso curto, sem detalhes da conta da Kling');
       assert.equal(fake.postCalls().length, 1, 'só a primeira chamada chegou à Kling');
     });
 

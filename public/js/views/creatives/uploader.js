@@ -23,10 +23,11 @@ function validate(file, limits) {
 
 /**
  * Fila de envios com barra de progresso (até 2 em paralelo).
- * `getLimits()` devolve os limites atuais; `onUploaded(creative)` é chamado a cada envio concluído.
+ * `getLimits()` devolve os limites atuais; `onUploaded(creative)` é chamado a cada envio concluído;
+ * `getFolderId()` (opcional) devolve a pasta em que os arquivos devem entrar (ou null = sem pasta).
  * Retorna { element, add(files), pending() }.
  */
-export function createUploader({ getLimits, onUploaded }) {
+export function createUploader({ getLimits, onUploaded, getFolderId = () => null }) {
   const list = h('ul', { class: 'uploads__list' });
   const panel = h('div', { class: 'uploads', hidden: true, 'aria-live': 'polite' }, list);
   const queue = [];
@@ -58,7 +59,8 @@ export function createUploader({ getLimits, onUploaded }) {
       const { file, item } = queue.shift();
       running += 1;
       item.status.textContent = 'Enviando…';
-      const upload = uploadFile(`/creatives?filename=${encodeURIComponent(file.name)}`, file, {
+      const folderId = getFolderId();
+      const upload = uploadFile(`/creatives?filename=${encodeURIComponent(file.name)}${folderId === null ? '' : `&folderId=${folderId}`}`, file, {
         onProgress: (fraction) => {
           const percent = Math.round(fraction * 100);
           item.bar.style.width = `${percent}%`;

@@ -11,6 +11,7 @@ const NAV = [
   { path: '/creatives', label: 'Criativos', icon: 'image', areas: ['creatives'] },
   { path: '/reports', label: 'Relatórios', icon: 'chart', areas: ['reports'] },
   { path: '/business-centers', label: 'Contas TikTok', icon: 'building', areas: ['accounts'] },
+  { path: '/balance', label: 'Saldo', icon: 'wallet', areas: ['accounts'] },
   { path: '/team', label: 'Colaboradores', icon: 'users', ownerOnly: true, section: 'Gestão' },
   { path: '/admin', label: 'Administração', icon: 'shield', adminOnly: true, section: 'Gestão' },
 ];

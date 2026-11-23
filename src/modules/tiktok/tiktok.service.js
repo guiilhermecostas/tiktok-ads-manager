@@ -297,7 +297,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       const allowed = bc.bcId ? [bc.bcId] : bc.ownerBcIds;
       if (!allowed.includes(tiktokBcId)) throw badRequest('Esta Business Center do TikTok não pertence a esta conexão.');
       const sample = await repo.sampleAdvertiser(bcRowId, bc.bcId ? null : tiktokBcId);
-      const defaults = { currency: sample?.currency ?? null, timezone: sample?.timezone ?? null, company: null, country: null, contactEmail: null };
+      const defaults = { currency: sample?.currency ?? null, timezone: sample?.timezone ?? null, company: null, country: null, contactEmail: null, industry: null };
       if (!sample) return defaults;
       try {
         const profile = await withBusinessCenterToken(bcRowId, (token, api) => api.getAdvertiserProfile(token, sample.id));
@@ -314,7 +314,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
      * andamento). Se uma falhar, as seguintes NÃO são tentadas (o motivo costuma ser o mesmo) e o resultado diz o que já foi criado.
      * Ao final relê as contas da conexão (melhor esforço) para elas aparecerem na lista.
      */
-    async createAdvertisers(actor, bcRowId, { bcId: tiktokBcId, count, name, currency, timezone, company, registeredArea, industry = null, contactEmail = null, contactName = null }) {
+    async createAdvertisers(actor, bcRowId, { bcId: tiktokBcId, count, name, currency, timezone, company, registeredArea, industry, contactEmail = null, contactName = null }) {
       const bc = await requireManageable(actor, bcRowId);
       if (bc.status !== 'active') throw new HttpError(409, 'Esta conexão está com erro. Renove o acesso ou atualize o token antes de criar contas.', 'tiktok_connection_error');
       const allowed = bc.bcId ? [bc.bcId] : bc.ownerBcIds;

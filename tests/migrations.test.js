@@ -5,7 +5,7 @@ import { MIGRATIONS, findTablesWithoutRls, runMigrations } from '../src/db/migra
 import { createPgliteDatabase } from '../src/db/adapters/pglite.js';
 import { all, one } from './helpers.js';
 
-const EXPECTED_TABLES = ['campaign_creative_assets', 'campaign_publications', 'campaigns', 'creative_hooks', 'creative_tiktok_assets', 'creatives', 'proxies', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_hourly_spend', 'tiktok_oauth_attempts', 'user_avatars', 'users', 'workspace_files', 'workspace_invites', 'workspace_members'];
+const EXPECTED_TABLES = ['campaign_creative_assets', 'campaign_publications', 'campaigns', 'creative_folders', 'creative_hooks', 'creative_tiktok_assets', 'creatives', 'proxies', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_hourly_spend', 'tiktok_oauth_attempts', 'user_avatars', 'users', 'workspace_files', 'workspace_invites', 'workspace_members'];
 const config = { url: null, sslCaPath: null, poolMax: 1, devDataDir: null, requireRls: true };
 const silent = { info() {}, warn() {}, error() {} };
 
