@@ -30,14 +30,14 @@ function format(metric, value, currency) {
   return metric.kind === 'percent' ? formatPercent(value) : formatNumber(Math.round(value));
 }
 
-/** Estrutura das telas de Relatórios: título, abas ("Visão geral" / "Por conta") e conteúdo. */
+/** Estrutura das telas de Relatórios: título, abas ("Visão geral" / "Por hora" / "Por conta") e conteúdo. */
 export function reportsLayout({ active, subtitle, children }) {
   const tab = (path, text) => h('a', { href: path, 'data-link': '', class: `tab${path === active ? ' is-active' : ''}`, 'aria-current': path === active ? 'page' : null }, text);
   return h(
     'div',
     { class: 'reports' },
     pageHeader('Relatórios', subtitle),
-    h('nav', { class: 'tabs tabs--hub tabs--left', 'aria-label': 'Seções de Relatórios' }, tab('/reports', 'Visão geral'), tab('/reports/accounts', 'Por conta')),
+    h('nav', { class: 'tabs tabs--hub tabs--left', 'aria-label': 'Seções de Relatórios' }, tab('/reports', 'Visão geral'), tab('/reports/hourly', 'Por hora'), tab('/reports/accounts', 'Por conta')),
     ...children,
   );
 }

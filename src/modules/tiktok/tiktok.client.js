@@ -12,6 +12,9 @@ const BC_ASSET_PAGE_SIZE = 50;
 const CAMPAIGN_PAGE_SIZE = 100;
 const CAMPAIGN_MAX_PAGES = 5;
 const BC_LIST_MAX_PAGES = 3;
+const HOURLY_PAGE_SIZE = 100; // um dia tem no máximo 24 horas
+const HOURLY_MAX_PAGES = 2;
+const HOUR_LABEL_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 const PIXEL_PAGE_SIZE = 50;
 const PIXEL_MAX_PAGES = 4;
 const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id'];
@@ -320,6 +323,38 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
       // O formato do retorno varia: lista `ad_ids`, `ad_id` único ou o ID dentro de `creatives`.
       const adId = Array.isArray(data.ad_ids) ? data.ad_ids[0] : (data.ad_id ?? data.creatives?.[0]?.ad_id);
       return requireId(adId, 'do anúncio');
+    },
+
+    /**
+     * Desempenho POR HORA da conta em UM dia (`date` = YYYY-MM-DD no fuso da conta; o TikTok só aceita 1 dia por consulta quando a
+     * dimensão é a hora). Devolve [{ hourLocal: '2026-11-23 14:00:00', spend, impressions, clicks, conversions }] só com horas bem formadas.
+     */
+    async getHourlyReport(token, advertiserId, date) {
+      const rows = [];
+      for (let page = 1; page <= HOURLY_MAX_PAGES; page += 1) {
+        const data = await call('/report/integrated/get/', {
+          token,
+          query: {
+            advertiser_id: advertiserId,
+            report_type: 'BASIC',
+            data_level: 'AUCTION_ADVERTISER',
+            dimensions: ['stat_time_hour'],
+            metrics: ['spend', 'impressions', 'clicks', 'conversion'],
+            start_date: date,
+            end_date: date,
+            page,
+            page_size: HOURLY_PAGE_SIZE,
+          },
+        });
+        const list = Array.isArray(data.list) ? data.list : [];
+        for (const row of list) {
+          const hourLocal = String(row.dimensions?.stat_time_hour ?? '');
+          if (!HOUR_LABEL_RE.test(hourLocal)) continue; // nada fora do formato entra no banco
+          rows.push({ hourLocal, spend: num(row.metrics?.spend), impressions: num(row.metrics?.impressions), clicks: num(row.metrics?.clicks), conversions: num(row.metrics?.conversion) });
+        }
+        if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
+      }
+      return rows;
     },
 
     /** Desempenho diário da conta no período (datas YYYY-MM-DD). */

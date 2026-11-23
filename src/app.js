@@ -31,6 +31,9 @@ import { createTiktokClient } from './modules/tiktok/tiktok.client.js';
 import { createBusinessCentersRepository } from './modules/tiktok/business-centers.repository.js';
 import { createOauthAttemptsRepository } from './modules/tiktok/oauth-attempts.repository.js';
 import { createTiktokCallbackRouter, createTiktokRouter } from './modules/tiktok/tiktok.routes.js';
+import { createHourlyRepository } from './modules/tiktok/hourly.repository.js';
+import { createHourlyRouter } from './modules/tiktok/hourly.routes.js';
+import { createHourlyService } from './modules/tiktok/hourly.service.js';
 import { createTiktokService } from './modules/tiktok/tiktok.service.js';
 import { createUsersRepository } from './modules/users/users.repository.js';
 import { apiNotFound, errorHandler } from './middleware/errors.js';
@@ -45,7 +48,7 @@ const SHARED_DIR = path.join(ROOT_DIR, 'shared');
 /**
  * Monta a aplicação Express. Recebe dependências (config, db, log) para facilitar testes.
  */
-export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer, avatarProcessor }) {
+export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer, avatarProcessor, clock, hourlyPauseMs }) {
   const users = createUsersRepository(db);
   const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
   const campaigns = createCampaignsRepository(db);
@@ -56,6 +59,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Proxies do usuário: com uma ativa, TODAS as chamadas ao TikTok feitas com as BCs dele saem por ela.
   const proxiesService = createProxiesService({ repo: createProxiesRepository(db, { encryptionKey: config.tiktok.encryptionKey }), config, fetchFn: fetchFn ?? fetch, log });
   const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, config, log });
+  // Gasto por hora: coleta a cada 30 min (ligada só pelo servidor, em server.js) e leitura para a aba Relatórios → Por hora.
+  const hourlyService = createHourlyService({ tiktok: tiktokService, connections: businessCenters, repo: createHourlyRepository(db), log, now: clock, pauseMs: hourlyPauseMs });
   const creativeStorage = createLocalCreativeStorage({ dir: config.creatives.dir });
   // Limpeza dos criativos a cada publicação (metadados, hash e cantos). `cleaner` pode ser injetado nos testes.
   const cleaning = config.creatives.cleaning ?? {};
@@ -146,6 +151,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const proxiesRouter = createProxiesRouter({ service: proxiesService, limits });
   protectedApi.use('/proxies', requireArea('accounts'), proxiesRouter);
   // As áreas de cada rota do TikTok (contas, relatórios, lista de contas de anúncio) são exigidas dentro do próprio roteador.
+  const hourlyRouter = createHourlyRouter({ service: hourlyService, limits });
+  protectedApi.use('/tiktok/hourly', hourlyRouter);
   const tiktokRouter = createTiktokRouter({ service: tiktokService, limits });
   protectedApi.use('/tiktok', tiktokRouter);
   // Ver criativos serve a quem publica campanhas; enviar, renomear e excluir é de quem gerencia a biblioteca.
@@ -192,7 +199,10 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
     sessions,
     creativeStorage,
     creativeCleaner,
+    hourly: hourlyService,
     close: () => {
+      hourlyService.stop();
+      hourlyRouter.stop();
       authRouter.stop();
       tiktokRouter.stop();
       proxiesRouter.stop();

@@ -18,6 +18,7 @@ const calls = {
   'GET  advertiser/info': () => client.getAdvertiserInfo(FAKE_TOKEN, ['1']),
   'GET  bc/get': () => client.listBusinessCenters(FAKE_TOKEN),
   'GET  pixel/list': () => client.listPixels(FAKE_TOKEN, '7000000000000000001'),
+  'GET  report/integrated/get (por hora)': () => client.getHourlyReport(FAKE_TOKEN, '1', '2026-11-02'),
   'GET  campaign/get': () => client.getCampaigns(FAKE_TOKEN, '1'),
   'GET  report/integrated/get': () => client.getDailyReport(FAKE_TOKEN, '1', { startDate: '2026-11-01', endDate: '2026-11-02' }),
   'POST bc/advertiser/create': () => client.createAdvertiser(FAKE_TOKEN, { bcId: '1', name: 'x', currency: 'USD', timezone: 'America/Sao_Paulo', company: 'x', registeredArea: 'BR' }),

@@ -71,10 +71,11 @@ export function niceMax(value) {
 const shortDate = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 
 /**
- * Gráfico de linha. `dates`: ['2026-11-01', …]; `values`: números do mesmo tamanho; `format(v)`: texto de um valor (dica e eixo).
+ * Gráfico de linha. `dates`: ['2026-11-01', …] (ou qualquer chave do eixo X, ex.: horas ISO); `values`: números do mesmo tamanho;
+ * `format(v)`: texto de um valor (dica e eixo); `formatX(chave, 'eixo' | 'dica')`: texto do eixo X (padrão: dd/mm); `unit`: "dias"/"horas" (leitura).
  * Retorna o elemento (redesenha sozinho quando o tamanho da área muda).
  */
-export function lineChart({ dates, values, format, label, height = 260 }) {
+export function lineChart({ dates, values, format, label, height = 260, formatX = shortDate, unit = 'dias', maxTicks = 6 }) {
   const id = `chart-grad-${++gradientCounter}`;
   const wrap = h('div', { class: 'chart', tabindex: 0, role: 'img' });
   const tooltip = h('div', { class: 'chart__tip', hidden: true });
@@ -85,7 +86,8 @@ export function lineChart({ dates, values, format, label, height = 260 }) {
 
   const total = values.reduce((s, v) => s + v, 0);
   const peak = values.reduce((best, v, i) => (v > values[best] ? i : best), 0);
-  wrap.setAttribute('aria-label', `${label}: ${values.length} dias, de ${shortDate(dates[0] ?? '0000-00-00')} a ${shortDate(dates.at(-1) ?? '0000-00-00')}. Maior valor ${format(values[peak] ?? 0)} em ${shortDate(dates[peak] ?? '0000-00-00')}. Use as setas para navegar pelos dias.`);
+  const x0 = dates.length ? formatX(dates[0], 'dica') : '';
+  wrap.setAttribute('aria-label', `${label}: ${values.length} ${unit}, de ${x0} a ${dates.length ? formatX(dates.at(-1), 'dica') : ''}. Maior valor ${format(values[peak] ?? 0)} em ${dates.length ? formatX(dates[peak], 'dica') : ''}. Use as setas para navegar.`);
 
   function draw() {
     const width = Math.max(280, Math.floor(wrap.clientWidth || 640));
@@ -103,11 +105,13 @@ export function lineChart({ dates, values, format, label, height = 260 }) {
       const value = (top / 4) * i;
       grid.push(svg('line', { x1: pad.left, x2: width - pad.right, y1: y(value), y2: y(value), class: 'chart__grid' }), svg('text', { x: pad.left - 8, y: y(value) + 4, class: 'chart__axis', 'text-anchor': 'end' }, format(value)));
     }
-    const ticks = Math.min(6, values.length);
+    // Quantos rótulos cabem sem se atropelar: pela largura do gráfico e pelo tamanho do texto do eixo.
+    const gap = (dates.length ? formatX(dates[0], 'eixo').length : 5) * 6.4 + 26;
+    const ticks = Math.min(maxTicks, values.length, Math.max(2, Math.floor(innerW / gap)));
     const labels = [];
     for (let t = 0; t < ticks; t += 1) {
       const i = ticks === 1 ? 0 : Math.round((t / (ticks - 1)) * (values.length - 1));
-      labels.push(svg('text', { x: x(i), y: height - 6, class: 'chart__axis', 'text-anchor': t === 0 ? 'start' : t === ticks - 1 ? 'end' : 'middle' }, shortDate(dates[i])));
+      labels.push(svg('text', { x: x(i), y: height - 6, class: 'chart__axis', 'text-anchor': t === 0 ? 'start' : t === ticks - 1 ? 'end' : 'middle' }, formatX(dates[i], 'eixo')));
     }
     const line = smoothPath(points);
     const area = points.length > 1 ? `${line}L${points.at(-1)[0]} ${pad.top + innerH}L${points[0][0]} ${pad.top + innerH}Z` : '';
@@ -143,7 +147,7 @@ export function lineChart({ dates, values, format, label, height = 260 }) {
     geometry.dot.setAttribute('cy', cy);
     tooltip.hidden = !withTip;
     if (withTip) {
-      tooltip.replaceChildren(h('strong', null, format(values[active])), h('span', { class: 'muted' }, shortDate(dates[active])));
+      tooltip.replaceChildren(h('strong', null, format(values[active])), h('span', { class: 'muted' }, formatX(dates[active], 'dica')));
       tooltip.style.left = `${Math.min(Math.max(cx, 60), geometry.width - 60)}px`; // CSSOM: permitido pela CSP
       tooltip.style.top = `${Math.max(cy - 8, 0)}px`;
     }

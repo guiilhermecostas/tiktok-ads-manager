@@ -377,6 +377,30 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['workspace_files'], revoke: ['workspace_files'], identity: ['workspace_files'] })}
     `,
   },
+  {
+    version: 12,
+    description: 'Gasto por hora das contas de anúncio (coletado do TikTok a cada 30 minutos)',
+    sql: `
+      -- Uma linha por conta de anúncio e por HORA (em UTC; o TikTok informa a hora no fuso da conta e o servidor converte).
+      -- A coleta repete a hora atual a cada 30 minutos (upsert), então a linha sempre guarda o último valor conhecido.
+      -- Apagar a conexão (Business Center) apaga o histórico dela (cascata). A moeda é a da conta na hora da coleta.
+      CREATE TABLE tiktok_hourly_spend (
+        business_center_id INTEGER       NOT NULL REFERENCES tiktok_business_centers(id) ON DELETE CASCADE,
+        advertiser_id      TEXT          NOT NULL CHECK (advertiser_id ~ '^[0-9]{1,24}$'),
+        hour_start         TIMESTAMPTZ   NOT NULL,
+        currency           TEXT          CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$'),
+        spend              NUMERIC(18,4) NOT NULL DEFAULT 0 CHECK (spend >= 0),
+        impressions        BIGINT        NOT NULL DEFAULT 0 CHECK (impressions >= 0),
+        clicks             BIGINT        NOT NULL DEFAULT 0 CHECK (clicks >= 0),
+        conversions        NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (conversions >= 0),
+        fetched_at         TIMESTAMPTZ   NOT NULL DEFAULT now(),
+        PRIMARY KEY (business_center_id, advertiser_id, hour_start)
+      );
+      CREATE INDEX idx_tiktok_hourly_spend_hour ON tiktok_hourly_spend (hour_start);
+
+      ${protectTables({ rls: ['tiktok_hourly_spend'], revoke: ['tiktok_hourly_spend'], identity: [] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

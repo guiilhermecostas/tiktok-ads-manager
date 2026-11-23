@@ -200,11 +200,21 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
 - **Início** é um chat no estilo ChatGPT (por enquanto só o design: sugestões clicáveis, campo que cresce, "Enter envia", botão de avião de papel, respostas de exemplo; sem logo).
   O chat ocupa a altura da tela: a conversa rola dentro da própria área e o campo de mensagem fica fixo embaixo, sem cobrir nada. A
   conversa fica só na memória do navegador (nada vai ao servidor) e é descartada se outra pessoa entrar. O texto entra sempre como texto.
-- **Relatórios** (área "Relatórios" dos colaboradores) tem duas abas. **Visão geral**: 7 indicadores (gasto, impressões, cliques, CTR, CPC, conversões e
+- **Relatórios** (área "Relatórios" dos colaboradores) tem três abas: Visão geral, **Por hora** e Por conta. **Visão geral**: 7 indicadores (gasto, impressões, cliques, CTR, CPC, conversões e
   custo por conversão) com variação contra o período anterior e mini gráfico; gráfico de linha com **curva suave** (spline cúbica monótona, SVG puro, sem
   biblioteca, com dica ao passar o mouse e navegação por setas); "O que chama atenção" (observações automáticas); ranking por conta com busca e ordenação.
   Filtros: período (7/14/30 dias), conta, moeda (valores de moedas diferentes nunca se somam) e comparar. API: `GET /api/tiktok/overview?days=&advertiserId=&compare=1`
   (série diária contínua por moeda, `previous`, `accounts`, `accountOptions`). **Por conta**: desempenho e campanhas de uma conta (o antigo "TikTok Ads"; `/tiktok` redireciona).
+- **Por hora** (`/reports/hourly`): gasto (e cliques, impressões e conversões) de **cada hora**, em gráfico de linha suave, com período (24 h, 48 h, 7 dias),
+  conta, moeda e métrica. O TikTok **fornece** esse dado (`/report/integrated/get/` com a dimensão `stat_time_hour`, no máximo 1 dia por consulta e com algum
+  atraso). O sistema o **coleta a cada 30 minutos** (`hourly.service.js`, ligado em `server.js`) e guarda em `tiktok_hourly_spend` (migração v12): uma linha por conta
+  e hora em **UTC** (a hora do TikTok vem no fuso da conta e é convertida; o navegador mostra no horário de quem olha); a hora em andamento é regravada a cada
+  coleta (upsert), contas novas recebem uma carga inicial de 3 dias, logo depois da meia-noite o dia anterior é reconferido, e o histórico é mantido por 90 dias.
+  A série só começa na primeira hora COM coleta (nada de zeros falsos). Falha de uma conta não derruba as outras, token revogado marca a conexão com erro, e
+  as chamadas saem pela proxy do dono. Valores de moedas diferentes nunca se somam; conta repetida em conexão própria e compartilhada conta uma vez só.
+  API: `GET /api/tiktok/hourly?hours=24|48|168&advertiserId=` e `POST /api/tiktok/hourly/refresh` ("Atualizar agora": só as conexões do usuário, 3 por 5 minutos).
+  **Atenção na hospedagem:** a coleta roda DENTRO do servidor; num plano que "dorme" por inatividade (Render gratuito) ela só acontece enquanto o serviço estiver
+  acordado. O plano `starter` do `render.yaml` fica sempre ligado; o gratuito não serve para isso. Pendente de conferência com um token real: o formato exato da resposta por hora.
 - **Arquivos** (aba de Contas TikTok): anexos para a equipe (ex.: arquivos de logins). Gravados **criptografados** (AES-256-GCM, dono autenticado; desligado sem
   `TOKEN_ENCRYPTION_KEY`), só txt/csv/log/md/pdf/png/jpg/docx/xlsx **conferidos pelo conteúdo**, sempre entregues como **download** (`octet-stream`, `attachment`,
   `nosniff`, sem cache). Limites: 5 MB por arquivo, 50 arquivos e 100 MB por conta. Para senhas, um gerenciador de senhas é mais seguro.
@@ -285,7 +295,7 @@ src/
     users/             repositório de usuários
     admin/             aprovação de contas
     campaigns/         CRUD de campanhas internas (escopado por usuário)
-    tiktok/            Business Centers (cliente da API, conexão por link/OAuth, repositórios, serviço, rotas)
+    tiktok/            Business Centers (cliente da API, conexão por link/OAuth, repositórios, serviço, rotas) e gasto por hora (coleta + leitura)
     creatives/         biblioteca de criativos (armazenamento, validação por conteúdo, rotas)
     team/              colaboradores: convites, aceite, áreas de acesso (repositório, serviço, rotas)
     profile/           Minha conta: foto de perfil (recodificada no FFmpeg) e nome

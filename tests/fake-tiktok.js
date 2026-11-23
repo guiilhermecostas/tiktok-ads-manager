@@ -51,6 +51,9 @@ export function createFakeTiktok() {
     hideCreatedAdvertisers: false, // true: a conta criada ainda NÃO aparece nas listas (atraso do TikTok)
     omitCreatedAdvertiserId: false, // true: a criação funciona mas a resposta não traz o ID
     advertiserProfile: { company: 'Acme Ltda', country: 'BR', contact_email: 'ads@acme.example' }, // dados cadastrais de qualquer conta
+    hourly: {}, // relatório por hora: conta de anúncio -> { 'YYYY-MM-DD': { 14: { spend: 5.5, impressions: 900, clicks: 30, conversion: 1 } } } (hora no fuso da conta)
+    hourlyDelayMs: 0, // latência do relatório por hora (testes de coleta simultânea)
+    failHourlyFor: new Set(), // contas cujo relatório por hora responde erro do TikTok
     manyCampaigns: 0, // >0: devolve essa quantidade de campanhas, paginadas
     // Autorização por link: auth_code -> { token, advertisers } (uso único, como no TikTok).
     authCodes: new Map(),
@@ -173,6 +176,19 @@ export function createFakeTiktok() {
         });
       }
       case '/report/integrated/get/': {
+        if (query.dimensions?.includes('stat_time_hour')) {
+          if (state.hourlyDelayMs) await new Promise((r) => setTimeout(r, state.hourlyDelayMs));
+          if (state.failHourlyFor.has(query.advertiser_id)) return reply({}, 50001, 'Internal error');
+          if (query.start_date !== query.end_date) return reply({}, 40002, 'The time range cannot exceed 1 day when stat_time_hour is used');
+          const day = state.hourly[query.advertiser_id]?.[query.start_date] ?? {};
+          return reply({
+            list: Object.entries(day).map(([hour, m]) => ({
+              dimensions: { stat_time_hour: `${query.start_date} ${String(hour).padStart(2, '0')}:00:00` },
+              metrics: { spend: String(m.spend ?? 0), impressions: String(m.impressions ?? 0), clicks: String(m.clicks ?? 0), conversion: String(m.conversion ?? 0) },
+            })),
+            page_info: { page: 1, total_page: 1 },
+          });
+        }
         if (state.failReportFor.has(query.advertiser_id)) return reply({}, 50001, 'Internal error');
         return reply({
           list: [

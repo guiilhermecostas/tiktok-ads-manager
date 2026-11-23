@@ -165,6 +165,26 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
       );
       return rowCount;
     },
+    /**
+     * Conexões ATIVAS com suas contas de anúncio, para a coleta periódica: [{ id, ownerId, advertisers: [{ id, currency, timezone }] }].
+     * Com `ownerId`, só as conexões desse usuário. Conexão com erro de acesso fica de fora (não adianta chamar o TikTok).
+     */
+    async listCollectable({ ownerId = null } = {}) {
+      const { rows } = await db.query(
+        `SELECT bc.id AS bc_row_id, bc.owner_id, a.advertiser_id, a.currency, a.timezone
+           FROM tiktok_business_centers bc JOIN tiktok_advertisers a ON a.business_center_id = bc.id
+          WHERE bc.status = 'active' AND ($1::int IS NULL OR bc.owner_id = $1)
+          ORDER BY bc.id, a.advertiser_id`,
+        [ownerId],
+      );
+      const byConnection = new Map();
+      for (const r of rows) {
+        const connection = byConnection.get(r.bc_row_id) ?? { id: r.bc_row_id, ownerId: r.owner_id, advertisers: [] };
+        connection.advertisers.push({ id: r.advertiser_id, currency: r.currency ?? null, timezone: r.timezone ?? null });
+        byConnection.set(r.bc_row_id, connection);
+      }
+      return [...byConnection.values()];
+    },
     /** Uma conta de anúncio da conexão (da BC do TikTok informada, se houver) para servir de modelo ao criar contas novas. */
     async sampleAdvertiser(bcRowId, ownerBcId = null) {
       const { rows } = await db.query(

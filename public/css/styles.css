@@ -771,7 +771,7 @@ body.modal-open { overflow: hidden; }
 @media (max-width: 560px) { .invite-fields, .area-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* ============ Relatórios: filtros, indicadores, gráfico de linha, observações e ranking ============ */
-.reports { max-width: 1180px; margin: 0 auto; }
+.reports { max-width: 1180px; margin: 0 auto; padding-bottom: 76px; } /* folga para o botão flutuante "Publicar campanha" não cobrir o fim da página */
 .tabs--left { margin: 4px 0 18px; }
 .reports__filters { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin-bottom: 16px; }
 .reports__filters select.input { width: auto; max-width: 100%; min-width: 180px; }
@@ -892,3 +892,16 @@ body.modal-open { overflow: hidden; }
 .create-ca__list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; }
 .create-ca__list li { padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; overflow-wrap: anywhere; }
 @media (max-width: 560px) { .create-ca__qty { grid-template-columns: minmax(0, 1fr); } }
+
+/* ============ Relatórios → Por hora ============ */
+.kpis--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.kpi--static { cursor: default; }
+.kpi--static:hover { border-color: var(--border); transform: none; }
+.kpi__hint { font-size: 12px; line-height: 1.3; min-height: 1.3em; }
+.reports__refresh { margin-left: auto; }
+.reports__chart-side { display: flex; align-items: center; gap: 10px; flex: none; }
+.hours-top { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; counter-reset: top; }
+.hours-top li { counter-increment: top; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-radius: 10px; background: #f6f6f7; font-size: 13px; }
+.hours-top li span::before { content: counter(top) 'º  '; font-weight: 700; color: var(--muted); }
+@media (max-width: 900px) { .kpis--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .reports__refresh { margin-left: 0; } .reports__chart-head { flex-direction: column; } }

@@ -201,6 +201,9 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
   }
 
   return {
+    /** Uso INTERNO (coleta por hora): executa `fn(token, api)` com o token da conexão, pela proxy do dono e marcando erro de acesso. */
+    withToken: withBusinessCenterToken,
+
     isConfigured: () => config.tiktok.configured,
 
     ensureConfigured() {
