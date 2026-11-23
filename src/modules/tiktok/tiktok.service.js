@@ -1,4 +1,5 @@
-import { accountNames } from '../../../shared/advertiser-create.js';
+import { AREAS_NEEDING_DOCUMENTS, accountNames, forbidsQualification, normalizeTimezone, requiresPromotionLink } from '../../../shared/advertiser-create.js';
+import { isIndustryFor } from '../../../shared/tiktok-industries.js';
 import { isAccountLabel } from '../../../shared/account-labels.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest, forbidden, notFound } from '../../lib/http-error.js';
@@ -13,6 +14,22 @@ const OVERVIEW_CONCURRENCY = 5;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CREATE_PAUSE_MS = 400; // intervalo entre uma criação e outra (o TikTok limita a frequência)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Erros comuns do TikTok ao criar contas, em português e com o que fazer (a mensagem original segue entre parênteses). */
+const CREATE_HINTS = [
+  [/time ?zone/i, 'O TikTok não aceitou o fuso horário: escolha um da lista.'],
+  [/industry/i, 'O TikTok não aceitou o ramo de atividade: escolha um da lista do tipo da sua Business Center.'],
+  [/promotion.?link/i, 'Informe o site da empresa (o TikTok exige em Business Center de agência).'],
+  [/currency/i, 'A moeda precisa ser a mesma da Business Center.'],
+  [/(quota|exceed|limit|maximum)/i, 'Limite de contas da Business Center atingido (diário ou total). Desative contas antigas no TikTok para liberar vagas.'],
+  [/(permission|not authorized|admin)/i, 'Sem permissão para criar contas: é preciso ser administrador da Business Center.'],
+  [/(qualification|license|billing|tax|email)/i, 'O TikTok pediu documentos ou dados de cobrança para este país/BC, que este sistema ainda não envia.'],
+];
+function explainCreateError(err) {
+  if (!(err instanceof HttpError) || err.code !== 'tiktok_error') return err;
+  const hint = CREATE_HINTS.find(([pattern]) => pattern.test(err.message))?.[1];
+  return hint ? new HttpError(err.status, `${hint} (${err.message})`, err.code) : err;
+}
 
 const isoDate = (date) => date.toISOString().slice(0, 10);
 
@@ -289,23 +306,40 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
 
     // ---------- criar contas de anúncio dentro de uma Business Center ("+ CA") ----------
     /**
-     * Dados para PRÉ-PREENCHER o formulário: moeda, fuso, empresa, país e contato de uma conta que a BC já tem. Só sugestões
-     * (melhor esforço): qualquer falha devolve o que o sistema já sabe, nunca impede de criar.
+     * Dados para o formulário "+ CA": o que a documentação oficial do TikTok diz sobre a BC (tipo, moeda, fuso, país, papel do usuário,
+     * `/bc/get/`) e sugestões de empresa/ramo/contato copiadas de uma conta que a BC já tem. Tudo é melhor esforço: qualquer falha
+     * devolve o que se sabe, nunca impede de criar. `bc` é null se o TikTok não listou a BC para este acesso.
      */
     async advertiserDefaults(actor, bcRowId, tiktokBcId) {
       const bc = await requireManageable(actor, bcRowId);
       const allowed = bc.bcId ? [bc.bcId] : bc.ownerBcIds;
       if (!allowed.includes(tiktokBcId)) throw badRequest('Esta Business Center do TikTok não pertence a esta conexão.');
       const sample = await repo.sampleAdvertiser(bcRowId, bc.bcId ? null : tiktokBcId);
-      const defaults = { currency: sample?.currency ?? null, timezone: sample?.timezone ?? null, company: null, country: null, contactEmail: null, industry: null };
-      if (!sample) return defaults;
+      let info = null;
+      let profile = {};
       try {
-        const profile = await withBusinessCenterToken(bcRowId, (token, api) => api.getAdvertiserProfile(token, sample.id));
-        for (const [key, value] of Object.entries(profile)) if (value) defaults[key] = value;
+        ({ info, profile } = await withBusinessCenterToken(bcRowId, async (token, api) => ({
+          info: await api.getBcInfo(token, tiktokBcId).catch(() => null),
+          profile: sample ? await api.getAdvertiserProfile(token, sample.id).catch(() => ({})) : {},
+        })));
       } catch {
-        /* sem os dados cadastrais: o usuário preenche à mão */
+        /* sem os dados da BC: o usuário preenche à mão */
       }
-      return defaults;
+      const validTimezone = (zone) => (normalizeTimezone(zone) ? zone : null); // só códigos da tabela oficial (ex.: "Etc/GMT+5" não vale)
+      const industry = profile.industry && isIndustryFor(Number(profile.industry), info?.type ?? null) ? String(profile.industry) : null;
+      return {
+        bc: info
+          ? { ...info, requiresPromotionLink: requiresPromotionLink(info.type), isAdmin: info.userRole ? info.userRole === 'ADMIN' : null, needsDocuments: Boolean(AREAS_NEEDING_DOCUMENTS[info.registeredArea]) }
+          : null,
+        defaults: {
+          currency: info?.currency ?? profile.currency ?? sample?.currency ?? null, // o TikTok exige a moeda da Business Center
+          timezone: validTimezone(info?.timezone) ?? validTimezone(profile.timezone) ?? validTimezone(sample?.timezone),
+          company: profile.company ?? info?.company ?? null,
+          country: info?.registeredArea ?? profile.country ?? null,
+          contactEmail: profile.contactEmail ?? null,
+          industry,
+        },
+      };
     },
 
     /**
@@ -314,7 +348,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
      * andamento). Se uma falhar, as seguintes NÃO são tentadas (o motivo costuma ser o mesmo) e o resultado diz o que já foi criado.
      * Ao final relê as contas da conexão (melhor esforço) para elas aparecerem na lista.
      */
-    async createAdvertisers(actor, bcRowId, { bcId: tiktokBcId, count, name, currency, timezone, company, registeredArea, industry, contactEmail = null, contactName = null }) {
+    async createAdvertisers(actor, bcRowId, { bcId: tiktokBcId, count, name, currency, timezone, company, registeredArea, industry, contactEmail = null, contactName = null, promotionLink = null }) {
       const bc = await requireManageable(actor, bcRowId);
       if (bc.status !== 'active') throw new HttpError(409, 'Esta conexão está com erro. Renove o acesso ou atualize o token antes de criar contas.', 'tiktok_connection_error');
       const allowed = bc.bcId ? [bc.bcId] : bc.ownerBcIds;
@@ -325,12 +359,24 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       let failure = null;
       try {
         await withBusinessCenterToken(bcRowId, async (token, api) => {
+          // Confere, ANTES de criar qualquer coisa, o que a documentação oficial exige para o tipo desta BC.
+          const info = await api.getBcInfo(token, tiktokBcId).catch(() => null);
+          if (info?.userRole && info.userRole !== 'ADMIN') throw new HttpError(403, 'Seu usuário não é administrador desta Business Center no TikTok. Só administradores criam contas de anúncio.', 'bc_not_admin');
+          if (info?.currency && currency !== info.currency) throw badRequest(`A moeda das contas precisa ser a mesma da Business Center (${info.currency}).`, 'currency_mismatch');
+          for (const area of [registeredArea, info?.registeredArea]) {
+            if (AREAS_NEEDING_DOCUMENTS[area]) throw badRequest(`Contas registradas em ${AREAS_NEEDING_DOCUMENTS[area]} exigem documentos (licença/CNPJ, imagens de qualificação, e-mail e dados de cobrança) que este sistema ainda não envia. Crie-as pelo próprio TikTok.`, 'documents_required');
+          }
+          if (!isIndustryFor(industry, info?.type ?? null)) throw badRequest('Ramo de atividade não permitido para este tipo de Business Center. Escolha um da lista.', 'invalid_industry');
+          if (requiresPromotionLink(info?.type) && !promotionLink) throw badRequest('Esta Business Center é de agência: informe o site da empresa (obrigatório pelo TikTok).', 'promotion_link_required');
+          const sendLink = forbidsQualification(info?.type) ? null : promotionLink; // BC DIRECT não pode receber qualification_info
+
           for (const [index, accountName] of accountNames(name, count).entries()) {
             if (index > 0) await sleep(CREATE_PAUSE_MS);
             try {
-              const id = await api.createAdvertiser(token, { bcId: tiktokBcId, name: accountName, currency, timezone, company, registeredArea, industry, contactEmail, contactName });
+              const id = await api.createAdvertiser(token, { bcId: tiktokBcId, name: accountName, currency, timezone, company, registeredArea, industry, contactEmail, contactName, promotionLink: sendLink });
               created.push({ id, name: accountName });
-            } catch (err) {
+            } catch (raw) {
+              const err = explainCreateError(raw);
               if (!created.length) throw err; // nada foi criado: erro normal (o motivo vai para a tela)
               failure = err instanceof HttpError ? { message: err.message, code: err.code } : { message: 'Erro inesperado ao criar a próxima conta.', code: 'unexpected' };
               break;

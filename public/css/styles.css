@@ -991,3 +991,9 @@ body.modal-open { overflow: hidden; }
 .balance__meta { margin: 0; font-size: 12px; }
 .balance .num { white-space: nowrap; }
 @media (max-width: 720px) { .balance__details-row > td { padding: 8px 0; } .balance__cell-toggle { text-align: left; } }
+.input--locked { background: #f1f1f2; color: var(--muted); cursor: not-allowed; }
+.create-ca__industry-search { margin-bottom: 6px; }
+.create-ca__bcinfo:empty { display: none; }
+.create-ca__bcline { margin: 0; padding: 8px 12px; border-radius: 10px; background: #f6f6f7; font-size: 13px; font-weight: 600; }
+.create-ca__bcinfo { display: flex; flex-direction: column; gap: 8px; }
+.create-ca__wide:empty { display: none; }

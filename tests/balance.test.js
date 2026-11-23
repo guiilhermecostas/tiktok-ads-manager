@@ -15,9 +15,9 @@ describe('Saldo: regras e leitura tolerante dos campos', () => {
     const fields = numericFields({
       advertiser_id: '7710676164989337601', advertiser_name: 'Loja', advertiser_status: 'STATUS_ENABLE', currency: 'USD', create_time: 1700000000, budget_mode: 'BUDGET_MODE_DAY',
       valid_account_balance: '120.50', account_balance: 150.5, tax: '0', frozen_balance: '30', empty: '', text: 'abc', big: '1e9', nan: 'NaN', neg: '-4.25', nested_list: [1, 2],
-      info: { cash_balance: '100', page: 1, total_number: 4, grant_balance: '50.5' }, nulo: null, 'chave inválida': 5, UPPER_KEY: '7',
+      info: { cash_balance: '100', page: 1, total_number: 4, grant_balance: '50.5' }, balance_info: { frozen_cash_balance: '2', account_balance: '999' }, max_transferable_amount: { cash_amount: '70', grant_amount: '0' }, account_open_days: 400, recharge_amount: '5000', nulo: null, 'chave inválida': 5, UPPER_KEY: '7',
     });
-    assert.deepEqual(Object.fromEntries(fields.map((f) => [f.key, f.value])), { valid_account_balance: 120.5, account_balance: 150.5, tax: 0, frozen_balance: 30, neg: -4.25, cash_balance: 100, grant_balance: 50.5, upper_key: 7 });
+    assert.deepEqual(Object.fromEntries(fields.map((f) => [f.key, f.value])), { valid_account_balance: 120.5, account_balance: 150.5, tax: 0, frozen_balance: 30, neg: -4.25, 'info.cash_balance': 100, 'info.grant_balance': 50.5, frozen_cash_balance: 2, 'max_transferable_amount.cash_amount': 70, 'max_transferable_amount.grant_amount': 0, recharge_amount: 5000, upper_key: 7 });
     assert.deepEqual(numericFields(null), []);
     assert.equal(numericFields(Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`campo_${i}`, i]))).length, 40, 'no máximo 40 campos');
   });
@@ -34,6 +34,9 @@ describe('Saldo: regras e leitura tolerante dos campos', () => {
     assert.equal(mainAmount([]), null);
     assert.equal(hasBalance([{ key: 'tax', value: 9 }, { key: 'frozen_balance', value: 9 }, { key: 'budget', value: 9 }]), false, 'imposto, bloqueio e orçamento não são saldo');
     assert.equal(hasBalance([{ key: 'grant_balance', value: 0.01 }]), true);
+    assert.equal(hasBalance([{ key: 'recharge_amount', value: 9000 }, { key: 'max_transferable_amount.cash_amount', value: 50 }, { key: 'budget_remaining', value: 5 }]), false, 'recargas passadas, valor transferível e orçamento NÃO são saldo');
+    assert.equal(balanceLabel('max_transferable_amount.cash_amount'), 'Máx. transferível (dinheiro)');
+    assert.equal(balanceLabel('valid_credit_balance'), 'Crédito disponível');
     assert.equal(hasBalance([{ key: 'valid_account_balance', value: 0 }]), false);
     for (const key of ['valid_cash_balance', 'coupon_balance', 'credit_balance']) assert.equal(isBalanceKey(key), true, key);
     for (const key of ['frozen_balance', 'tax', 'budget', 'budget_cost', 'credit_limit']) assert.equal(isBalanceKey(key), false, key);
@@ -125,6 +128,7 @@ describe('Saldo das Business Centers e das contas de anúncio', () => {
     const bc111 = bcs.find((b) => b.bcId === '111');
     assert.equal(bc111.status, 'error');
     assert.match(bc111.error, /TikTok: No permission/);
+    assert.match(bc111.error, /função financeira \(Finance Manager ou Analyst\)/, 'explica quem pode ver o saldo');
     assert.equal(bc111.accountsError, null);
     assert.deepEqual(accounts.filter((a) => a.bcId === '111').map((a) => [a.advertiserId, a.status, a.bcHasBalance]).sort(), [['9001', 'ok', null], ['9002', 'ok', null]], 'contas da BC 111 aparecem; "a BC tem saldo?" fica desconhecido');
     const bc222 = bcs.find((b) => b.bcId === '222');
@@ -142,7 +146,8 @@ describe('Saldo das Business Centers e das contas de anúncio', () => {
     fake.state.balances.advertisers[111] = [account('9001', { valid_account_balance: '5' })]; // sem a 9002
     const { accounts } = await overview(user);
     const missing = accounts.find((a) => a.advertiserId === '9002');
-    assert.deepEqual([missing.status, missing.error], ['unknown', 'O TikTok não informou o saldo desta conta.']);
+    assert.equal(missing.status, 'unknown');
+    assert.match(missing.error, /^O TikTok não informou o saldo desta conta .*administradora/);
   });
 
   it('token revogado: avisa para renovar o acesso e, depois, a conexão aparece com erro (sem chamar o TikTok)', async () => {

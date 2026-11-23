@@ -22,7 +22,20 @@ const LABELS = Object.freeze({
   budget_cost: 'Orçamento já gasto',
   budget_remaining: 'Orçamento restante',
   credit_limit: 'Limite de crédito',
-  credit_balance: 'Crédito disponível',
+  credit_balance: 'Crédito total',
+  valid_credit_balance: 'Crédito disponível',
+  frozen_cash_balance: 'Dinheiro bloqueado',
+  frozen_grant_balance: 'Bônus bloqueado',
+  frozen_credit_balance: 'Crédito bloqueado',
+  cash_tax: 'Impostos (dinheiro)',
+  'max_transferable_amount.cash_amount': 'Máx. transferível (dinheiro)',
+  'max_transferable_amount.grant_amount': 'Máx. transferível (bônus)',
+  'min_transferable_amount.cash_amount': 'Mín. a transferir (dinheiro)',
+  'min_transferable_amount.grant_amount': 'Mín. a transferir (bônus)',
+  'min_transferable_amount.credit_amount': 'Mín. a transferir (crédito)',
+  'budget_amount_restriction.minimum_amount': 'Alteração mínima do orçamento',
+  recharge_amount: 'Total já recarregado',
+  first_recharge_amount: 'Primeira recarga',
 });
 
 /** Ordem de exibição dos campos conhecidos (os demais vêm depois, em ordem alfabética). */
@@ -31,8 +44,8 @@ const ORDER = Object.freeze(Object.keys(LABELS));
 /** Qual campo representa o "saldo disponível" principal (o primeiro que existir). */
 const MAIN_KEYS = Object.freeze(['valid_account_balance', 'available_balance', 'valid_cash_balance', 'account_balance', 'cash_balance', 'balance']);
 
-/** Campo que representa dinheiro disponível/guardado (conta para "tem saldo"), e não bloqueio, imposto ou orçamento. */
-export const isBalanceKey = (key) => /(balance|cash|grant|coupon|credit|available|recharge)/.test(key) && !/(frozen|tax|budget|cost|limit)/.test(key);
+/** Campo que representa dinheiro disponível/guardado (conta para "tem saldo"), e não bloqueio, imposto, orçamento, valor transferível ou histórico de recargas. */
+export const isBalanceKey = (key) => /(balance|cash|grant|coupon|credit|available)/.test(key) && !/(frozen|tax|budget|cost|limit|transferable|recharge|minimum|restriction)/.test(key);
 
 /** Nome em português do campo: o conhecido, ou o próprio nome sem "_" e com a primeira letra maiúscula. */
 export function balanceLabel(key) {

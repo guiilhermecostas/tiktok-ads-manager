@@ -10,6 +10,8 @@ function friendly(err) {
   if (err instanceof HttpError) {
     if (err.code === 'tiktok_reauth') return 'O acesso desta conexão expirou ou foi revogado. Renove o acesso em Contas TikTok.';
     if (err.code === 'tiktok_rate_limited') return 'O TikTok limitou as consultas. Tente de novo em instantes.';
+    // O saldo só é visível a usuários com função financeira na BC (documentação oficial): explica isso quando o TikTok negar.
+    if (err.code === 'tiktok_error' && /(permission|authoriz|forbid|role)/i.test(err.message)) return `Sem permissão para ver o saldo: só usuários com função financeira (Finance Manager ou Analyst) na Business Center veem o saldo. (${err.message})`;
     if (['tiktok_error', 'proxy_error', 'tiktok_unreachable', 'tiktok_token_unreadable'].includes(err.code)) return err.message;
   }
   return 'Não foi possível consultar o saldo agora.';
@@ -107,7 +109,7 @@ export function createBalanceService({ tiktok, connections, log = console, now =
       for (const db of mine.filter((a) => !listedIds.has(a.id))) {
         accounts.push({
           ...base, key: `${connection.id}:${db.id}`, advertiserId: db.id, name: db.name, advertiserStatus: null, bcId, currency: db.currency, status: 'unknown',
-          error: acc.ok ? 'O TikTok não informou o saldo desta conta.' : acc.error, amounts: [], main: null, hasBalance: false, bcHasBalance: bcHas,
+          error: acc.ok ? 'O TikTok não informou o saldo desta conta (ele só informa as contas em que esta Business Center é administradora).' : acc.error, amounts: [], main: null, hasBalance: false, bcHasBalance: bcHas,
         });
       }
       bcs.push({

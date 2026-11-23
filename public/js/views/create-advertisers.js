@@ -1,15 +1,21 @@
-import { MAX_ACCOUNT_BASE_NAME, MAX_CREATE_ADVERTISERS, accountNames, normalizeCountry, normalizeCurrency, normalizeTimezone } from '/shared/advertiser-create.js';
+import { AREAS_NEEDING_DOCUMENTS, MAX_ACCOUNT_BASE_NAME, MAX_CREATE_ADVERTISERS, accountNames, normalizeCurrency, normalizePromotionLink } from '/shared/advertiser-create.js';
+import { industriesFor } from '/shared/tiktok-industries.js';
+import { TIKTOK_LOCATIONS } from '/shared/tiktok-locations.js';
+import { TIKTOK_TIMEZONES } from '/shared/tiktok-timezones.js';
 import { get, post } from '../api.js';
 import { h, setChildren } from '../dom.js';
 import { alertBox, button, confirmDialog, field, openModal } from '../ui.js';
 import { plural } from './hub.js';
 
 const clampCount = (value) => Math.min(MAX_CREATE_ADVERTISERS, Math.max(1, Math.trunc(Number(value)) || 1));
+const BC_TYPES = { NORMAL: 'comum', DIRECT: 'direta', AGENCY: 'de agência', SELF_SERVICE: 'de autoatendimento', SELF_SERVICE_AGENCY: 'de agência (autoatendimento)' };
+const COUNTRIES = [...TIKTOK_LOCATIONS].sort((a, b) => a[1].localeCompare(b[1]));
+const normalize = (text) => String(text ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 
 /**
- * Pop-up "+ CA": cria novas contas de anúncio dentro de uma Business Center do TikTok desta conexão.
- * O usuário só precisa da quantidade e de um nome; moeda, fuso, empresa e país vêm PRÉ-PREENCHIDOS de uma conta que a BC já tem
- * (e podem ser corrigidos). Nada é criado sem uma confirmação. Enquanto cria, o pop-up não fecha (evita pedido duplicado).
+ * Pop-up "+ CA": cria novas contas de anúncio dentro de uma Business Center do TikTok desta conexão, seguindo o contrato OFICIAL do TikTok.
+ * O usuário só precisa da quantidade e de um nome; moeda (a da BC), fuso, país, empresa e ramo vêm PRÉ-PREENCHIDOS (da BC e de uma conta que
+ * ela já tem) e fuso, país e ramo são escolhidos nas listas oficiais. Nada é criado sem uma confirmação; enquanto cria, o pop-up não fecha.
  *  - `bc`: a conexão (cartão). `onDone()`: chamado ao fechar depois de criar contas (recarrega a lista).
  */
 export function createAdvertisersDialog({ bc, onDone }) {
@@ -17,6 +23,7 @@ export function createAdvertisersDialog({ bc, onDone }) {
   let busy = false;
   let created = false;
   let defaultsRequest = 0;
+  let bcInfo = null; // o que o TikTok informou desta BC (tipo, moeda, papel…), ou null
 
   const body = h('div', { class: 'modal__body create-ca' });
   const modal = openModal({
@@ -41,25 +48,30 @@ export function createAdvertisersDialog({ bc, onDone }) {
   const bcSelect = bcIds.length > 1 ? field('Business Center do TikTok', { as: 'select', options: bcIds.map((id) => [id, id]) }, { hint: 'As contas novas ficam dentro desta Business Center.' }) : null;
   const count = field('Quantidade', { type: 'number', min: 1, max: MAX_CREATE_ADVERTISERS, step: 1, value: 1, inputmode: 'numeric', required: true });
   const name = field('Nome das contas', { type: 'text', maxlength: MAX_ACCOUNT_BASE_NAME, required: true, autocomplete: 'off', placeholder: 'Ex.: Loja Principal' });
-  const currency = field('Moeda', { type: 'text', maxlength: 3, required: true, autocomplete: 'off', placeholder: 'USD' });
-  const timezone = field('Fuso horário', { type: 'text', maxlength: 64, required: true, autocomplete: 'off', spellcheck: 'false', placeholder: 'America/Sao_Paulo' });
+  const currency = field('Moeda', { type: 'text', maxlength: 3, required: true, autocomplete: 'off', placeholder: 'USD' }, { hint: 'O TikTok exige a mesma moeda da Business Center.' });
+  const timezone = field('Fuso horário', { as: 'select', options: [['', 'Escolha o fuso…'], ...TIKTOK_TIMEZONES.map(([code, offset]) => [code, `${code} (${offset})`])], required: true });
   const company = field('Empresa', { type: 'text', maxlength: 255, required: true, autocomplete: 'off', placeholder: 'Razão social ou nome fantasia' });
-  const country = field('País de registro', { type: 'text', maxlength: 2, required: true, autocomplete: 'off', placeholder: 'BR' });
-  const email = field('E-mail de contato (opcional)', { type: 'email', maxlength: 254, autocomplete: 'off' });
-  const industry = field('Ramo de atividade (ID do TikTok)', { type: 'text', inputmode: 'numeric', required: true, maxlength: 9, autocomplete: 'off', placeholder: 'Ex.: 291905' }, { hint: 'O TikTok exige. Vem preenchido com o ramo de uma conta que esta Business Center já tem; se ficar vazio, copie o ID de uma conta existente.' });
+  const country = field('País de registro', { as: 'select', options: [['', 'Escolha o país…'], ...COUNTRIES.map(([code, label]) => [code, `${label} (${code})`])], required: true });
+  const industrySearch = h('input', { class: 'input create-ca__industry-search', type: 'search', placeholder: 'Buscar ramo (ex.: roupas, cosméticos, educação)…', 'aria-label': 'Buscar ramo de atividade', autocomplete: 'off', maxlength: 60 });
+  const industry = field('Ramo de atividade', { as: 'select', options: [['', 'Escolha o ramo…']], required: true }, { hint: 'Lista oficial do TikTok para o tipo desta Business Center. Vem preenchido com o ramo de uma conta que a BC já tem.' });
+  industry.element.insertBefore(industrySearch, industry.control);
   industry.element.classList.add('create-ca__wide');
+  const promotion = field('Site da empresa', { type: 'url', maxlength: 255, autocomplete: 'off', placeholder: 'https://minhaempresa.com' }, { hint: 'Obrigatório para Business Center de agência: o TikTok exige o endereço do site da empresa.' });
+  const email = field('E-mail de contato (opcional)', { type: 'email', maxlength: 254, autocomplete: 'off' });
 
   const prefill = { currency, timezone, company, country, contactEmail: email, industry };
-  for (const f of [name, currency, timezone, company, country, email, industry]) f.control.addEventListener('input', () => { f.control.dataset.touched = '1'; });
+  for (const f of [name, currency, timezone, company, country, email, industry, promotion]) f.control.addEventListener('input', () => { f.control.dataset.touched = '1'; });
+  for (const f of [timezone, country, industry]) f.control.addEventListener('change', () => { f.control.dataset.touched = '1'; refreshNotes(); });
 
   const preview = h('p', { class: 'create-ca__preview' });
   const status = h('p', { class: 'create-ca__status muted' });
   const errorSlot = h('div');
+  const infoSlot = h('div', { class: 'create-ca__bcinfo' });
+  const promoSlot = h('div', { class: 'create-ca__wide' });
+  const moreFields = h('div', { class: 'invite-fields' }, email.element);
   const submit = button('Criar 1 conta', { variant: 'primary', type: 'submit' });
   const minus = button('−', { small: true, ariaLabel: 'Diminuir a quantidade', onClick: () => setCount(clampCount(count.control.value) - 1) });
   const plus = button('+', { small: true, ariaLabel: 'Aumentar a quantidade', onClick: () => setCount(clampCount(count.control.value) + 1) });
-
-  // Quantidade: [−] [número] [+] na mesma linha, com o rótulo do campo em cima.
   const qtyField = h('div', { class: 'field' }, count.element.querySelector('label'), h('div', { class: 'create-ca__stepper' }, minus, count.control, plus));
 
   function setCount(value) {
@@ -76,56 +88,111 @@ export function createAdvertisersDialog({ bc, onDone }) {
   }
   for (const f of [count, name]) f.control.addEventListener('input', refresh);
 
-  /** Sugere moeda, fuso, empresa e país de uma conta que a BC já tem. Nunca sobrescreve o que o usuário já digitou. */
+  // ---------- ramo: lista oficial (por tipo da BC), com busca ----------
+  function drawIndustries() {
+    const keep = industry.control.value;
+    const term = normalize(industrySearch.value);
+    const list = industriesFor(bcInfo?.type ?? null).filter(([id, label, group]) => !term || normalize(`${label} ${group} ${id}`).includes(term) || String(id) === keep);
+    const groups = new Map();
+    for (const [id, label, group] of list) groups.set(group, [...(groups.get(group) ?? []), [id, label]]);
+    setChildren(
+      industry.control,
+      h('option', { value: '' }, list.length ? 'Escolha o ramo…' : 'Nenhum ramo encontrado'),
+      [...groups.entries()].map(([group, items]) => h('optgroup', { label: group }, items.map(([id, label]) => h('option', { value: String(id) }, `${label} (${id})`)))),
+    );
+    industry.control.value = keep;
+  }
+  industrySearch.addEventListener('input', drawIndustries);
+
+  // ---------- avisos conforme o que o TikTok disse desta BC ----------
+  const selectedBc = () => (bcSelect ? bcSelect.control.value : bcIds[0]);
+  const docsArea = () => AREAS_NEEDING_DOCUMENTS[country.control.value] ?? AREAS_NEEDING_DOCUMENTS[bcInfo?.registeredArea] ?? null;
+  const blocked = () => (bcInfo?.isAdmin === false ? 'Seu usuário não é administrador desta Business Center no TikTok: só administradores criam contas de anúncio.' : docsArea() ? `Contas registradas em ${docsArea()} exigem documentos (licença/CNPJ, imagens, e-mail e cobrança) que este sistema ainda não envia. Crie-as pelo próprio TikTok.` : null);
+
+  function refreshNotes() {
+    const notes = [];
+    if (bcInfo) {
+      const parts = [`Business Center ${BC_TYPES[bcInfo.type] ?? bcInfo.type ?? ''}`.trim(), bcInfo.currency ? `moeda ${bcInfo.currency}` : null, bcInfo.isAdmin === true ? 'você é administrador' : null].filter(Boolean);
+      notes.push(h('p', { class: 'create-ca__bcline' }, parts.join(' · ')));
+    }
+    const problem = blocked();
+    if (problem) notes.push(alertBox(problem, 'warning'));
+    setChildren(infoSlot, notes);
+    submit.disabled = busy || Boolean(problem);
+  }
+
+  /** Aplica o que o TikTok informou da BC: moeda travada, ramos do tipo, site da empresa (só BC de agência) e avisos. */
+  function applyBc() {
+    currency.control.readOnly = Boolean(bcInfo?.currency);
+    currency.control.classList.toggle('input--locked', Boolean(bcInfo?.currency));
+    promotion.control.required = Boolean(bcInfo?.requiresPromotionLink);
+    promotion.element.querySelector('label').textContent = bcInfo?.requiresPromotionLink ? 'Site da empresa (obrigatório)' : 'Site da empresa (só BC de agência)';
+    (bcInfo?.requiresPromotionLink ? promoSlot : moreFields).append(promotion.element);
+    drawIndustries();
+    refreshNotes();
+  }
+
+  /** Sugere os dados a partir do TikTok. Nunca sobrescreve o que o usuário já digitou ou escolheu. */
   async function loadDefaults() {
     const ticket = ++defaultsRequest;
-    status.textContent = 'Buscando dados de uma conta existente para preencher…';
+    status.textContent = 'Buscando os dados da Business Center no TikTok…';
     try {
-      const { defaults } = await get(`/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=${encodeURIComponent(selectedBc())}`);
+      const data = await get(`/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=${encodeURIComponent(selectedBc())}`);
       if (ticket !== defaultsRequest) return;
+      bcInfo = data.bc ?? null;
+      applyBc(); // primeiro as opções do ramo (dependem do tipo da BC); depois os valores
       let filled = 0;
       for (const [key, f] of Object.entries(prefill)) {
-        const value = defaults?.[key];
-        if (value && !f.control.dataset.touched) {
+        const value = data.defaults?.[key];
+        if (value && (!f.control.dataset.touched || (key === 'currency' && bcInfo?.currency))) {
           f.control.value = value;
-          filled += 1;
+          if (f.control.value === value) filled += 1;
         }
       }
-      status.textContent = filled ? 'Preenchido com os dados de uma conta que esta Business Center já tem. Confira antes de criar.' : 'Não foi possível sugerir os dados. Preencha moeda, fuso, empresa, país e ramo.';
+      refreshNotes();
+      status.textContent = bcInfo
+        ? 'Preenchido com os dados da sua Business Center e de uma conta que ela já tem. Confira antes de criar.'
+        : filled ? 'O TikTok não informou os dados da BC; preenchi com uma conta que ela já tem. Confira antes de criar.' : 'Não foi possível sugerir os dados. Preencha os campos.';
     } catch {
-      if (ticket === defaultsRequest) status.textContent = 'Não foi possível sugerir os dados. Preencha moeda, fuso, empresa, país e ramo.';
+      if (ticket === defaultsRequest) status.textContent = 'Não foi possível sugerir os dados. Preencha os campos.';
     }
   }
-  const selectedBc = () => (bcSelect ? bcSelect.control.value : bcIds[0]);
   bcSelect?.control.addEventListener('change', () => {
     for (const f of Object.values(prefill)) delete f.control.dataset.touched; // outra BC: as sugestões voltam a valer
+    bcInfo = null;
+    applyBc();
     loadDefaults();
   });
 
   /** Lê e confere os campos; devolve o corpo do pedido ou lança o aviso para o usuário. */
   function readForm() {
+    const problem = blocked();
+    if (problem) throw new Error(problem);
     const n = Number(count.control.value);
     if (!Number.isInteger(n) || n < 1 || n > MAX_CREATE_ADVERTISERS) throw new Error(`A quantidade deve ser de 1 a ${MAX_CREATE_ADVERTISERS}.`);
     const baseName = name.control.value.trim();
     if (baseName.length < 2) throw new Error('Informe o nome das contas.');
     const cur = normalizeCurrency(currency.control.value);
     if (!cur) throw new Error('Informe a moeda com 3 letras (ex.: USD ou BRL).');
-    const zone = normalizeTimezone(timezone.control.value);
-    if (!zone) throw new Error('Fuso horário inválido. Use o formato America/Sao_Paulo.');
+    if (bcInfo?.currency && cur !== bcInfo.currency) throw new Error(`A moeda precisa ser a da Business Center (${bcInfo.currency}).`);
+    if (!timezone.control.value) throw new Error('Escolha o fuso horário na lista.');
     if (company.control.value.trim().length < 2) throw new Error('Informe a empresa.');
-    const area = normalizeCountry(country.control.value);
-    if (!area) throw new Error('Informe o país de registro com 2 letras (ex.: BR).');
-    if (!/^\d{1,9}$/.test(industry.control.value.trim())) throw new Error('Informe o ramo de atividade: é um número (ID do TikTok), copiado de uma conta que já existe.');
+    if (!country.control.value) throw new Error('Escolha o país de registro na lista.');
+    if (!industry.control.value) throw new Error('Escolha o ramo de atividade na lista.');
+    const link = promotion.control.value.trim();
+    if (bcInfo?.requiresPromotionLink && !link) throw new Error('Esta Business Center é de agência: informe o site da empresa.');
+    if (link && !normalizePromotionLink(link)) throw new Error('Site da empresa inválido: use um endereço completo, como https://minhaempresa.com.');
     return {
       bcId: selectedBc(),
       count: n,
       name: baseName,
       currency: cur,
-      timezone: zone,
+      timezone: timezone.control.value,
       company: company.control.value.trim(),
-      registeredArea: area,
+      registeredArea: country.control.value,
+      industry: industry.control.value,
+      ...(link ? { promotionLink: link } : {}),
       ...(email.control.value.trim() ? { contactEmail: email.control.value.trim() } : {}),
-      industry: industry.control.value.trim(),
     };
   }
 
@@ -184,25 +251,28 @@ export function createAdvertisersDialog({ bc, onDone }) {
         try {
           showResult(await post(`/tiktok/business-centers/${bc.id}/advertisers`, payload));
         } catch (err) {
-          errorSlot.replaceChildren(alertBox(err.message), h('p', { class: 'field__hint' }, 'Se a mensagem falar em permissão, o acesso desta conexão pode não incluir a criação de contas: renove o acesso (ou gere um token) com um usuário administrador da Business Center.'));
+          errorSlot.replaceChildren(alertBox(err.message), h('p', { class: 'field__hint' }, 'Se a mensagem falar em permissão, o acesso desta conexão pode não incluir a criação de contas: renove o acesso (ou gere um token) com um usuário administrador da Business Center. Se a BC for de agência, preencha o site da empresa em “Mais opções”.'));
           status.textContent = '';
           refresh();
         } finally {
           busy = false;
-          submit.disabled = false;
+          submit.disabled = Boolean(blocked());
         }
       },
     },
     errorSlot,
     bcSelect ? bcSelect.element : h('p', { class: 'create-ca__bc' }, 'Business Center do TikTok: ', h('strong', null, bcIds[0])),
+    infoSlot,
     h('div', { class: 'create-ca__qty' }, qtyField, name.element),
     preview,
     h('div', { class: 'invite-fields' }, currency.element, timezone.element, company.element, country.element, industry.element),
-    h('details', { class: 'create-ca__more' }, h('summary', null, 'Mais opções'), h('div', { class: 'invite-fields' }, email.element)),
+    promoSlot,
+    h('details', { class: 'create-ca__more' }, h('summary', null, 'Mais opções'), moreFields),
     status,
     h('div', { class: 'modal__footer' }, button('Cancelar', { onClick: () => modal.requestClose() }), submit),
   );
   body.append(form);
+  applyBc();
   refresh();
   loadDefaults();
 }

@@ -20,11 +20,11 @@ const BALANCE_MAX_PAGES = 20;
 const MAX_AMOUNT_FIELDS = 40;
 const NUMERIC_TEXT_RE = /^-?\d{1,15}(?:\.\d{1,6})?$/;
 // Campos que são identificação, data, situação ou paginação (não são valores em dinheiro).
-const NOT_AMOUNT_RE = /(^|_)(id|ids|time|date|status|type|code|count|number|page|size|name|currency)($|_)/;
-const PIXEL_PAGE_SIZE = 50;
-const PIXEL_MAX_PAGES = 4;
+const NOT_AMOUNT_RE = /(^|[_.])(id|ids|time|date|days|status|type|code|count|number|page|size|name|currency)($|[_.])/;
+const PIXEL_PAGE_SIZE = 20; // documentação oficial de /pixel/list/: page_size de 1 a 20
+const PIXEL_MAX_PAGES = 10;
 const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id'];
-const PROFILE_FIELDS = ['advertiser_id', 'company', 'country', 'currency', 'timezone', 'contact_email', 'industry'];
+const PROFILE_FIELDS = ['advertiser_id', 'company', 'country', 'currency', 'timezone', 'email', 'industry']; // nomes do /advertiser/info/ na documentação oficial
 // Códigos que indicam token revogado/inválido: é preciso trocar o token da Business Center.
 const TOKEN_ERROR_CODES = new Set([40104, 40105]);
 // Limite de requisições do TikTok (código 40100 e mensagens equivalentes).
@@ -59,7 +59,8 @@ export function numericFields(object) {
   };
   for (const [key, raw] of Object.entries(object ?? {})) {
     if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
-      for (const [inner, innerRaw] of Object.entries(raw)) add(inner, innerRaw);
+      // `balance_info` repete os campos de saldo (mesmos nomes); os demais objetos (ex.: máximo transferível) levam o nome do grupo.
+      for (const [inner, innerRaw] of Object.entries(raw)) add(key === 'balance_info' ? inner : `${key}.${inner}`, innerRaw);
     } else if (!Array.isArray(raw)) add(key, raw);
   }
   return found;
@@ -190,6 +191,29 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
     },
 
     /**
+     * Dados de UMA Business Center (`/bc/get/?bc_id=`), conforme a documentação oficial: tipo (NORMAL, DIRECT, AGENCY, SELF_SERVICE,
+     * SELF_SERVICE_AGENCY), moeda, fuso, país de registro, empresa e o papel do usuário (ADMIN/STANDARD). Devolve null se o TikTok não
+     * listar essa BC para o token. O tipo decide o que a criação de contas exige (ex.: BC de agência exige o site da empresa).
+     */
+    async getBcInfo(token, bcId) {
+      const data = await call('/bc/get/', { token, query: { bc_id: bcId, page: 1, page_size: 10 } });
+      const item = (Array.isArray(data.list) ? data.list : []).find((x) => String(x?.bc_info?.bc_id ?? '') === String(bcId));
+      if (!item) return null;
+      const info = item.bc_info;
+      const text = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
+      return {
+        type: /^[A-Z_]{3,30}$/.test(String(info.type ?? '')) ? info.type : null,
+        currency: /^[A-Z]{3}$/.test(String(info.currency ?? '')) ? info.currency : null,
+        timezone: text(info.timezone, 64),
+        registeredArea: /^[A-Z]{2}$/.test(String(info.registered_area ?? '')) ? info.registered_area : null,
+        company: text(info.company, 255),
+        name: text(info.name, 120),
+        status: text(info.status, 30),
+        userRole: /^[A-Z_]{3,20}$/.test(String(item.user_role ?? '')) ? item.user_role : null,
+      };
+    },
+
+    /**
      * Dados cadastrais de UMA conta de anúncio existente, usados só para PRÉ-PREENCHER o formulário de novas contas
      * (empresa, país de registro, moeda, fuso, contato). Melhor esforço: se o TikTok recusar algum campo, devolve o que houver.
      */
@@ -211,7 +235,7 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         country: typeof a.country === 'string' ? a.country.slice(0, 2).toUpperCase() : null,
         currency: typeof a.currency === 'string' ? a.currency.slice(0, 3).toUpperCase() : null,
         timezone: typeof a.timezone === 'string' ? a.timezone.slice(0, 64) : null,
-        contactEmail: typeof a.contact_email === 'string' ? a.contact_email.slice(0, 254) : null,
+        contactEmail: typeof (a.email ?? a.contact_email) === 'string' ? String(a.email ?? a.contact_email).slice(0, 254) : null,
         industry: /^\d{1,9}$/.test(String(a.industry ?? '')) ? String(a.industry) : null, // ID do ramo de atividade (obrigatório ao criar contas)
       };
     },
@@ -220,7 +244,7 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
      * Cria UMA conta de anúncio de leilão dentro da Business Center (`/bc/advertiser/create/`). Devolve o ID criado ou null se o
      * TikTok aceitou mas não informou o ID (a conta existe; ela aparece depois de "Atualizar contas"). Irreversível por aqui.
      */
-    async createAdvertiser(token, { bcId, name, currency, timezone, company, registeredArea, industry, contactEmail, contactName }) {
+    async createAdvertiser(token, { bcId, name, currency, timezone, company, registeredArea, industry, contactEmail, contactName, promotionLink = null }) {
       const contact = contactEmail ? { email: contactEmail, ...(contactName ? { name: contactName } : {}) } : null;
       const data = await call('/bc/advertiser/create/', {
         token,
@@ -229,6 +253,8 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
           bc_id: bcId,
           advertiser_info: { name, currency, timezone, type: 'AUCTION' },
           customer_info: { company, registered_area: registeredArea, industry }, // o TikTok exige o ramo (um único parâmetro de ramo)
+          // BC de agência: o site da empresa é obrigatório. BC DIRECT não pode receber `qualification_info` (o serviço só passa o link quando cabe).
+          ...(promotionLink ? { qualification_info: { promotion_link: promotionLink } } : {}),
           ...(contact ? { contact_info: contact } : {}),
         },
       });

@@ -54,13 +54,14 @@ describe('Pixels que já existem na conta de anúncio', () => {
     assert.equal(pixels[1].name.length, 120, 'nome limitado');
   });
 
-  it('pagina quando há muitos pixels (mais de 50)', async () => {
+  it('pagina quando há muitos pixels (o TikTok aceita no máximo 20 por página)', async () => {
     const user = await owner();
     await connect(user);
     fake.state.pixels = { 9001: Array.from({ length: 120 }, (_, i) => pixel(String(8000 + i))) };
     const { pixels } = (await user.client.get('/api/tiktok/advertisers/9001/pixels')).json;
     assert.equal(pixels.length, 120);
-    assert.equal(pixelCalls().length, 3, 'três páginas de 50');
+    assert.equal(pixelCalls().length, 6, 'seis páginas de 20');
+    assert.ok(pixelCalls().every((c) => c.query.page_size === '20'), 'page_size respeita o limite oficial (1 a 20)');
   });
 
   it('usa cache de 60 s: a segunda consulta não vai ao TikTok', async () => {

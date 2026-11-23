@@ -90,8 +90,12 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
    tentadas (o resultado diz o que já foi criado). Ao final a conexão é relida para as contas aparecerem; se não aparecerem (o TikTok pode demorar, ou o
    token do link só lista contas autorizadas), a tela orienta a usar “Atualizar contas”/“Renovar acesso”. API: `POST /api/tiktok/business-centers/:id/advertisers`
    com `{ bcId, count, name, currency, timezone, company, registeredArea, industry?, contactEmail?, contactName? }`. Regras em `shared/advertiser-create.js`.
-   **Ramo de atividade (obrigatório):** o TikTok recusa a criação sem ele ("You need to set only one industry param"). O formulário traz o campo preenchido com o ramo de uma
-   conta que a BC já tem (lido de `advertiser/info`, campo `industry`); se vier vazio, copie o ID de uma conta existente. Não há endpoint público para listar os ramos.
+   **Contrato oficial (conferido na documentação do TikTok):** obrigatórios `bc_id`, `advertiser_info` (`name` até 100, `currency` = a da BC, `timezone` = código da tabela oficial, `type`
+   AUCTION), `customer_info` (`company`, `industry` = ID de nível 2 como NÚMERO, `registered_area`). O sistema lê a BC em `/bc/get/` e: usa a **moeda da BC** (travada), o **fuso** e o **país** dela
+   como sugestão, só aceita **fusos da tabela oficial** (`Etc/GMT+5` e parecidos dão "Information for this time zone does not exist"), mostra a lista **oficial de ramos** do tipo da BC
+   (autoatendimento ou não; com busca), exige `qualification_info.promotion_link` (site da empresa) em BC de **agência** (AGENCY/SELF_SERVICE_AGENCY), NÃO envia `qualification_info` em BC DIRECT,
+   bloqueia quem não é **administrador** da BC e recusa países que exigem documentos (BR, MX, FR, CN, HK: licença/CNPJ, imagens, e-mail e cobrança, ainda não enviados por aqui). Erros comuns do
+   TikTok viram instruções em português (com a mensagem original entre parênteses). Listas oficiais em `shared/tiktok-timezones.js`, `tiktok-locations.js` e `tiktok-industries.js`.
    **Pendente de conferência com o TikTok real:** a permissão do token (precisa ser de administrador da BC com acesso à gestão de contas), o formato da
    resposta (o ID é lido de forma defensiva) e as exigências por país (ex.: Brasil, México e França pedem documentos/CNPJ e e-mail; o sistema mostra o
    erro do TikTok quando faltarem — ainda não há envio de documentos).
@@ -235,6 +239,9 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
   até o nome da pasta. O seletor de criativos da campanha tem filtro por pasta, e o vídeo "hook + vídeo" fica na mesma pasta do original. API: `GET/POST /api/creatives/folders`,
   `PATCH/DELETE /api/creatives/folders/:id`, `POST /api/creatives/move` (`{ ids, folderId|null }`, tudo ou nada), `PATCH /api/creatives/:id` (`{ name?, folderId? }`),
   `GET /api/creatives?folderId=ID|none` e `POST /api/creatives?folderId=ID`. Tabela `creative_folders` + `creatives.folder_id` (migração v14). Nomes entram sempre como texto.
+- **Conferência com a documentação oficial:** o portal de documentação do TikTok publica o conteúdo em `GET https://business-api.tiktok.com/gateway/api/doc/client/node/get/v2/?doc_id=ID`
+  (ou `content_slug=...&version=1.3`). Conferidos: `/bc/advertiser/create/`, `/bc/get/`, `/bc/balance/get/`, `/advertiser/balance/get/`, `/report/integrated/get/` (hora: 1 dia por consulta; dia: até 30),
+  `/pixel/list/` (**page_size 1 a 20**), `/bc/asset/get/` (1 a 50), `/campaign/get/` (até 1000), `/advertiser/info/` (campo de e-mail é `email`) e os apêndices de fuso, país e ramo.
 - **Saldo** (menu "Saldo", área "Contas TikTok"): duas subabas SEPARADAS, **Business Centers** (`/balance`) e **Contas de anúncio** (`/balance/accounts`). Cada linha mostra o saldo
   disponível, a situação (**com saldo**, **sem saldo** ou **sem informação**, com o motivo ao passar o mouse) e, em "Detalhes", **todos** os valores que o TikTok devolveu (saldo total,
   dinheiro, bônus, bloqueado, impostos, orçamento…). Uma BC sem saldo com contas com saldo (e o contrário) aparecem normalmente, e cada conta diz se a BC dela tem saldo. Filtros: busca,

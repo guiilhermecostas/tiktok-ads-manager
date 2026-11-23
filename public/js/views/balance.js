@@ -27,9 +27,9 @@ const situationBadge = (row) => {
 };
 
 /** Situação da conta no TikTok (STATUS_ENABLE…) em português; o que não for conhecido aparece sem o prefixo, em minúsculas. */
-const ACCOUNT_STATUS = { enable: 'ativa', disable: 'desativada', limited: 'limitada', pending_confirm: 'aguardando confirmação', pending_verify: 'em verificação', pending_closure: 'em encerramento', confirm_fail: 'confirmação recusada', close: 'encerrada', share_cbs: 'compartilhada' };
+const ACCOUNT_STATUS = { show_account_status_approved: 'aprovada', show_account_status_not_approved: 'reprovada', show_account_status_in_review: 'em análise', show_account_status_punished: 'punida', enable: 'ativa', disable: 'desativada' };
 const accountStatus = (raw) => {
-  const key = String(raw).replace(/^STATUS_/, '').toLowerCase();
+  const key = String(raw).toLowerCase();
   return ACCOUNT_STATUS[key] ?? key.replace(/_/g, ' ');
 };
 const normalize = (text) => String(text ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');

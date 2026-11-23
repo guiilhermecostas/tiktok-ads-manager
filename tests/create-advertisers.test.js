@@ -6,7 +6,7 @@ import { GOOD_TOKEN, createFakeTiktok, tiktokTestConfig } from './fake-tiktok.js
 import { createUser, one, run, startTestServer } from './helpers.js';
 
 const LIMITS = { register: 1000, loginIp: 1000, loginAccount: 1000, tiktokRead: 1000, tiktokWrite: 1000, tiktokCreate: 1000, tiktokCallback: 1000, teamRead: 1000, teamWrite: 1000, teamInvite: 1000, inviteLookup: 1000, inviteAccept: 1000 };
-const FORM = { bcId: '111', count: 1, name: 'Loja Nova', currency: 'USD', timezone: 'America/Sao_Paulo', company: 'Acme Ltda', registeredArea: 'BR', industry: '291905' };
+const FORM = { bcId: '111', count: 1, name: 'Loja Nova', currency: 'USD', timezone: 'America/Sao_Paulo', company: 'Acme Ltda', registeredArea: 'US', industry: '290501' };
 let counter = 0;
 const emailOf = () => `ca${++counter}@example.com`;
 
@@ -49,6 +49,7 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
     fake.state.hideCreatedAdvertisers = false;
     fake.state.omitCreatedAdvertiserId = false;
     fake.state.rejectFields = false;
+    fake.state.bcInfo = {};
     fake.state.createDelayMs = 0;
     fake.state.calls.length = 0;
     return user;
@@ -76,7 +77,7 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
     assert.deepEqual(call.body, {
       bc_id: '111',
       advertiser_info: { name: 'Loja Nova', currency: 'USD', timezone: 'America/Sao_Paulo', type: 'AUCTION' },
-      customer_info: { company: 'Acme Ltda', registered_area: 'BR', industry: 291905 },
+      customer_info: { company: 'Acme Ltda', registered_area: 'US', industry: 290501 },
     });
     const list = (await user.client.get('/api/tiktok/advertisers')).json.advertisers;
     const made = list.find((a) => a.id === res.json.created[0].id);
@@ -89,14 +90,14 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
   it('cria várias, uma de cada vez, com nomes numerados; contato e ramo opcionais vão no corpo', async () => {
     const user = await owner();
     const bc = await connect(user);
-    const res = await create(user, bc, { count: 3, name: ' Loja   Escala ', contactEmail: 'Ads@Acme.Example', contactName: 'Maria', industry: '280102' });
+    const res = await create(user, bc, { count: 3, name: ' Loja   Escala ', contactEmail: 'Ads@Acme.Example', contactName: 'Maria', industry: '290104' });
     assert.equal(res.status, 201, res.text);
     assert.deepEqual(res.json.created.map((c) => c.name), ['Loja Escala 01', 'Loja Escala 02', 'Loja Escala 03']);
     assert.equal(new Set(res.json.created.map((c) => c.id)).size, 3, 'IDs diferentes');
     assert.equal(res.json.visible, 3);
     assert.deepEqual(createCalls().map((c) => c.body.advertiser_info.name), ['Loja Escala 01', 'Loja Escala 02', 'Loja Escala 03']);
     assert.deepEqual(createCalls()[0].body.contact_info, { email: 'ads@acme.example', name: 'Maria' });
-    assert.equal(createCalls()[0].body.customer_info.industry, 280102);
+    assert.equal(createCalls()[0].body.customer_info.industry, 290104);
   });
 
   it('o TikTok exige o ramo: sem ele o pedido é recusado aqui mesmo (nunca chega ao TikTok com o erro "only one industry param")', async () => {
@@ -112,11 +113,11 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
     const user = await owner();
     const bc = await connect(user);
     const ok = await user.client.get(`/api/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=111`);
-    assert.equal(ok.json.defaults.industry, '291905');
+    assert.equal(ok.json.defaults.industry, '292109');
     assert.ok(JSON.parse(fake.callsTo('/advertiser/info/').at(-1).query.fields).includes('industry'));
     fake.state.advertiserProfile = { company: 'Outra', country: 'US', industry: 'abc;drop' }; // valor estranho nunca é repassado
     assert.equal((await user.client.get(`/api/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=111`)).json.defaults.industry, null);
-    fake.state.advertiserProfile = { company: 'Acme Ltda', country: 'BR', contact_email: 'ads@acme.example', industry: '291905' };
+    fake.state.advertiserProfile = { company: 'Acme Ltda', country: 'BR', email: 'ads@acme.example', industry: '292109' };
   });
 
   it('valida TUDO antes de falar com o TikTok (nada é enviado quando algo está errado)', async () => {
@@ -128,7 +129,7 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
       { name: 'x' }, { name: long }, { name: '' }, { name: 'Linha\u0001quebrada' },
       { currency: 'US' }, { currency: 'REAL' }, { currency: '' },
       { timezone: 'Marte/Olimpo' }, { timezone: '' }, { company: '' }, { company: 'a' },
-      { registeredArea: 'BRA' }, { registeredArea: '' },
+      { registeredArea: 'BRA' }, { registeredArea: '' }, { registeredArea: 'ZZ' }, { timezone: 'Etc/GMT+5' }, { industry: 999999 }, { industry: '1' }, { promotionLink: 'ftp://x.com' }, { promotionLink: 'javascript:alert(1)' }, { promotionLink: 'https://' + 'a'.repeat(300) + '.com' }, { promotionLink: 5 },
       { contactEmail: 'sem-arroba' }, { industry: 'abc' }, { industry: -4 }, { industry: 1.5 }, { industry: undefined }, { industry: '' }, { industry: null }, { industry: '12345678901' },
       { bcId: 'abc' }, { bcId: '' },
     ];
@@ -270,6 +271,125 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
     assert.equal(again.json.error.code, 'tiktok_connection_error', 'conexão com erro: nem tenta');
   });
 
+  describe('regras oficiais do TikTok por tipo de Business Center', () => {
+    const info = (extra = {}) => ({ type: 'SELF_SERVICE', currency: 'USD', timezone: 'America/New_York', registered_area: 'US', company: 'Dezy BC', user_role: 'ADMIN', ...extra });
+
+    it('BC de AGENCIA: o site da empresa é obrigatório (recusado aqui, antes de falar com o TikTok) e vai em qualification_info.promotion_link', async () => {
+      const user = await owner();
+      const bc = await connect(user);
+      fake.state.bcInfo = { 111: info({ type: 'AGENCY' }) };
+      const missing = await create(user, bc);
+      assert.equal(missing.status, 400);
+      assert.equal(missing.json.error.code, 'promotion_link_required');
+      assert.equal(createCalls().length, 0);
+      const ok = await create(user, bc, { promotionLink: 'https://minhaempresa.com/loja' });
+      assert.equal(ok.status, 201, ok.text);
+      assert.deepEqual(createCalls()[0].body.qualification_info, { promotion_link: 'https://minhaempresa.com/loja' });
+      fake.state.bcInfo = { 111: info({ type: 'SELF_SERVICE_AGENCY' }) };
+      assert.equal((await create(user, bc)).status, 400, 'agência de autoatendimento também exige');
+    });
+
+    it('BC DIRECT não pode receber qualification_info: o site, se vier, NÃO é enviado; BC comum não exige', async () => {
+      const user = await owner();
+      const bc = await connect(user);
+      fake.state.bcInfo = { 111: info({ type: 'DIRECT' }) };
+      const res = await create(user, bc, { promotionLink: 'https://minhaempresa.com' });
+      assert.equal(res.status, 201, res.text);
+      assert.equal(createCalls()[0].body.qualification_info, undefined);
+      fake.state.bcInfo = { 111: info({ type: 'SELF_SERVICE' }) };
+      assert.equal((await create(user, bc, { name: 'Outra' })).status, 201, 'sem site, BC de autoatendimento cria normalmente');
+      assert.equal(createCalls().at(-1).body.qualification_info, undefined);
+    });
+
+    it('a moeda precisa ser a da BC e só administrador cria (checado antes de criar)', async () => {
+      const user = await owner();
+      const bc = await connect(user);
+      fake.state.bcInfo = { 111: info({ currency: 'BRL' }) };
+      const wrong = await create(user, bc, { currency: 'USD' });
+      assert.equal(wrong.status, 400);
+      assert.equal(wrong.json.error.code, 'currency_mismatch');
+      assert.match(wrong.json.error.message, /BRL/);
+      fake.state.bcInfo = { 111: info({ user_role: 'STANDARD' }) };
+      const notAdmin = await create(user, bc);
+      assert.equal(notAdmin.status, 403);
+      assert.equal(notAdmin.json.error.code, 'bc_not_admin');
+      assert.equal(createCalls().length, 0);
+    });
+
+    it('países que exigem documentos (BR, MX, FR, CN, HK) são recusados com explicação, tanto na conta quanto na BC', async () => {
+      const user = await owner();
+      const bc = await connect(user);
+      for (const area of ['BR', 'MX', 'FR', 'CN', 'HK']) {
+        const res = await create(user, bc, { registeredArea: area });
+        assert.equal(res.status, 400, area);
+        assert.equal(res.json.error.code, 'documents_required');
+      }
+      fake.state.bcInfo = { 111: info({ registered_area: 'BR' }) };
+      assert.equal((await create(user, bc, { registeredArea: 'US' })).json.error.code, 'documents_required', 'BC registrada no Brasil também exige');
+      assert.equal(createCalls().length, 0);
+    });
+
+    it('o ramo precisa ser da lista oficial do tipo da BC (autoatendimento tem lista menor)', async () => {
+      const user = await owner();
+      const bc = await connect(user);
+      fake.state.bcInfo = { 111: info({ type: 'SELF_SERVICE' }) };
+      const res = await create(user, bc, { industry: '292109' }); // só existe na lista das BCs de agência/diretas
+      assert.equal(res.status, 400);
+      assert.equal(res.json.error.code, 'invalid_industry');
+      fake.state.bcInfo = { 111: info({ type: 'AGENCY' }) };
+      assert.equal((await create(user, bc, { industry: '292109', promotionLink: 'https://x.com' })).status, 201);
+      assert.equal(createCalls().length, 1);
+    });
+
+    it('o fuso do TikTok é rígido: código fora da tabela oficial (ex.: Etc/GMT+5, copiado de uma conta antiga) é recusado aqui', async () => {
+      const user = await owner();
+      const bc = await connect(user);
+      const res = await create(user, bc, { timezone: 'Etc/GMT+5' });
+      assert.equal(res.status, 400);
+      assert.match(res.json.error.message, /lista do TikTok/);
+      assert.equal(createCalls().length, 0);
+    });
+
+    it('sugestões vêm da BC (tipo, moeda, fuso, país, papel) e só aceitam fuso da tabela oficial', async () => {
+      const user = await owner();
+      const bc = await connect(user);
+      fake.state.bcInfo = { 111: info({ type: 'AGENCY', currency: 'USD', timezone: 'Etc/GMT+5', registered_area: 'US', company: 'Dezy BC' }) };
+      const res = await user.client.get(`/api/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=111`);
+      assert.equal(res.status, 200, res.text);
+      assert.deepEqual(res.json.bc, { type: 'AGENCY', currency: 'USD', timezone: 'Etc/GMT+5', registeredArea: 'US', company: 'Dezy BC', name: 'BC 111', status: 'ENABLE', userRole: 'ADMIN', requiresPromotionLink: true, isAdmin: true, needsDocuments: false });
+      assert.equal(res.json.defaults.timezone, 'America/Sao_Paulo', 'o fuso inválido da BC é descartado; vale o da conta (da tabela oficial)');
+      assert.equal(res.json.defaults.currency, 'USD');
+      assert.equal(res.json.defaults.country, 'US');
+      assert.equal(res.json.defaults.industry, '292109');
+      assert.deepEqual(fake.callsTo('/bc/get/').at(-1).query, { bc_id: '111', page: '1', page_size: '10' });
+      fake.state.bcInfo = { 111: info({ type: 'SELF_SERVICE', timezone: 'America/New_York', user_role: 'STANDARD', registered_area: 'BR' }) };
+      const second = (await user.client.get(`/api/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=111`)).json;
+      assert.equal(second.defaults.timezone, 'America/New_York');
+      assert.equal(second.defaults.industry, null, '292109 não vale em BC de autoatendimento');
+      assert.deepEqual([second.bc.isAdmin, second.bc.needsDocuments, second.bc.requiresPromotionLink], [false, true, false]);
+    });
+  });
+
+  it('erros comuns do TikTok viram instruções em português (com a mensagem original entre parênteses)', async () => {
+    const user = await owner();
+    const bc = await connect(user);
+    const cases = [
+      ['Information for this time zone does not exist.', /fuso horário.*\(TikTok: Information for this time zone/],
+      ['You need to set only one industry param.', /ramo de atividade/],
+      ['promotion_link is required', /site da empresa/],
+      ['The daily quota of ad accounts has been exceeded', /Limite de contas.*Desative contas antigas/],
+      ['No permission to create ad accounts', /administrador da Business Center/],
+    ];
+    for (const [message, expected] of cases) {
+      fake.state.failAdvertiserCreateOnCall = fake.state.createdAdvertisers.length + 1;
+      fake.state.advertiserCreateError = message;
+      const res = await create(user, bc);
+      assert.equal(res.status, 502, message);
+      assert.match(res.json.error.message, expected, message);
+      assert.ok(res.json.error.message.includes(message), 'a mensagem original continua visível');
+    }
+  });
+
   describe('sugestões do formulário', () => {
     it('traz moeda e fuso da conta existente e empresa/país/contato do cadastro dela', async () => {
       const user = await owner();
@@ -277,7 +397,8 @@ describe('Criar contas de anúncio dentro de uma Business Center (+ CA)', () => 
       fake.state.currencies = { ...fake.state.currencies, 9001: 'USD' }; // a conta modelo (a de menor ID) está em dólar
       const res = await user.client.get(`/api/tiktok/business-centers/${bc.id}/advertiser-defaults?bcId=111`);
       assert.equal(res.status, 200, res.text);
-      assert.deepEqual(res.json.defaults, { currency: 'USD', timezone: 'America/Sao_Paulo', company: 'Acme Ltda', country: 'BR', contactEmail: 'ads@acme.example', industry: '291905' });
+      assert.equal(res.json.bc, null, 'sem dados da BC no TikTok');
+      assert.deepEqual(res.json.defaults, { currency: 'USD', timezone: 'America/Sao_Paulo', company: 'Acme Ltda', country: 'BR', contactEmail: 'ads@acme.example', industry: '292109' });
       const info = fake.callsTo('/advertiser/info/').at(-1);
       assert.deepEqual(JSON.parse(info.query.advertiser_ids), ['9001']);
     });

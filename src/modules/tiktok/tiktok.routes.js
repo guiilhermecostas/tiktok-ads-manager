@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { MAX_LABEL_BATCH, isAccountLabel } from '../../../shared/account-labels.js';
-import { MAX_ACCOUNT_BASE_NAME, MAX_CREATE_ADVERTISERS, normalizeCountry, normalizeCurrency, normalizeTimezone } from '../../../shared/advertiser-create.js';
+import { MAX_ACCOUNT_BASE_NAME, MAX_CREATE_ADVERTISERS, normalizeCountry, normalizeCurrency, normalizePromotionLink, normalizeTimezone } from '../../../shared/advertiser-create.js';
+import { isIndustryFor } from '../../../shared/tiktok-industries.js';
 import { RateLimiter } from '../../lib/rate-limit.js';
 import { badRequest, tooMany } from '../../lib/http-error.js';
 import { asObject, parseEmail, parseId, parseText } from '../../lib/validation.js';
@@ -54,14 +55,19 @@ function parseCreateAdvertisersRequest(body) {
   const currency = normalizeCurrency(b.currency);
   if (!currency) throw badRequest('Moeda inválida (use o código de 3 letras, ex.: USD ou BRL).');
   const timezone = normalizeTimezone(b.timezone);
-  if (!timezone) throw badRequest('Fuso horário inválido (ex.: America/Sao_Paulo).');
+  if (!timezone) throw badRequest('Fuso horário inválido: escolha um da lista do TikTok (ex.: America/Sao_Paulo).');
   const registeredArea = normalizeCountry(b.registeredArea);
-  if (!registeredArea) throw badRequest('País de registro inválido (código de 2 letras, ex.: BR).');
+  if (!registeredArea) throw badRequest('País de registro inválido: escolha um da lista do TikTok.');
   const hasValue = (value) => value !== undefined && value !== null && value !== '';
   // Ramo de atividade: o TikTok exige (ID numérico da tabela de ramos do TikTok). Aceita número ou texto só com dígitos.
   const rawIndustry = typeof b.industry === 'string' ? b.industry.trim() : b.industry;
   const industry = typeof rawIndustry === 'string' && /^\d{1,9}$/.test(rawIndustry) ? Number(rawIndustry) : rawIndustry;
-  if (!Number.isSafeInteger(industry) || industry < 1 || industry > 999_999_999) throw badRequest('Informe o ramo de atividade (ID numérico do TikTok, copiado de uma conta que já existe).');
+  if (!Number.isSafeInteger(industry) || !isIndustryFor(industry, null)) throw badRequest('Escolha o ramo de atividade na lista do TikTok.');
+  let promotionLink = null;
+  if (hasValue(b.promotionLink)) {
+    promotionLink = normalizePromotionLink(b.promotionLink);
+    if (!promotionLink) throw badRequest('Site da empresa inválido (use um endereço http ou https, ex.: https://minhaempresa.com).');
+  }
   return {
     bcId: parseBcId(b.bcId),
     count,
@@ -71,6 +77,7 @@ function parseCreateAdvertisersRequest(body) {
     company: parseText(b.company, 'Empresa', { min: 2, max: 255 }),
     registeredArea,
     industry,
+    promotionLink,
     contactEmail: hasValue(b.contactEmail) ? parseEmail(b.contactEmail) : null,
     contactName: hasValue(b.contactName) ? parseText(b.contactName, 'Nome do contato', { min: 2, max: 100 }) : null,
   };
@@ -149,7 +156,7 @@ export function createTiktokRouter({ service, limits = {} }) {
 
   // Sugestões para o formulário "+ CA" (moeda, fuso, empresa… de uma conta que a BC já tem). ?bcId= é a BC do TikTok escolhida.
   router.get('/business-centers/:id/advertiser-defaults', accounts, read, async (req, res) => {
-    res.json({ defaults: await service.advertiserDefaults(req.actor, parseId(req.params.id), parseBcId(req.query.bcId)) });
+    res.json(await service.advertiserDefaults(req.actor, parseId(req.params.id), parseBcId(req.query.bcId)));
   });
 
   // Cria novas contas de anúncio dentro de uma Business Center do TikTok desta conexão. Só o dono da conexão ou o admin.

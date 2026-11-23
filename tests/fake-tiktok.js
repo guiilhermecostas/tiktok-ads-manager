@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto';
+import { isTikTokLocation } from '../shared/tiktok-locations.js';
+import { isTikTokTimezone } from '../shared/tiktok-timezones.js';
 
 export const GOOD_TOKEN = 'good-token-aaaaaaaaaaaaaaaaaaaa';
 export const OTHER_TOKEN = 'other-token-bbbbbbbbbbbbbbbbbbb';
@@ -33,6 +35,7 @@ export function createFakeTiktok() {
     ownerBc: {}, // conta de anúncio -> ID da BC dona (preenchido pelas autorizações por link)
     omitOwnerBc: false, // true: o TikTok não devolve owner_bc_id
     rejectFields: false, // true: o TikTok recusa o parâmetro `fields` em advertiser/info
+    bcInfo: {}, // BC -> { type, currency, timezone, registered_area, company, user_role }: o que /bc/get/?bc_id= devolve (e o que a criação de contas confere)
     accessibleBcs: [], // BCs que o token enxerga em /bc/get/ ([{ id, name }]); null = sem permissão
     exitIp: '198.51.100.23', // IP que a "proxy" mostra ao serviço de IP
     exitCountry: 'United States',
@@ -50,7 +53,7 @@ export function createFakeTiktok() {
     advertiserCreateError: 'No permission to create ad accounts', // mensagem desse erro
     hideCreatedAdvertisers: false, // true: a conta criada ainda NÃO aparece nas listas (atraso do TikTok)
     omitCreatedAdvertiserId: false, // true: a criação funciona mas a resposta não traz o ID
-    advertiserProfile: { company: 'Acme Ltda', country: 'BR', contact_email: 'ads@acme.example', industry: '291905' }, // dados cadastrais de qualquer conta
+    advertiserProfile: { company: 'Acme Ltda', country: 'BR', email: 'ads@acme.example', industry: '292109' }, // dados cadastrais de qualquer conta
     hourly: {}, // relatório por hora: conta de anúncio -> { 'YYYY-MM-DD': { 14: { spend: 5.5, impressions: 900, clicks: 30, conversion: 1 } } } (hora no fuso da conta)
     hourlyDelayMs: 0, // latência do relatório por hora (testes de coleta simultânea)
     failHourlyFor: new Set(), // contas cujo relatório por hora responde erro do TikTok
@@ -126,6 +129,11 @@ export function createFakeTiktok() {
       }
       case '/bc/get/': {
         if (state.accessibleBcs === null) return reply({}, 40001, 'No permission to this API');
+        if (query.bc_id) {
+          const info = state.bcInfo[query.bc_id];
+          const { user_role: userRole = 'ADMIN', ...bcInfo } = info ?? {};
+          return reply({ list: info ? [{ bc_info: { bc_id: query.bc_id, name: `BC ${query.bc_id}`, status: 'ENABLE', ...bcInfo }, user_role: userRole }] : [], page_info: { page: 1, total_page: 1 } });
+        }
         return reply({ list: state.accessibleBcs.map((bc) => ({ bc_info: { bc_id: bc.id, name: bc.name } })), page_info: { page: 1, total_page: 1 } });
       }
       case '/bc/asset/get/': {
@@ -151,6 +159,16 @@ export function createFakeTiktok() {
         if (!info.name || !info.currency || !info.timezone || !customer.company || !customer.registered_area) return reply({}, 40002, 'Missing required parameter');
         // Comportamento real observado: o TikTok exige UM parâmetro de ramo de atividade.
         if (!Number.isInteger(customer.industry)) return reply({}, 40002, 'You need to set only one industry param.');
+        // Regras da documentação oficial (/bc/advertiser/create/):
+        if (!isTikTokTimezone(info.timezone)) return reply({}, 40002, 'Information for this time zone does not exist.');
+        if (!isTikTokLocation(customer.registered_area)) return reply({}, 40002, 'registered_area is invalid');
+        const rules = state.bcInfo[body.bc_id];
+        if (rules) {
+          if (rules.user_role && rules.user_role !== 'ADMIN') return reply({}, 40002, 'No permission: admin role required');
+          if (rules.currency && info.currency !== rules.currency) return reply({}, 40002, 'currency must be consistent with the Business Center');
+          if (['AGENCY', 'SELF_SERVICE_AGENCY'].includes(rules.type) && !body.qualification_info?.promotion_link) return reply({}, 40002, 'promotion_link is required');
+          if (rules.type === 'DIRECT' && body.qualification_info) return reply({}, 40002, 'qualification_info should not be specified for a DIRECT Business Center');
+        }
         const id = String(++state.nextId);
         state.createdNames ??= {};
         state.createdNames[id] = info.name;
@@ -171,6 +189,7 @@ export function createFakeTiktok() {
         return reply({ [state.balanceListKey]: all.slice((size - 1) * per, size * per), page_info: { page: size, page_size: per, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / per)) } });
       }
       case '/pixel/list/': {
+        if (Number(query.page_size) > 20) return reply({}, 40002, 'page_size must be between 1 and 20'); // limite da documentação oficial
         if (state.failPixels) return reply(null, 40002, 'No permission to access pixels');
         const all = state.pixels[query.advertiser_id] ?? [];
         const size = Number(query.page_size);
