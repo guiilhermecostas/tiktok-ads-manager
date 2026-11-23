@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { MAX_LABEL_BATCH, isAccountLabel } from '../../../shared/account-labels.js';
+import { MAX_ACCOUNT_BASE_NAME, MAX_CREATE_ADVERTISERS, normalizeCountry, normalizeCurrency, normalizeTimezone } from '../../../shared/advertiser-create.js';
 import { RateLimiter } from '../../lib/rate-limit.js';
 import { badRequest, tooMany } from '../../lib/http-error.js';
-import { asObject, parseId, parseText } from '../../lib/validation.js';
+import { asObject, parseEmail, parseId, parseText } from '../../lib/validation.js';
 import { requireArea } from '../../middleware/workspace.js';
 
 const PERIODS = new Set([7, 14, 30]);
@@ -42,6 +43,41 @@ function parseLabelRequest(body) {
   return { advertiserIds: advertiserIds.map(parseAdvertiserId), label };
 }
 
+/**
+ * Corpo de "criar contas de anúncio": BC do TikTok, quantidade (1 a MAX), nome base, moeda, fuso, empresa e país de registro;
+ * opcionais: ramo de atividade (ID numérico do TikTok) e contato. Cada valor é validado aqui, nada é repassado "como veio".
+ */
+function parseCreateAdvertisersRequest(body) {
+  const b = asObject(body);
+  const count = b.count;
+  if (!Number.isInteger(count) || count < 1 || count > MAX_CREATE_ADVERTISERS) throw badRequest(`A quantidade deve ser de 1 a ${MAX_CREATE_ADVERTISERS}.`);
+  const currency = normalizeCurrency(b.currency);
+  if (!currency) throw badRequest('Moeda inválida (use o código de 3 letras, ex.: USD ou BRL).');
+  const timezone = normalizeTimezone(b.timezone);
+  if (!timezone) throw badRequest('Fuso horário inválido (ex.: America/Sao_Paulo).');
+  const registeredArea = normalizeCountry(b.registeredArea);
+  if (!registeredArea) throw badRequest('País de registro inválido (código de 2 letras, ex.: BR).');
+  const hasValue = (value) => value !== undefined && value !== null && value !== '';
+  let industry = null;
+  if (hasValue(b.industry)) {
+    const n = typeof b.industry === 'string' && /^\d{1,9}$/.test(b.industry.trim()) ? Number(b.industry.trim()) : b.industry;
+    if (!Number.isSafeInteger(n) || n < 1 || n > 999_999_999) throw badRequest('Ramo de atividade inválido (informe o ID numérico do TikTok).');
+    industry = n;
+  }
+  return {
+    bcId: parseBcId(b.bcId),
+    count,
+    name: parseText(b.name, 'Nome', { min: 2, max: MAX_ACCOUNT_BASE_NAME }),
+    currency,
+    timezone,
+    company: parseText(b.company, 'Empresa', { min: 2, max: 255 }),
+    registeredArea,
+    industry,
+    contactEmail: hasValue(b.contactEmail) ? parseEmail(b.contactEmail) : null,
+    contactName: hasValue(b.contactName) ? parseText(b.contactName, 'Nome do contato', { min: 2, max: 100 }) : null,
+  };
+}
+
 function parseDays(value) {
   const days = Number(value ?? 7);
   if (!PERIODS.has(days)) throw badRequest('Período inválido (use 7, 14 ou 30 dias).');
@@ -63,6 +99,8 @@ export function createTiktokRouter({ service, limits = {} }) {
     const result = limiter.consume(String(req.actor.id));
     return result.allowed ? next() : next(tooMany(result.retryAfterSec));
   };
+  // Criar contas é irreversível por aqui e consome o limite do TikTok: poucos pedidos por 10 minutos, por usuário.
+  const createLimiter = new RateLimiter({ max: limits.tiktokCreate ?? 6, windowMs: 10 * 60 * 1000 });
   const read = throttle(readLimiter);
   const write = [throttle(writeLimiter)];
   // Permissões de colaborador (o dono sempre passa): gerenciar conexões = "accounts"; relatórios = "reports";
@@ -109,6 +147,16 @@ export function createTiktokRouter({ service, limits = {} }) {
   router.patch('/business-centers/:id/advertisers', accounts, ...write, async (req, res) => {
     const { advertiserIds, label } = parseLabelRequest(req.body);
     res.json(await service.setAdvertiserLabels(req.actor, parseId(req.params.id), advertiserIds, label));
+  });
+
+  // Sugestões para o formulário "+ CA" (moeda, fuso, empresa… de uma conta que a BC já tem). ?bcId= é a BC do TikTok escolhida.
+  router.get('/business-centers/:id/advertiser-defaults', accounts, read, async (req, res) => {
+    res.json({ defaults: await service.advertiserDefaults(req.actor, parseId(req.params.id), parseBcId(req.query.bcId)) });
+  });
+
+  // Cria novas contas de anúncio dentro de uma Business Center do TikTok desta conexão. Só o dono da conexão ou o admin.
+  router.post('/business-centers/:id/advertisers', accounts, ...write, throttle(createLimiter), async (req, res) => {
+    res.status(201).json(await service.createAdvertisers(req.actor, parseId(req.params.id), parseCreateAdvertisersRequest(req.body)));
   });
 
   router.delete('/business-centers/:id', accounts, ...write, async (req, res) => {
@@ -160,6 +208,7 @@ export function createTiktokRouter({ service, limits = {} }) {
   router.stop = () => {
     readLimiter.stop();
     writeLimiter.stop();
+    createLimiter.stop();
   };
   return router;
 }

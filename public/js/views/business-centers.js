@@ -5,6 +5,7 @@ import { state } from '../state.js';
 import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, toast } from '../ui.js';
 import { currencyBadge } from './account-filter.js';
 import { connectByLink } from './connect-link.js';
+import { createAdvertisersDialog } from './create-advertisers.js';
 import { hubCard, hubGrid, hubLayout, plural } from './hub.js';
 
 const isAdmin = () => state.user.role === 'admin';
@@ -192,6 +193,7 @@ export async function businessCentersView() {
     const active = bc.status === 'active';
     const actions = bc.canManage
       ? [
+          active ? button('+ CA', { small: true, variant: 'primary', ariaLabel: `Criar novas contas de anúncio em ${bc.name}`, onClick: () => createAdvertisersDialog({ bc, onDone: reload }) }) : null,
           button('Atualizar contas', { small: true, ariaLabel: `Atualizar contas de ${bc.name}`, onClick: (e) => sync(bc, e.currentTarget) }),
           bc.authType === 'oauth' && oauth.available ? button('Renovar acesso', { small: true, ariaLabel: `Renovar acesso de ${bc.name}`, onClick: () => connectByLink({ initialName: bc.name, onDone: reload }) }) : null,
           button('Editar', { small: true, ariaLabel: `Editar ${bc.name}`, onClick: () => businessCenterForm(bc, reload, oauth) }),
@@ -220,6 +222,7 @@ export async function businessCentersView() {
   const legend = h(
     'dl',
     { class: 'hub-legend' },
+    h('div', null, h('dt', null, '+ CA'), h('dd', null, 'cria novas contas de anúncio dentro da Business Center, no TikTok.')),
     h('div', null, h('dt', null, 'Atualizar contas'), h('dd', null, 'busca de novo, no TikTok, a lista de contas de anúncio.')),
     h('div', null, h('dt', null, 'Renovar acesso'), h('dd', null, 'refaz a autorização pelo link (use se aparecer “Com erro”).')),
     h('div', null, h('dt', null, 'Editar'), h('dd', null, 'muda o nome (e, na conexão por token, o token).')),

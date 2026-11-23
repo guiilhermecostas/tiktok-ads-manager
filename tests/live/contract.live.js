@@ -20,6 +20,7 @@ const calls = {
   'GET  pixel/list': () => client.listPixels(FAKE_TOKEN, '7000000000000000001'),
   'GET  campaign/get': () => client.getCampaigns(FAKE_TOKEN, '1'),
   'GET  report/integrated/get': () => client.getDailyReport(FAKE_TOKEN, '1', { startDate: '2026-11-01', endDate: '2026-11-02' }),
+  'POST bc/advertiser/create': () => client.createAdvertiser(FAKE_TOKEN, { bcId: '1', name: 'x', currency: 'USD', timezone: 'America/Sao_Paulo', company: 'x', registeredArea: 'BR' }),
   'POST campaign/create': () => client.createCampaign(FAKE_TOKEN, { advertiser_id: '1', campaign_name: 'x', objective_type: 'TRAFFIC', operation_status: 'DISABLE' }),
   'POST adgroup/create': () => client.createAdGroup(FAKE_TOKEN, { advertiser_id: '1', campaign_id: '1', adgroup_name: 'x', operation_status: 'DISABLE' }),
   'POST ad/create': () => client.createAd(FAKE_TOKEN, { advertiser_id: '1', adgroup_id: '1', creatives: [] }),

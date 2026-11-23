@@ -1,3 +1,4 @@
+import { accountNames } from '../../../shared/advertiser-create.js';
 import { isAccountLabel } from '../../../shared/account-labels.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest, forbidden, notFound } from '../../lib/http-error.js';
@@ -10,6 +11,8 @@ const OAUTH_MAX_PENDING = 5; // links em aberto por usuário
 const MAX_OVERVIEW_ADVERTISERS = 20;
 const OVERVIEW_CONCURRENCY = 5;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CREATE_PAUSE_MS = 400; // intervalo entre uma criação e outra (o TikTok limita a frequência)
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const isoDate = (date) => date.toISOString().slice(0, 10);
 
@@ -22,6 +25,7 @@ const isoDate = (date) => date.toISOString().slice(0, 10);
  * `actor` é sempre o usuário autenticado: { id, role }.
  */
 export function createTiktokService({ client, repo, attempts, users, proxies = null, config, log = console }) {
+  const creating = new Set(); // conexões com criação de contas em andamento (evita clique duplo / pedidos simultâneos)
   const dataCache = new TtlCache({ ttlMs: 60_000 });
   const overviewCache = new TtlCache({ ttlMs: 5 * 60_000, maxEntries: 200 });
   const invalidate = () => {
@@ -278,6 +282,77 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       await repo.replaceAdvertisers(id, advertisers);
       invalidate();
       return present(actor, await repo.get(id));
+    },
+
+    // ---------- criar contas de anúncio dentro de uma Business Center ("+ CA") ----------
+    /**
+     * Dados para PRÉ-PREENCHER o formulário: moeda, fuso, empresa, país e contato de uma conta que a BC já tem. Só sugestões
+     * (melhor esforço): qualquer falha devolve o que o sistema já sabe, nunca impede de criar.
+     */
+    async advertiserDefaults(actor, bcRowId, tiktokBcId) {
+      const bc = await requireManageable(actor, bcRowId);
+      const allowed = bc.bcId ? [bc.bcId] : bc.ownerBcIds;
+      if (!allowed.includes(tiktokBcId)) throw badRequest('Esta Business Center do TikTok não pertence a esta conexão.');
+      const sample = await repo.sampleAdvertiser(bcRowId, bc.bcId ? null : tiktokBcId);
+      const defaults = { currency: sample?.currency ?? null, timezone: sample?.timezone ?? null, company: null, country: null, contactEmail: null };
+      if (!sample) return defaults;
+      try {
+        const profile = await withBusinessCenterToken(bcRowId, (token, api) => api.getAdvertiserProfile(token, sample.id));
+        for (const [key, value] of Object.entries(profile)) if (value) defaults[key] = value;
+      } catch {
+        /* sem os dados cadastrais: o usuário preenche à mão */
+      }
+      return defaults;
+    },
+
+    /**
+     * Cria `count` contas de anúncio na Business Center do TikTok informada, UMA de cada vez (com pausa). Só o dono da conexão ou o
+     * admin; a BC do TikTok precisa ser uma das desta conexão. Uma criação por vez por conexão (409 se já houver outra em
+     * andamento). Se uma falhar, as seguintes NÃO são tentadas (o motivo costuma ser o mesmo) e o resultado diz o que já foi criado.
+     * Ao final relê as contas da conexão (melhor esforço) para elas aparecerem na lista.
+     */
+    async createAdvertisers(actor, bcRowId, { bcId: tiktokBcId, count, name, currency, timezone, company, registeredArea, industry = null, contactEmail = null, contactName = null }) {
+      const bc = await requireManageable(actor, bcRowId);
+      if (bc.status !== 'active') throw new HttpError(409, 'Esta conexão está com erro. Renove o acesso ou atualize o token antes de criar contas.', 'tiktok_connection_error');
+      const allowed = bc.bcId ? [bc.bcId] : bc.ownerBcIds;
+      if (!allowed.includes(tiktokBcId)) throw badRequest('Esta Business Center do TikTok não pertence a esta conexão.');
+      if (creating.has(bcRowId)) throw new HttpError(409, 'Já existe uma criação de contas em andamento nesta conexão. Aguarde terminar.', 'create_in_progress');
+      creating.add(bcRowId);
+      const created = [];
+      let failure = null;
+      try {
+        await withBusinessCenterToken(bcRowId, async (token, api) => {
+          for (const [index, accountName] of accountNames(name, count).entries()) {
+            if (index > 0) await sleep(CREATE_PAUSE_MS);
+            try {
+              const id = await api.createAdvertiser(token, { bcId: tiktokBcId, name: accountName, currency, timezone, company, registeredArea, industry, contactEmail, contactName });
+              created.push({ id, name: accountName });
+            } catch (err) {
+              if (!created.length) throw err; // nada foi criado: erro normal (o motivo vai para a tela)
+              failure = err instanceof HttpError ? { message: err.message, code: err.code } : { message: 'Erro inesperado ao criar a próxima conta.', code: 'unexpected' };
+              break;
+            }
+          }
+        });
+      } finally {
+        creating.delete(bcRowId);
+      }
+      log.info(`[tiktok] contas de anúncio criadas: usuário ${actor.id}, conexão ${bcRowId}, ${created.length} de ${count}`); // sem token nem dados da conta
+      invalidate();
+
+      // As contas novas só aparecem nesta conexão depois de relidas no TikTok (pode haver atraso do lado do TikTok).
+      let visible = 0;
+      try {
+        const current = await repo.get(bcRowId);
+        const advertisers = await withBusinessCenterToken(bcRowId, (token, api) => (current.authType === 'oauth' ? loadOauthAdvertisers(token, api) : loadAdvertisers(token, current.bcId, api)));
+        await repo.replaceAdvertisers(bcRowId, advertisers);
+        const known = new Set(advertisers.map((a) => a.id));
+        visible = created.filter((c) => c.id && known.has(c.id)).length;
+        invalidate();
+      } catch {
+        /* a criação deu certo; a lista é atualizada ao clicar em "Atualizar contas" */
+      }
+      return { requested: count, created, visible, failure, businessCenter: present(actor, await repo.get(bcRowId)) };
     },
 
     async removeBusinessCenter(actor, id) {

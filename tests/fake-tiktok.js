@@ -45,6 +45,12 @@ export function createFakeTiktok() {
     createDelayMs: 0, // simula latência nas criações (testes de concorrência)
     pixels: {}, // conta de anúncio -> [{ pixel_id, pixel_code, pixel_name }] devolvidos por /pixel/list/
     failPixels: false, // true: /pixel/list/ responde erro do TikTok
+    createdAdvertisers: [], // corpos recebidos em /bc/advertiser/create/
+    failAdvertiserCreateOnCall: 0, // n>0: a n-ésima criação de conta desde `createdAdvertisers = []` responde erro do TikTok
+    advertiserCreateError: 'No permission to create ad accounts', // mensagem desse erro
+    hideCreatedAdvertisers: false, // true: a conta criada ainda NÃO aparece nas listas (atraso do TikTok)
+    omitCreatedAdvertiserId: false, // true: a criação funciona mas a resposta não traz o ID
+    advertiserProfile: { company: 'Acme Ltda', country: 'BR', contact_email: 'ads@acme.example' }, // dados cadastrais de qualquer conta
     manyCampaigns: 0, // >0: devolve essa quantidade de campanhas, paginadas
     // Autorização por link: auth_code -> { token, advertisers } (uso único, como no TikTok).
     authCodes: new Map(),
@@ -126,7 +132,22 @@ export function createFakeTiktok() {
         const ids = JSON.parse(query.advertiser_ids);
         if (state.rejectFields && query.fields) return reply({}, 40002, 'The value of fields is invalid');
         const ownerOf = (id) => state.ownerBc[id] ?? Object.entries(state.bcs).find(([, accounts]) => accounts.includes(id))?.[0];
-        return reply({ list: ids.map((id) => ({ advertiser_id: id, name: `Conta ${id}`, currency: state.currencies[id] ?? 'BRL', timezone: 'America/Sao_Paulo', ...(state.omitOwnerBc || !ownerOf(id) ? {} : { owner_bc_id: ownerOf(id) }) })) });
+        const wantsProfile = String(query.fields ?? '').includes('company');
+        return reply({ list: ids.map((id) => ({ advertiser_id: id, name: state.createdNames?.[id] ?? `Conta ${id}`, currency: state.currencies[id] ?? 'BRL', timezone: 'America/Sao_Paulo', ...(wantsProfile ? state.advertiserProfile : {}), ...(state.omitOwnerBc || !ownerOf(id) ? {} : { owner_bc_id: ownerOf(id) }) })) });
+      }
+      case '/bc/advertiser/create/': {
+        state.createdAdvertisers.push(body);
+        if (state.failAdvertiserCreateOnCall && state.createdAdvertisers.length === state.failAdvertiserCreateOnCall) return reply({}, 40002, state.advertiserCreateError);
+        if (!state.bcs[body?.bc_id]) return reply({}, 40002, 'No permission to this business center');
+        const info = body.advertiser_info ?? {};
+        const customer = body.customer_info ?? {};
+        if (!info.name || !info.currency || !info.timezone || !customer.company || !customer.registered_area) return reply({}, 40002, 'Missing required parameter');
+        const id = String(++state.nextId);
+        state.createdNames ??= {};
+        state.createdNames[id] = info.name;
+        state.currencies[id] = info.currency;
+        if (!state.hideCreatedAdvertisers) state.bcs[body.bc_id].push(id);
+        return reply(state.omitCreatedAdvertiserId ? {} : { advertiser_id: id });
       }
       case '/pixel/list/': {
         if (state.failPixels) return reply(null, 40002, 'No permission to access pixels');

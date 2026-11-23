@@ -81,6 +81,18 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
    “Marcar todas as listadas” seleciona só o que o filtro mostra, o resumo detalha “N de agência, M comuns” e um aviso lembra de publicar
    um tipo de cada vez quando a seleção mistura os dois. API: `PATCH /api/tiktok/business-centers/:id/advertisers` com
    `{ "advertiserIds": ["…"], "label": "agency" | null }` (1 a 200 contas da mesma BC; tudo ou nada). Regras e nomes em `shared/account-labels.js`.
+   **Criar contas de anúncio (“+ CA”):** o botão no cartão da conexão abre um pop-up que cria de 1 a 10 contas de leilão (AUCTION) dentro de uma
+   Business Center do TikTok da conexão (`POST /open_api/v1.3/bc/advertiser/create/`, uma chamada por conta, em sequência, com pausa). Só pede a
+   **quantidade** e um **nome** (várias viram “Nome 01”, “Nome 02”…); moeda, fuso, empresa, país e e-mail de contato vêm **pré-preenchidos** de uma conta
+   que a BC já tem (`GET /api/tiktok/business-centers/:id/advertiser-defaults?bcId=`, melhor esforço) e podem ser corrigidos. Pede confirmação antes
+   (a criação não se desfaz por aqui). Regras: só o dono da conexão/admin (ou colaborador com a área “Contas TikTok”), BC do TikTok precisa ser uma da
+   conexão, uma criação por vez por conexão (409), no máximo 6 pedidos a cada 10 minutos por usuário, e se uma conta falhar as seguintes **não** são
+   tentadas (o resultado diz o que já foi criado). Ao final a conexão é relida para as contas aparecerem; se não aparecerem (o TikTok pode demorar, ou o
+   token do link só lista contas autorizadas), a tela orienta a usar “Atualizar contas”/“Renovar acesso”. API: `POST /api/tiktok/business-centers/:id/advertisers`
+   com `{ bcId, count, name, currency, timezone, company, registeredArea, industry?, contactEmail?, contactName? }`. Regras em `shared/advertiser-create.js`.
+   **Pendente de conferência com o TikTok real:** a permissão do token (precisa ser de administrador da BC com acesso à gestão de contas), o formato da
+   resposta (o ID é lido de forma defensiva) e as exigências por país (ex.: Brasil, México e França pedem documentos/CNPJ e e-mail; o sistema mostra o
+   erro do TikTok quando faltarem — ainda não há envio de documentos).
    **Cada usuário enxerga e usa apenas as próprias BCs** (Início, TikTok Ads e publicação de campanhas). Nunca vê as de outros.
 3. **Compartilhamento:** somente o admin pode marcar uma BC como "compartilhada com a equipe" (em Conectar/Editar). BCs
    compartilhadas aparecem para todos como somente leitura. As BCs que existiam antes desta mudança ficaram compartilhadas.
@@ -185,7 +197,8 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
 
 ## Início (chat), Relatórios, Arquivos e demais telas
 
-- **Início** é um chat no estilo ChatGPT (por enquanto só o design: sugestões clicáveis, campo que cresce, "Enter envia", respostas de exemplo). A
+- **Início** é um chat no estilo ChatGPT (por enquanto só o design: sugestões clicáveis, campo que cresce, "Enter envia", botão de avião de papel, respostas de exemplo; sem logo).
+  O chat ocupa a altura da tela: a conversa rola dentro da própria área e o campo de mensagem fica fixo embaixo, sem cobrir nada. A
   conversa fica só na memória do navegador (nada vai ao servidor) e é descartada se outra pessoa entrar. O texto entra sempre como texto.
 - **Relatórios** (área "Relatórios" dos colaboradores) tem duas abas. **Visão geral**: 7 indicadores (gasto, impressões, cliques, CTR, CPC, conversões e
   custo por conversão) com variação contra o período anterior e mini gráfico; gráfico de linha com **curva suave** (spline cúbica monótona, SVG puro, sem
@@ -279,7 +292,7 @@ src/
     files/             arquivos anexados da conta (criptografados, só download)
     mail/              envio de e-mail pelo Resend e modelo do convite
 scripts/               utilitários: db (check/migrate), import-sqlite, supabase-setup.sql
-shared/                regras compartilhadas (navegador + servidor): campanhas, etiquetas de conta, permissões por área
+shared/                regras compartilhadas (navegador + servidor): campanhas, etiquetas de conta, permissões por área, criação de contas
 public/                SPA em JS puro (sem innerHTML), CSS e views
 tests/                 testes de API, segurança, banco e utilitários (tests/live: opcionais, usam rede)
 certs/                 CA pública do Supabase (verificação do TLS)

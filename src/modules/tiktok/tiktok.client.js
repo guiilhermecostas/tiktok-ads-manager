@@ -15,6 +15,7 @@ const BC_LIST_MAX_PAGES = 3;
 const PIXEL_PAGE_SIZE = 50;
 const PIXEL_MAX_PAGES = 4;
 const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id'];
+const PROFILE_FIELDS = ['advertiser_id', 'company', 'country', 'currency', 'timezone', 'contact_email'];
 // Códigos que indicam token revogado/inválido: é preciso trocar o token da Business Center.
 const TOKEN_ERROR_CODES = new Set([40104, 40105]);
 // Limite de requisições do TikTok (código 40100 e mensagens equivalentes).
@@ -155,6 +156,47 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         }
       }
       return result;
+    },
+
+    /**
+     * Dados cadastrais de UMA conta de anúncio existente, usados só para PRÉ-PREENCHER o formulário de novas contas
+     * (empresa, país de registro, moeda, fuso, contato). Melhor esforço: se o TikTok recusar algum campo, devolve o que houver.
+     */
+    async getAdvertiserProfile(token, advertiserId) {
+      let data;
+      try {
+        data = await call('/advertiser/info/', { token, query: { advertiser_ids: [advertiserId], fields: PROFILE_FIELDS } });
+      } catch (err) {
+        if (!(err instanceof HttpError && err.code === 'tiktok_error')) throw err;
+        return {};
+      }
+      const a = data.list?.[0] ?? {};
+      return {
+        company: typeof a.company === 'string' ? a.company.slice(0, 255) : null,
+        country: typeof a.country === 'string' ? a.country.slice(0, 2).toUpperCase() : null,
+        currency: typeof a.currency === 'string' ? a.currency.slice(0, 3).toUpperCase() : null,
+        timezone: typeof a.timezone === 'string' ? a.timezone.slice(0, 64) : null,
+        contactEmail: typeof a.contact_email === 'string' ? a.contact_email.slice(0, 254) : null,
+      };
+    },
+
+    /**
+     * Cria UMA conta de anúncio de leilão dentro da Business Center (`/bc/advertiser/create/`). Devolve o ID criado ou null se o
+     * TikTok aceitou mas não informou o ID (a conta existe; ela aparece depois de "Atualizar contas"). Irreversível por aqui.
+     */
+    async createAdvertiser(token, { bcId, name, currency, timezone, company, registeredArea, industry, contactEmail, contactName }) {
+      const contact = contactEmail ? { email: contactEmail, ...(contactName ? { name: contactName } : {}) } : null;
+      const data = await call('/bc/advertiser/create/', {
+        token,
+        method: 'POST',
+        body: {
+          bc_id: bcId,
+          advertiser_info: { name, currency, timezone, type: 'AUCTION' },
+          customer_info: { company, registered_area: registeredArea, ...(industry ? { industry } : {}) },
+          ...(contact ? { contact_info: contact } : {}),
+        },
+      });
+      return digitsOrNull(data.advertiser_id ?? data.advertiser_info?.advertiser_id ?? data.list?.[0]?.advertiser_id);
     },
 
     /**

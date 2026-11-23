@@ -165,6 +165,16 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
       );
       return rowCount;
     },
+    /** Uma conta de anúncio da conexão (da BC do TikTok informada, se houver) para servir de modelo ao criar contas novas. */
+    async sampleAdvertiser(bcRowId, ownerBcId = null) {
+      const { rows } = await db.query(
+        `SELECT advertiser_id, currency, timezone FROM tiktok_advertisers
+          WHERE business_center_id = $1 AND ($2::text IS NULL OR owner_bc_id = $2)
+          ORDER BY advertiser_id LIMIT 1`,
+        [bcRowId, ownerBcId],
+      );
+      return rows[0] ? { id: rows[0].advertiser_id, currency: rows[0].currency, timezone: rows[0].timezone } : null;
+    },
     async markError(id, message) {
       await db.query("UPDATE tiktok_business_centers SET status = 'error', last_error = $1 WHERE id = $2", [String(message).slice(0, 300), id]);
     },

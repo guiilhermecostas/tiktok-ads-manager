@@ -1,4 +1,4 @@
-import { h, setChildren } from '../dom.js';
+import { h, icon, setChildren } from '../dom.js';
 import { state } from '../state.js';
 import { toast } from '../ui.js';
 import { avatarEl } from './avatar.js';
@@ -21,13 +21,11 @@ export function homeChatView(ctx) {
   if (conversation.ownerId !== state.user.id) conversation = { ownerId: state.user.id, messages: [] };
   const firstName = state.user.name.split(' ')[0];
   const body = h('div', { class: 'chat__body' });
-  const input = h('textarea', { class: 'chat__input', rows: 1, maxlength: MAX_LENGTH, placeholder: 'Pergunte alguma coisa sobre suas campanhas…', 'aria-label': 'Mensagem para o assistente' });
-  const send = h('button', { type: 'submit', class: 'chat__send', 'aria-label': 'Enviar mensagem', disabled: true }, '↑');
+  const input = h('textarea', { class: 'chat__input', rows: 1, maxlength: MAX_LENGTH, placeholder: 'Pergunte ao assistente…', 'aria-label': 'Mensagem para o assistente' });
+  const send = h('button', { type: 'submit', class: 'chat__send', 'aria-label': 'Enviar mensagem', title: 'Enviar', disabled: true }, icon('send', 18));
   let waiting = false;
 
   // ---------- desenho ----------
-  const assistantMark = () => h('span', { class: 'chat__mark', 'aria-hidden': 'true' }, h('img', { src: '/tiktokas.png', alt: '', width: 20, height: 20 }));
-
   function copyButton(text) {
     return h('button', {
       type: 'button', class: 'chat__copy', 'aria-label': 'Copiar resposta',
@@ -44,15 +42,14 @@ export function homeChatView(ctx) {
 
   function messageEl(message) {
     if (message.role === 'user') return h('div', { class: 'chat__msg chat__msg--user' }, h('div', { class: 'chat__bubble' }, message.text), avatarEl(state.user, { size: 'sm' }));
-    if (message.typing) return h('div', { class: 'chat__msg' }, assistantMark(), h('div', { class: 'chat__bubble chat__bubble--typing', 'aria-label': 'O assistente está escrevendo' }, h('span', { class: 'dot' }), h('span', { class: 'dot' }), h('span', { class: 'dot' })));
-    return h('div', { class: 'chat__msg' }, assistantMark(), h('div', { class: 'chat__bubble' }, message.text, h('div', { class: 'chat__actions' }, copyButton(message.text))));
+    if (message.typing) return h('div', { class: 'chat__msg' }, h('div', { class: 'chat__bubble chat__bubble--typing', 'aria-label': 'O assistente está escrevendo' }, h('span', { class: 'dot' }), h('span', { class: 'dot' }), h('span', { class: 'dot' })));
+    return h('div', { class: 'chat__msg' }, h('div', { class: 'chat__bubble' }, message.text, h('div', { class: 'chat__actions' }, copyButton(message.text))));
   }
 
   function hero() {
     return h(
       'div',
       { class: 'chat__hero' },
-      h('span', { class: 'chat__mark chat__mark--lg', 'aria-hidden': 'true' }, h('img', { src: '/tiktokas.png', alt: '', width: 34, height: 34 })),
       h('h1', { class: 'chat__title' }, `Olá, ${firstName}. Como posso ajudar?`),
       h('p', { class: 'muted chat__subtitle' }, 'Pergunte sobre suas campanhas, contas e relatórios, ou escolha uma sugestão.'),
       h('div', { class: 'chat__suggestions' }, SUGGESTIONS.map((s) => h('button', { type: 'button', class: 'chat__suggestion', onClick: () => (s.action === 'campaign' ? openCampaignWizard(ctx) : submit(s.text)) }, h('strong', null, s.title), h('span', { class: 'muted' }, s.text)))),
@@ -62,9 +59,7 @@ export function homeChatView(ctx) {
   function draw({ stick = true } = {}) {
     setChildren(body, conversation.messages.length ? h('div', { class: 'chat__thread', 'aria-live': 'polite' }, conversation.messages.map(messageEl)) : hero());
     newChat.hidden = conversation.messages.length === 0;
-    if (stick) window.scrollTo?.({ top: 0 });
-    const scroller = body.closest('.main') ?? document.scrollingElement;
-    if (stick && scroller) scroller.scrollTop = scroller.scrollHeight;
+    if (stick) body.scrollTop = body.scrollHeight; // a conversa rola dentro da própria área; a mais recente fica à vista
   }
 
   // ---------- envio ----------
