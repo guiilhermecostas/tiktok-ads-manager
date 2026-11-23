@@ -21,6 +21,11 @@ import { createLocalCreativeStorage } from './modules/creatives/creative-storage
 import { createCreativesRepository } from './modules/creatives/creatives.repository.js';
 import { createCreativesRouter } from './modules/creatives/creatives.routes.js';
 import { createCreativesService } from './modules/creatives/creatives.service.js';
+import { createHookVideo } from './modules/hooks/hook-video.js';
+import { createHooksRepository } from './modules/hooks/hooks.repository.js';
+import { createHooksRouter } from './modules/hooks/hooks.routes.js';
+import { createHooksService } from './modules/hooks/hooks.service.js';
+import { createKlingClient } from './modules/hooks/kling.client.js';
 import { createProxiesRepository } from './modules/proxies/proxies.repository.js';
 import { createProxiesRouter } from './modules/proxies/proxies.routes.js';
 import { createProxiesService } from './modules/proxies/proxies.service.js';
@@ -48,7 +53,7 @@ const SHARED_DIR = path.join(ROOT_DIR, 'shared');
 /**
  * Monta a aplicação Express. Recebe dependências (config, db, log) para facilitar testes.
  */
-export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer, avatarProcessor, clock, hourlyPauseMs }) {
+export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer, avatarProcessor, clock, hourlyPauseMs, klingFetch, hooksIntervalMs }) {
   const users = createUsersRepository(db);
   const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
   const campaigns = createCampaignsRepository(db);
@@ -66,6 +71,18 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const cleaning = config.creatives.cleaning ?? {};
   const creativeCleaner = cleaner ?? createCreativeCleaner({ ffmpegPath: cleaning.ffmpegPath ?? null, tmpDir: creativeStorage.tmpDir, concurrency: cleaning.concurrency, timeoutMs: cleaning.timeoutMs, threads: cleaning.threads, log });
   const creativesService = createCreativesService({ repo: createCreativesRepository(db), storage: creativeStorage, cleaner: creativeCleaner, tiktok: tiktokService, config, log });
+  // Hook com IA (Kling): gera um começo de 2 a 3 s e o aplica a um vídeo da biblioteca. Sem KLING_API_KEY fica desligado.
+  const hooksService = createHooksService({
+    repo: createHooksRepository(db),
+    kling: createKlingClient({ config, fetchFn: klingFetch, log }),
+    video: createHookVideo({ ffmpegPath: cleaning.ffmpegPath ?? null, tmpDir: creativeStorage.tmpDir, timeoutMs: cleaning.timeoutMs, threads: cleaning.threads }),
+    storage: creativeStorage,
+    creatives: creativesService,
+    config,
+    log,
+    now: clock,
+    intervalMs: hooksIntervalMs,
+  });
 
   // E-mail (convites de colaboradores) pelo Resend. `mailer` pode ser injetado nos testes.
   const mail = mailer ?? createMailer({ config, fetchFn, log });
@@ -158,6 +175,9 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Ver criativos serve a quem publica campanhas; enviar, renomear e excluir é de quem gerencia a biblioteca.
   const creativesRouter = createCreativesRouter({ service: creativesService, limits });
   protectedApi.use('/creatives', requireAreaByMethod({ read: ['creatives', 'campaigns'], write: ['creatives'] }), creativesRouter);
+  // Hook com IA: faz parte da biblioteca de criativos (área "Criativos").
+  const hooksRouter = createHooksRouter({ service: hooksService, limits });
+  protectedApi.use('/hooks', requireArea('creatives'), hooksRouter);
   // Anexos da conta: quem gerencia as contas TikTok (o dono sempre; colaborador com a área "Contas TikTok").
   const filesRouter = createFilesRouter({ service: filesService, limits });
   protectedApi.use('/files', requireArea('accounts'), filesRouter);
@@ -200,8 +220,11 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
     creativeStorage,
     creativeCleaner,
     hourly: hourlyService,
+    hooks: hooksService,
     close: () => {
       hourlyService.stop();
+      hooksService.stop();
+      hooksRouter.stop();
       hourlyRouter.stop();
       authRouter.stop();
       tiktokRouter.stop();

@@ -174,7 +174,7 @@ export async function adAccountsView() {
               'tr',
               null,
               h('th', { scope: 'col', class: 'acc-select' }, headCheckbox ?? h('span', { class: 'visually-hidden' }, 'Selecionar')),
-              ['Conta de anúncio', 'ID da conta', 'Business Center', 'Tipo', 'Moeda', 'Fuso horário', 'Status'].map((t) => h('th', { scope: 'col' }, t)),
+              ['Conta de anúncio', 'Business Center', 'Tipo', 'Moeda', 'Fuso horário', 'Status'].map((t) => h('th', { scope: 'col' }, t)),
             ),
           ),
           h(
@@ -185,8 +185,8 @@ export async function adAccountsView() {
                 'tr',
                 null,
                 selectCell(a),
-                h('td', { class: 'cell-strong', 'data-label': 'Conta' }, a.name),
-                h('td', { 'data-label': 'ID da conta' }, h('span', { class: 'code' }, a.id)),
+                // O ID fica logo abaixo do nome, em UMA linha (não quebra), para a tabela ter uma coluna a menos sem perder o dado.
+                h('td', { 'data-label': 'Conta' }, h('div', { class: 'acc-name' }, h('span', { class: 'cell-strong' }, a.name), h('span', { class: 'acc-id', title: 'ID da conta de anúncio' }, `ID ${a.id}`))),
                 h('td', { 'data-label': 'Business Center' }, origin(a)),
                 h('td', { 'data-label': 'Tipo' }, kindCell(a)),
                 h('td', { 'data-label': 'Moeda' }, currencyBadge(a.currency) ?? h('span', { class: 'muted' }, '—')),

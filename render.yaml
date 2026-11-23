@@ -44,6 +44,8 @@ services:
         sync: false
       - key: RESEND_API_KEY       # convites de colaboradores por e-mail (Resend)
         sync: false
+      - key: KLING_API_KEY        # Hook com IA (Kling); sem ela o recurso fica desligado
+        sync: false
       - key: APP_URL              # endereço público do sistema, usado nos links dos e-mails (https://SEU-SERVICO.onrender.com)
         sync: false
       - key: EMAIL_FROM

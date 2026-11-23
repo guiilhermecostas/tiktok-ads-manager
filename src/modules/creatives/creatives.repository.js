@@ -13,6 +13,7 @@ function toCreative(row) {
     mimeType: row.mime_type ?? null,
     sizeBytes: row.size_bytes ?? null,
     hasFile: row.storage_key !== null && row.storage_key !== undefined,
+    aiGenerated: row.ai_generated === true, // contém trecho gerado por IA (hook): lembrar da divulgação de conteúdo de IA do TikTok
     tiktokAdvertisers: row.tiktok_advertisers ?? [],
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
@@ -73,11 +74,11 @@ export function createCreativesRepository(db) {
       return Number(rows[0].used);
     },
 
-    async createUpload(userId, { name, kind, originalFilename, mimeType, sizeBytes, sha256, md5, storageKey }) {
+    async createUpload(userId, { name, kind, originalFilename, mimeType, sizeBytes, sha256, md5, storageKey, aiGenerated = false }) {
       const { rows } = await db.query(
-        `INSERT INTO creatives (user_id, name, kind, source, original_filename, mime_type, size_bytes, sha256, md5, storage_key)
-         VALUES ($1, $2, $3, 'upload', $4, $5, $6, $7, $8, $9) RETURNING id`,
-        [userId, name, kind, originalFilename, mimeType, sizeBytes, sha256, md5, storageKey],
+        `INSERT INTO creatives (user_id, name, kind, source, original_filename, mime_type, size_bytes, sha256, md5, storage_key, ai_generated)
+         VALUES ($1, $2, $3, 'upload', $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [userId, name, kind, originalFilename, mimeType, sizeBytes, sha256, md5, storageKey, aiGenerated],
       );
       return rows[0].id;
     },

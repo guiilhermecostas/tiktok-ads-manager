@@ -42,7 +42,7 @@ async function truncateAll(db) {
  * `cleaner`: por padrão um limpador FALSO (os testes usam mídia de mentira); `'real'` usa o FFmpeg de verdade;
  * também aceita um objeto com o mesmo contrato.
  */
-export async function startTestServer({ limits, config: overrides, fetchFn, isolated = false, creatives, cleaner, mailer, avatarProcessor, clock } = {}) {
+export async function startTestServer({ limits, config: overrides, fetchFn, isolated = false, creatives, cleaner, mailer, avatarProcessor, clock, klingFetch } = {}) {
   const MB = 1024 * 1024;
   const creativesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'creatives-test-'));
   const config = loadConfig({
@@ -64,7 +64,7 @@ export async function startTestServer({ limits, config: overrides, fetchFn, isol
   const chosenCleaner = cleaner === 'real' ? createCreativeCleaner({ ffmpegPath, tmpDir, concurrency: 2, log: silentLog }) : (cleaner ?? createStubCleaner());
   // Fotos de perfil: FFmpeg de verdade (rápido com imagens pequenas), a menos que o teste injete outro processador.
   const chosenAvatars = avatarProcessor ?? createAvatarProcessor({ ffmpegPath, tmpDir });
-  const built = createApp({ config, db, log: silentLog, limits, fetchFn, cleaner: chosenCleaner, mailer, avatarProcessor: chosenAvatars, clock, hourlyPauseMs: 0 });
+  const built = createApp({ config, db, log: silentLog, limits, fetchFn, cleaner: chosenCleaner, mailer, avatarProcessor: chosenAvatars, clock, hourlyPauseMs: 0, klingFetch });
   await built.authService.ensureAdmin(silentLog);
   await built.creativeStorage.init();
 

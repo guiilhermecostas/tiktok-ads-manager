@@ -2,6 +2,7 @@ import { del, get, patch, post } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
 import { formatBytes, formatDate } from '../../format.js';
 import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, spinner, toast } from '../../ui.js';
+import { openHookDialog } from './hook-dialog.js';
 import { creativeThumb } from './thumb.js';
 import { createUploader, uploadButton } from './uploader.js';
 
@@ -110,6 +111,7 @@ export async function creativesView() {
         { class: 'modal__body' },
         h('div', { class: 'preview' }, creativeThumb(creative, { video: true })),
         h('p', { class: 'muted preview__meta' }, `${creative.kind === 'video' ? 'Vídeo' : 'Imagem'} · ${formatBytes(creative.sizeBytes)} · ${creative.mimeType ?? 'referência do TikTok'}`),
+        creative.aiGenerated ? alertBox('Este vídeo contém um trecho gerado por IA. Ao publicar, ative a divulgação de conteúdo gerado por IA do TikTok.', 'warning') : null,
         h('div', { class: 'modal__footer' }, button('Fechar', { onClick: () => modal.close() })),
       ),
     });
@@ -179,7 +181,9 @@ export async function creativesView() {
         { class: 'creative-card__body' },
         h('p', { class: 'creative-card__name', title: creative.name }, creative.name),
         h('p', { class: 'muted creative-card__meta' }, `${creative.sizeBytes === null ? 'No TikTok' : formatBytes(creative.sizeBytes)} · ${formatDate(creative.createdAt)}`),
-        used ? h('p', { class: 'creative-card__tags' }, badge(`Enviado a ${used} conta${used > 1 ? 's' : ''}`, 'success')) : null,
+        used || creative.aiGenerated
+          ? h('p', { class: 'creative-card__tags' }, creative.aiGenerated ? badge('Gerado por IA', 'neutral') : null, used ? badge(`Enviado a ${used} conta${used > 1 ? 's' : ''}`, 'success') : null)
+          : null,
       ),
       h(
         'div',
@@ -256,7 +260,7 @@ export async function creativesView() {
   document.addEventListener('dragover', onDragOver);
   document.addEventListener('drop', onDrop);
 
-  const actions = h('div', { class: 'page-header__actions' }, button('Já está no TikTok? Adicionar por ID', { onClick: addFromTikTok }), uploadButton(uploader));
+  const actions = h('div', { class: 'page-header__actions' }, button('Hook com IA', { onClick: () => openHookDialog({ onCreated: reload }) }), button('Já está no TikTok? Adicionar por ID', { onClick: addFromTikTok }), uploadButton(uploader));
   setChildren(root, h('div', { class: 'page-header' }, h('div', null, h('h1', { class: 'page-title' }, 'Criativos'), h('p', { class: 'muted' }, 'Guarde suas imagens e vídeos e selecione nas campanhas.')), actions), meter, uploader.element, h('div', { class: 'toolbar toolbar--row' }, tabs, search), grid, dropHint);
   drawTabs();
   drawMeter();

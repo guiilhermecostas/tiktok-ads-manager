@@ -215,6 +215,18 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
   API: `GET /api/tiktok/hourly?hours=24|48|168&advertiserId=` e `POST /api/tiktok/hourly/refresh` ("Atualizar agora": só as conexões do usuário, 3 por 5 minutos).
   **Atenção na hospedagem:** a coleta roda DENTRO do servidor; num plano que "dorme" por inatividade (Render gratuito) ela só acontece enquanto o serviço estiver
   acordado. O plano `starter` do `render.yaml` fica sempre ligado; o gratuito não serve para isso. Pendente de conferência com um token real: o formato exato da resposta por hora.
+- **Hook com IA** (botão na biblioteca de Criativos; área "Criativos"): gera com a **Kling** um começo de **2 a 3 segundos**, fora do padrão, para prender a
+  atenção (9 estilos "quebra-padrão" + ideia extra opcional; não precisa falar do produto), mostra a prévia e, com a sua escolha, **junta o hook ao início de um vídeo
+  da biblioteca** (FFmpeg, no tamanho do vídeo, com áudio mudo no trecho do hook) ou guarda só o hook. O vídeo original **nunca é alterado**: o resultado é um criativo
+  NOVO marcado como **"Gerado por IA"** (selo na biblioteca e aviso para ativar a divulgação de conteúdo de IA do TikTok ao publicar). A Kling gera no mínimo 3 s
+  (`kling-3.0`, vertical 9:16, 720p, sem áudio, sem marca d'água); o servidor corta para 2, 2,5 ou 3 s. Fluxo: pedido (1 a 3 opções) → fila → gerando → ajustando → pronto,
+  tudo em segundo plano e guardado no banco (`creative_hooks`, migração v13; sobrevive a reinício). A barra de andamento é uma estimativa (a Kling não informa %).
+  Segurança e custo: a chave fica só no servidor (`KLING_API_KEY`, nunca no navegador, nos logs ou no repositório); erros da Kling viram mensagens próprias; o download do vídeo
+  pronto só aceita https em domínios da lista (`KLING_DOWNLOAD_HOSTS`), nunca IP/localhost/redirecionamento, com limite de tamanho; limites por usuário (`KLING_DAILY_LIMIT`,
+  padrão 20 a cada 24 h), no sistema (`KLING_GLOBAL_DAILY_LIMIT`, 100), 6 pedidos ativos por usuário e `KLING_CONCURRENCY` tarefas simultâneas (3). Prompts em `hook-prompts.js`
+  (sempre com "sem texto, marcas, pessoas reais, violência ou nudez"). API: `GET/POST /api/hooks`, `GET /api/hooks/:id/file`, `POST /api/hooks/:id/apply`, `DELETE /api/hooks/:id`.
+  **Atenção:** a API da Kling cobra por um pacote de créditos próprio; sem saldo ela responde "Account balance not enough" (a tela mostra "o saldo da Kling acabou"). Se o sistema avisar
+  que um endereço de vídeo foi recusado, acrescente o domínio em `KLING_DOWNLOAD_HOSTS`.
 - **Arquivos** (aba de Contas TikTok): anexos para a equipe (ex.: arquivos de logins). Gravados **criptografados** (AES-256-GCM, dono autenticado; desligado sem
   `TOKEN_ENCRYPTION_KEY`), só txt/csv/log/md/pdf/png/jpg/docx/xlsx **conferidos pelo conteúdo**, sempre entregues como **download** (`octet-stream`, `attachment`,
   `nosniff`, sem cache). Limites: 5 MB por arquivo, 50 arquivos e 100 MB por conta. Para senhas, um gerenciador de senhas é mais seguro.
@@ -301,6 +313,7 @@ src/
     profile/           Minha conta: foto de perfil (recodificada no FFmpeg) e nome
     files/             arquivos anexados da conta (criptografados, só download)
     mail/              envio de e-mail pelo Resend e modelo do convite
+    hooks/             Hook com IA: cliente da Kling, geração em segundo plano, FFmpeg (cortar e juntar ao vídeo), rotas
 scripts/               utilitários: db (check/migrate), import-sqlite, supabase-setup.sql
 shared/                regras compartilhadas (navegador + servidor): campanhas, etiquetas de conta, permissões por área, criação de contas
 public/                SPA em JS puro (sem innerHTML), CSS e views

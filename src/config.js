@@ -67,6 +67,44 @@ export function loadMailConfig({ port, isProduction }) {
   return { apiKey, from, appUrl, enabled: Boolean(apiKey && appUrl) };
 }
 
+/**
+ * Hook com IA (Kling). Tudo é configuração/segredo do SERVIDOR:
+ *  - KLING_API_KEY: chave da API (nunca vai ao navegador, aos logs nem ao repositório). Sem ela, o recurso fica desligado.
+ *  - KLING_BASE_URL: só https em um endereço da Kling (padrão: servidor de Singapura, para quem está fora da China).
+ *  - KLING_MODEL: modelo de vídeo (padrão kling-3.0, que aceita 3 s).
+ *  - KLING_DAILY_LIMIT / KLING_GLOBAL_DAILY_LIMIT: hooks por usuário e no sistema todo a cada 24 h (protege o saldo de créditos).
+ *  - KLING_CONCURRENCY: tarefas simultâneas na Kling (o limite da conta é da Kling; passar dele só gera erro 429).
+ *  - KLING_DOWNLOAD_HOSTS: domínios (separados por vírgula) dos quais o vídeo pronto pode ser baixado. O padrão cobre a Kling e a
+ *    Kuaishou; se o sistema avisar que um endereço foi recusado, acrescente o domínio aqui.
+ */
+export function loadKlingConfig() {
+  const apiKey = (process.env.KLING_API_KEY ?? '').trim();
+  if (apiKey && !/^[A-Za-z0-9._-]{16,200}$/.test(apiKey)) throw new Error('KLING_API_KEY inválida (use só letras, números, ponto, hífen e sublinhado).');
+  const rawBase = (process.env.KLING_BASE_URL ?? '').trim() || 'https://api-singapore.klingai.com';
+  let baseUrl;
+  try {
+    const url = new URL(rawBase);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/' || !/(^|\.)klingai\.com$/.test(url.hostname)) throw new Error('x');
+    baseUrl = url.origin;
+  } catch {
+    throw new Error('KLING_BASE_URL inválida (use https e um endereço klingai.com, ex.: https://api-singapore.klingai.com).');
+  }
+  const hosts = (process.env.KLING_DOWNLOAD_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+  if (hosts.some((h) => !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(h))) throw new Error('KLING_DOWNLOAD_HOSTS inválido (use domínios separados por vírgula, ex.: klingai.com,kling.ai).');
+  const model = (process.env.KLING_MODEL ?? '').trim() || 'kling-3.0';
+  if (!/^kling-[a-z0-9.-]{1,24}$/.test(model)) throw new Error('KLING_MODEL inválido (ex.: kling-3.0).');
+  return {
+    apiKey,
+    enabled: Boolean(apiKey),
+    baseUrl,
+    model,
+    downloadHosts: hosts.length ? hosts : ['klingai.com', 'kling.ai', 'kuaishou.com', 'kwai.com', 'kwaicdn.com', 'kwimgs.com', 'yximgs.com', 'ksyuncs.com'],
+    dailyLimit: integer('KLING_DAILY_LIMIT', 20, 1, 1000),
+    globalDailyLimit: integer('KLING_GLOBAL_DAILY_LIMIT', 100, 1, 10_000),
+    concurrency: integer('KLING_CONCURRENCY', 3, 1, 10),
+  };
+}
+
 function loadTiktokConfig(context) {
   const rawKey = (process.env.TOKEN_ENCRYPTION_KEY ?? '').trim();
   const encryptionKey = rawKey ? parseEncryptionKey(rawKey) : null;
@@ -195,6 +233,7 @@ export function loadConfig(overrides = {}) {
     cookieName: 'tt_sid',
     tiktok: loadTiktokConfig({ port, isProduction }),
     mail: loadMailConfig({ port, isProduction }),
+    kling: loadKlingConfig(),
     proxy: loadProxyConfig({ isProduction }),
     creatives: loadCreativesConfig(),
     ...overrides,

@@ -401,6 +401,43 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['tiktok_hourly_spend'], revoke: ['tiktok_hourly_spend'], identity: [] })}
     `,
   },
+  {
+    version: 13,
+    description: 'Hook com IA (Kling): pedidos de hook de 2 a 3 segundos e marca "gerado por IA" nos criativos',
+    sql: `
+      -- Criativos que contêm trecho gerado por IA ficam marcados (a tela mostra "IA" e lembra de usar a divulgação do TikTok).
+      ALTER TABLE creatives ADD COLUMN ai_generated BOOLEAN NOT NULL DEFAULT false;
+
+      -- Um pedido = um hook (uma tarefa na Kling). O arquivo gerado fica na pasta privada de criativos (storage_key) até a pessoa
+      -- aplicá-lo a um vídeo ou descartá-lo. Apagar o usuário apaga os pedidos; apagar o criativo resultante só limpa o vínculo.
+      CREATE TABLE creative_hooks (
+        id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id       INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        style         TEXT        NOT NULL CHECK (char_length(style) BETWEEN 1 AND 40),
+        idea          TEXT        CHECK (idea IS NULL OR char_length(idea) <= 300),
+        duration_ms   INTEGER     NOT NULL CHECK (duration_ms IN (2000, 2500, 3000)),
+        status        TEXT        NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'generating', 'processing', 'ready', 'failed')),
+        attempts      INTEGER     NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        kling_task_id TEXT        CHECK (kling_task_id IS NULL OR kling_task_id ~ '^[A-Za-z0-9_-]{1,100}$'),
+        error_code    TEXT        CHECK (error_code IS NULL OR char_length(error_code) <= 40),
+        error_message TEXT        CHECK (error_message IS NULL OR char_length(error_message) <= 300),
+        storage_key   TEXT,
+        size_bytes    BIGINT      CHECK (size_bytes IS NULL OR size_bytes >= 0),
+        apply_status  TEXT        CHECK (apply_status IS NULL OR apply_status IN ('running', 'failed')),
+        apply_error   TEXT        CHECK (apply_error IS NULL OR char_length(apply_error) <= 300),
+        creative_id   INTEGER     REFERENCES creatives(id) ON DELETE SET NULL,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        submitted_at  TIMESTAMPTZ,
+        ready_at      TIMESTAMPTZ,
+        CHECK (status <> 'ready' OR storage_key IS NOT NULL)
+      );
+      CREATE INDEX idx_creative_hooks_user ON creative_hooks (user_id, created_at DESC, id DESC);
+      CREATE INDEX idx_creative_hooks_active ON creative_hooks (status) WHERE status IN ('queued', 'generating', 'processing');
+
+      ${protectTables({ rls: ['creative_hooks'], revoke: ['creative_hooks'], identity: ['creative_hooks'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

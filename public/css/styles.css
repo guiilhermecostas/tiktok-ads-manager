@@ -621,6 +621,9 @@ body.modal-open { overflow: hidden; }
   .hub__filters .toolbar__search, .hub__filters select.input { max-width: none; width: 100%; flex: none; }
   .hub-grid > .hub-card { flex-basis: 100%; max-width: none; }
 }
+.acc-name { min-width: 0; text-align: left; }
+.acc-name .cell-strong { display: block; overflow-wrap: anywhere; }
+.acc-id { display: block; margin-top: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 400; color: var(--muted); white-space: nowrap; }
 .hub-meta { display: block; margin-top: 3px; font-size: 12px; color: var(--muted); }
 
 /* tabela que vira lista de cartões no celular (cada linha mostra "COLUNA  valor") */
@@ -905,3 +908,38 @@ body.modal-open { overflow: hidden; }
 .hours-top li span::before { content: counter(top) 'º  '; font-weight: 700; color: var(--muted); }
 @media (max-width: 900px) { .kpis--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .reports__refresh { margin-left: 0; } .reports__chart-head { flex-direction: column; } }
+
+/* ============ Hook com IA ============ */
+.hook { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.hook__intro { margin: 0; font-size: 14px; line-height: 1.5; }
+.hook__form { margin-top: 0; display: flex; flex-direction: column; gap: 12px; }
+.hook__subtitle { margin: 4px 0 0; font-size: 15px; }
+.hook__usage { margin: 0; font-size: 12px; }
+.hook__submit { display: flex; justify-content: flex-end; }
+.hook__empty { margin: 0; padding: 14px; text-align: center; border: 1px dashed var(--border); border-radius: 12px; }
+.hook-styles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.hook-style { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 12px; background: #fff; cursor: pointer; transition: border-color 0.15s, background 0.15s, box-shadow 0.15s; }
+.hook-style:hover { border-color: #8a8a8f; }
+.hook-style.is-on { border-color: var(--tt-black); background: #f2fffe; box-shadow: 0 0 0 1px var(--tt-black); }
+.hook-style:focus-within { outline: 2px solid var(--tt-cyan-dark); outline-offset: 2px; }
+.hook-style__input { position: absolute; opacity: 0; pointer-events: none; }
+.hook-style__title { font-size: 13px; }
+.hook-style__text { font-size: 12px; line-height: 1.35; color: var(--muted); }
+.hook-options { display: flex; flex-wrap: wrap; gap: 14px 24px; }
+.hook-options__item { display: flex; flex-direction: column; gap: 4px; }
+.hook-list { display: flex; flex-direction: column; gap: 10px; }
+.hook-item { padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: #fff; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.hook-item__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hook-item__status { margin: 0; font-size: 13px; }
+.hook-item__percent { font-weight: 700; }
+.hook-item__ready { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; align-items: start; }
+.hook-item__video { width: 150px; aspect-ratio: 9 / 16; background: #000; border-radius: 10px; object-fit: cover; }
+.hook-item__actions { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.hook-item__buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.hook-item__done { margin: 0; font-size: 12px; color: var(--muted); }
+.progress--busy { overflow: hidden; }
+.progress__bar--indeterminate { width: 40%; animation: hook-slide 1.2s infinite ease-in-out; }
+@keyframes hook-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
+@media (max-width: 720px) { .hook-styles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .hook-styles { grid-template-columns: minmax(0, 1fr); } .hook-item__ready { grid-template-columns: minmax(0, 1fr); } .hook-item__video { width: 100%; max-width: 220px; } }
+@media (prefers-reduced-motion: reduce) { .progress__bar--indeterminate { animation: none; width: 100%; } }

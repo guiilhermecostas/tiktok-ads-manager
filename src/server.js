@@ -7,7 +7,7 @@ const config = loadConfig();
 const db = await openDatabase(config.database);
 console.log(`[db] ${config.database.url ? 'PostgreSQL (DATABASE_URL)' : `PGlite de desenvolvimento em ${config.database.devDataDir}`}`);
 
-const { app, authService, sessions, creativeStorage, creativeCleaner, hourly, close } = createApp({ config, db });
+const { app, authService, sessions, creativeStorage, creativeCleaner, hourly, hooks, close } = createApp({ config, db });
 await creativeStorage.init(); // pastas privadas da biblioteca de criativos + limpeza de temporários antigos
 // A limpeza dos criativos depende do FFmpeg: confere na subida e avisa alto se não executa (não derruba o sistema).
 // O mesmo para as proxies: o fetch precisa aceitar os dispatchers (HTTP e SOCKS) neste ambiente.
@@ -30,6 +30,14 @@ purgeTimer.unref();
 if (config.tiktok.configured) {
   hourly.start();
   console.log('[por hora] coleta do gasto por hora ligada (a cada 30 minutos)');
+}
+
+// Hook com IA: acompanha as gerações na Kling (a cada poucos segundos). Só liga com a chave configurada.
+if (config.kling.enabled) {
+  await hooks.start();
+  console.log('[hook] Hook com IA (Kling) ligado');
+} else {
+  console.log('[hook] Hook com IA desligado (defina KLING_API_KEY para ligar)');
 }
 
 const server = app.listen(config.port, config.host, () => {

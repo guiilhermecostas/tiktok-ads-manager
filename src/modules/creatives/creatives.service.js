@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import fs from 'node:fs';
 import { collectCreativeRefs } from '../../../shared/campaign-spec.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest, notFound } from '../../lib/http-error.js';
@@ -90,6 +91,41 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
         } catch (err) {
           await discardFile(committedKey);
           if (isUniqueViolation(err)) throw new HttpError(409, 'Este arquivo já está na sua biblioteca.', 'duplicate_creative'); // dois envios iguais ao mesmo tempo
+          throw err;
+        }
+        return repo.get(actor.id, id);
+      } finally {
+        await storage.removeTemp(tempFile).catch(() => {});
+      }
+    },
+
+    /**
+     * Guarda na biblioteca um VÍDEO gerado pelo próprio sistema (ex.: hook + vídeo), vindo de um arquivo local. Mesmas regras do
+     * envio: confere o conteúdo, a cota e a duplicidade, e grava com nome aleatório. Fica marcado como "gerado por IA".
+     */
+    async adoptGenerated(actor, { name, sourcePath, filename }) {
+      const used = await repo.usedBytes(actor.id);
+      const tempFile = storage.tempPath();
+      try {
+        const received = await storage.receive(fs.createReadStream(sourcePath), tempFile, { maxBytes: limits.maxVideoBytes }).catch((err) => {
+          if (err instanceof HttpError) throw new HttpError(413, `O vídeo gerado excede o limite de ${Math.round(limits.maxVideoBytes / 1024 / 1024)} MB.`, 'file_too_large');
+          throw err;
+        });
+        if (received.size === 0) throw badRequest('O vídeo gerado está vazio.', 'empty_file');
+        if (used + received.size > limits.quotaBytes) throw new HttpError(413, 'Sua biblioteca atingiu o limite de armazenamento. Exclua criativos para liberar espaço.', 'quota_exceeded');
+        const actual = sniffCreativeType(received.head);
+        if (!actual || actual.kind !== 'video') throw new HttpError(415, 'O arquivo gerado não é um vídeo válido.', 'content_mismatch');
+        const duplicate = await repo.findByHash(actor.id, received.sha256);
+        if (duplicate) throw new HttpError(409, `Este vídeo já está na sua biblioteca como "${duplicate.name}".`, 'duplicate_creative');
+        const committedKey = await storage.commit(tempFile, actor.id, actual.ext);
+        let id;
+        try {
+          id = await repo.createUpload(actor.id, {
+            name, kind: 'video', originalFilename: filename, mimeType: actual.mime, sizeBytes: received.size,
+            sha256: received.sha256, md5: received.md5, storageKey: committedKey, aiGenerated: true,
+          });
+        } catch (err) {
+          await discardFile(committedKey);
           throw err;
         }
         return repo.get(actor.id, id);
