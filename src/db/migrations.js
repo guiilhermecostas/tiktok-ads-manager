@@ -355,6 +355,28 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['user_avatars'], revoke: ['user_avatars'], identity: [] })}
     `,
   },
+  {
+    version: 11,
+    description: 'Arquivos anexados da conta (ex.: logins), criptografados',
+    sql: `
+      -- Arquivos que o dono da conta e seus colaboradores (com acesso a Contas TikTok) compartilham. O conteúdo é GRAVADO
+      -- CRIPTOGRAFADO pela aplicação (AES-256-GCM, chave TOKEN_ENCRYPTION_KEY): nem o banco nem um backup mostram o arquivo.
+      -- Apagar o dono apaga os arquivos (cascata); apagar quem enviou só limpa o "enviado por".
+      CREATE TABLE workspace_files (
+        id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        owner_id    INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        uploaded_by INTEGER              REFERENCES users(id) ON DELETE SET NULL,
+        name        TEXT        NOT NULL CHECK (char_length(name) BETWEEN 1 AND 120),
+        ext         TEXT        NOT NULL CHECK (ext IN ('txt', 'csv', 'log', 'md', 'pdf', 'png', 'jpg', 'docx', 'xlsx')),
+        size        INTEGER     NOT NULL CHECK (size BETWEEN 1 AND 5242880),
+        data        BYTEA       NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX idx_workspace_files_owner ON workspace_files (owner_id, created_at DESC);
+
+      ${protectTables({ rls: ['workspace_files'], revoke: ['workspace_files'], identity: ['workspace_files'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

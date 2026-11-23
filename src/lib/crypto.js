@@ -25,3 +25,25 @@ export function decrypt(payload, key) {
   decipher.setAuthTag(Buffer.from(tag, 'base64url'));
   return Buffer.concat([decipher.update(Buffer.from(data, 'base64url')), decipher.final()]).toString('utf8');
 }
+
+/**
+ * AES-256-GCM para ARQUIVOS (binário). Formato: [1 byte de versão][12 de IV][16 de tag][dados cifrados].
+ * `context` (ex.: o ID do dono) entra como dado autenticado: um arquivo copiado para outro dono no banco NÃO decifra.
+ */
+export function encryptBuffer(plain, key, context) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  cipher.setAAD(Buffer.from(String(context)));
+  const data = Buffer.concat([cipher.update(plain), cipher.final()]);
+  return Buffer.concat([Buffer.from([1]), iv, cipher.getAuthTag(), data]);
+}
+
+export function decryptBuffer(raw, key, context) {
+  // O driver do banco devolve BYTEA como Buffer (pg) ou Uint8Array (PGlite): os dois valem.
+  const payload = raw instanceof Uint8Array ? Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength) : null;
+  if (!payload || payload.length < 30 || payload[0] !== 1) throw new Error('Formato de arquivo criptografado inválido.');
+  const decipher = createDecipheriv('aes-256-gcm', key, payload.subarray(1, 13));
+  decipher.setAAD(Buffer.from(String(context)));
+  decipher.setAuthTag(payload.subarray(13, 29));
+  return Buffer.concat([decipher.update(payload.subarray(29)), decipher.final()]);
+}

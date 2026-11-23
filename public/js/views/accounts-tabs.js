@@ -4,6 +4,7 @@ const TABS = [
   { path: '/business-centers', label: 'Business Centers' },
   { path: '/business-centers/accounts', label: 'Contas de anúncio' },
   { path: '/business-centers/proxy', label: 'Proxy' },
+  { path: '/business-centers/files', label: 'Arquivos' },
 ];
 
 /** Sub-abas de "Contas TikTok" (cada uma tem o próprio endereço: dá para favoritar e o botão voltar funciona). */

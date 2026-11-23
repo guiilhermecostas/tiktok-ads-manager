@@ -14,6 +14,7 @@ import { tiktokAdsView } from './views/tiktok-ads.js';
 import { businessCentersView } from './views/business-centers.js';
 import { creativesView } from './views/creatives/library.js';
 import { adAccountsView } from './views/ad-accounts.js';
+import { filesView } from './views/files.js';
 import { proxySettingsView } from './views/proxy-settings.js';
 import { tiktokConnectedView } from './views/tiktok-connected.js';
 import { inviteView } from './views/invite.js';
@@ -31,6 +32,7 @@ const PROTECTED_ROUTES = {
   '/business-centers': { title: 'Contas TikTok', view: businessCentersView, areas: ['accounts'] },
   '/business-centers/accounts': { title: 'Contas de anúncio', view: adAccountsView, areas: ['accounts'] },
   '/business-centers/proxy': { title: 'Proxy', view: proxySettingsView, areas: ['accounts'] },
+  '/business-centers/files': { title: 'Arquivos', view: filesView, areas: ['accounts'] },
   '/team': { title: 'Colaboradores', view: teamView, ownerOnly: true },
   '/admin': { title: 'Administração', view: adminView, adminOnly: true },
 };

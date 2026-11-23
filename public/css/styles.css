@@ -737,3 +737,16 @@ body.modal-open { overflow: hidden; }
 .multi__option input { accent-color: var(--tt-black); }
 .multi__foot { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
 .multi__none { margin: 8px; }
+
+/* Arquivos anexados (Contas TikTok) */
+.files__drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 22px 16px; margin-bottom: 14px; border: 2px dashed #b9bcc0; border-radius: 14px; background: #fff; cursor: pointer; text-align: center; transition: border-color 0.15s, background 0.15s; }
+.files__drop:hover, .files__drop.is-over { border-color: var(--tt-black); background: #f2fffe; }
+.files__drop.is-disabled { opacity: 0.55; cursor: not-allowed; pointer-events: none; }
+.files__drop:focus-visible { outline: 2px solid var(--tt-cyan-dark); outline-offset: 3px; }
+.files__queue { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.files__queue:empty { display: none; }
+.files__item { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; background: #fff; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; }
+.files__item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; min-width: 0; }
+.files__ok { color: var(--tt-cyan-dark); font-weight: 600; }
+.files__error { color: #9d1033; font-weight: 600; text-align: right; }
+.files__name { overflow-wrap: anywhere; }

@@ -12,6 +12,9 @@ import { createAvatarProcessor } from './modules/profile/avatar-processor.js';
 import { createAvatarsRepository } from './modules/profile/avatars.repository.js';
 import { createAvatarsRouter, createProfileRouter } from './modules/profile/profile.routes.js';
 import { createProfileService } from './modules/profile/profile.service.js';
+import { createFilesRepository } from './modules/files/files.repository.js';
+import { createFilesRouter } from './modules/files/files.routes.js';
+import { createFilesService } from './modules/files/files.service.js';
 import { createMailer } from './modules/mail/mailer.js';
 import { createCreativeCleaner } from './modules/creatives/creative-cleaner.js';
 import { createLocalCreativeStorage } from './modules/creatives/creative-storage.js';
@@ -66,6 +69,9 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Foto de perfil: o arquivo enviado é sempre recodificado no servidor (JPEG 256x256, sem metadados). Mesmo FFmpeg dos criativos.
   const avatarsProcessor = avatarProcessor ?? createAvatarProcessor({ ffmpegPath: cleaning.ffmpegPath ?? null, tmpDir: creativeStorage.tmpDir });
   const profileService = createProfileService({ avatars: createAvatarsRepository(db), users, storage: creativeStorage, processor: avatarsProcessor });
+
+  // Anexos da conta (ex.: logins para a equipe): criptografados em repouso; desligados sem TOKEN_ENCRYPTION_KEY.
+  const filesService = createFilesService({ repo: createFilesRepository(db), encryptionKey: config.tiktok.encryptionKey });
 
   const app = express();
   app.set('trust proxy', config.trustProxy ?? 0); // 0: ignora X-Forwarded-*; N: confia nos N proxies à frente (IP real do cliente)
@@ -145,6 +151,9 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Ver criativos serve a quem publica campanhas; enviar, renomear e excluir é de quem gerencia a biblioteca.
   const creativesRouter = createCreativesRouter({ service: creativesService, limits });
   protectedApi.use('/creatives', requireAreaByMethod({ read: ['creatives', 'campaigns'], write: ['creatives'] }), creativesRouter);
+  // Anexos da conta: quem gerencia as contas TikTok (o dono sempre; colaborador com a área "Contas TikTok").
+  const filesRouter = createFilesRouter({ service: filesService, limits });
+  protectedApi.use('/files', requireArea('accounts'), filesRouter);
   // Perfil (nome e foto) é da PESSOA logada, qualquer que seja o espaço onde ela trabalha: sem exigir área.
   const profileRouter = createProfileRouter({ service: profileService, limits });
   protectedApi.use('/profile', profileRouter);
@@ -192,6 +201,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
       creativesRouter.stop();
       teamRouter.stop();
       profileRouter.stop();
+      filesRouter.stop();
       avatarsRouter.stop();
       invitationsRouter.stop();
       campaignsRouter.stop();
