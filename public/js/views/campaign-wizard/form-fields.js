@@ -1,5 +1,5 @@
 import { ACCOUNT_FIELDS, OBJECTIVES, fieldsOfStep, findField, getOptions, getPath, isRequired, isVisible } from '/shared/campaign-spec.js';
-import { h, icon } from '../../dom.js';
+import { h } from '../../dom.js';
 import { centsToInput, parseMoneyToCents } from '../../format.js';
 import { creativeThumb } from '../creatives/thumb.js';
 
@@ -125,11 +125,8 @@ function wrapper({ path, field, id, wide, error, control, required, hideLabel = 
   );
 }
 
-/** Ícone de cada objetivo (nome do desenho em dom.js). */
-const OBJECTIVE_ICONS = { TRAFFIC: 'cursor', WEB_CONVERSIONS: 'bag', PRODUCT_SALES: 'tag', LEAD_GENERATION: 'userplus', APP_PROMOTION: 'phone', REACH: 'megaphone', VIDEO_VIEWS: 'play', ENGAGEMENT: 'heart' };
-
 /**
- * Objetivos como cartões compactos (ícone, nome, uma frase): grade de 4 por linha no computador, 2 no celular. O botão de
+ * Objetivos como cartões compactos (nome e uma frase, sem ícones): grade de 4 por linha no computador, 2 no celular. O botão de
  * opção continua real (teclado com as setas, leitor de tela), só fica invisível; o cartão mostra a seleção com um "✓".
  */
 function objectiveCards(field, value, path, ctx, error) {
@@ -141,7 +138,6 @@ function objectiveCards(field, value, path, ctx, error) {
       { class: `objective-card${selected ? ' is-selected' : ''}` },
       h('input', { type: 'radio', name: 'objective', value: optionValue, checked: selected, disabled: ctx.readOnly, onChange: () => ctx.set(path, optionValue, { rerender: true }) }),
       h('span', { class: 'objective-card__check', 'aria-hidden': 'true' }, '✓'),
-      h('span', { class: 'objective-card__icon', 'aria-hidden': 'true' }, icon(OBJECTIVE_ICONS[optionValue] ?? 'chart', 20)),
       h('span', { class: 'objective-card__title' }, OBJECTIVES.find((o) => o.value === optionValue).label),
       h('span', { class: 'objective-card__text' }, meta),
     );
