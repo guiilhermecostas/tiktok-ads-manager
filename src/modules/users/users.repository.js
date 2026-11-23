@@ -15,6 +15,8 @@ export function toPublicUser(row) {
     status: row.status,
     createdAt: toIso(row.created_at),
     reviewedAt: toIso(row.reviewed_at),
+    // "versão" da foto de perfil (instante da última troca, em ms) para a tela buscar a imagem certa; null = sem foto
+    avatarVersion: row.avatar_updated_at ? Date.parse(toIso(row.avatar_updated_at)) : null,
   };
 }
 
@@ -41,6 +43,9 @@ export function createUsersRepository(db) {
         ? await db.query(`SELECT ${PUBLIC_COLUMNS} FROM users WHERE status = $1 ORDER BY created_at DESC, id DESC`, [status])
         : await db.query(`SELECT ${PUBLIC_COLUMNS} FROM users ORDER BY created_at DESC, id DESC`);
       return rows.map(toPublicUser);
+    },
+    async updateName(id, name) {
+      await db.query('UPDATE users SET name = $1 WHERE id = $2', [name, id]);
     },
     async updateStatus(id, status, reviewerId) {
       await db.query('UPDATE users SET status = $1, reviewed_at = now(), reviewed_by = $2 WHERE id = $3', [status, reviewerId, id]);

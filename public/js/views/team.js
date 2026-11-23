@@ -3,6 +3,7 @@ import { del, get, patch, post } from '../api.js';
 import { h, setChildren } from '../dom.js';
 import { alertBox, badge, button, confirmDialog, emptyState, openModal, toast, field } from '../ui.js';
 import { createAreaPicker } from './area-picker.js';
+import { avatarEl } from './avatar.js';
 import { pageHeader } from './layout.js';
 
 const AREA_LABEL = Object.fromEntries(AREAS.map((a) => [a.id, a.label]));
@@ -142,7 +143,9 @@ export async function teamView() {
 
   // ---------- lista ----------
   const head = (...labels) => h('thead', null, h('tr', null, labels.map((t) => h('th', { scope: 'col' }, t))));
-  const person = (p) => h('div', null, h('span', { class: 'cell-strong' }, p.name), h('span', { class: 'hub-meta' }, p.email));
+  // Colaborador ativo: com a foto que ele configurou; convite pendente: só as iniciais (a pessoa ainda não tem conta).
+  const person = (p) =>
+    h('div', { class: 'team__person' }, avatarEl({ id: p.userId, name: p.name, avatarVersion: p.avatarVersion ?? null }, { size: 'md' }), h('div', null, h('span', { class: 'cell-strong' }, p.name), h('span', { class: 'hub-meta' }, p.email)));
 
   function draw() {
     const { members, invites } = data;

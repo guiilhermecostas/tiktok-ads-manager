@@ -339,6 +339,22 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['workspace_members', 'workspace_invites'], revoke: ['workspace_members', 'workspace_invites'], identity: ['workspace_members', 'workspace_invites'] })}
     `,
   },
+  {
+    version: 10,
+    description: 'Foto de perfil dos usuários',
+    sql: `
+      -- Uma foto por usuário, em tabela própria (a linha de users continua leve e a foto nunca vai junto em consultas de sessão).
+      -- O servidor sempre grava JPEG 256x256 recodificado (sem metadados); o banco ainda limita o tipo e o tamanho (200 KB).
+      CREATE TABLE user_avatars (
+        user_id    INTEGER     PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        mime       TEXT        NOT NULL DEFAULT 'image/jpeg' CHECK (mime = 'image/jpeg'),
+        data       BYTEA       NOT NULL CHECK (octet_length(data) BETWEEN 1 AND 204800),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      ${protectTables({ rls: ['user_avatars'], revoke: ['user_avatars'], identity: [] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

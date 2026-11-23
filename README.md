@@ -167,6 +167,22 @@ trabalha dentro do espaço do dono (mesmas Business Centers, criativos e campanh
 - **Para criar uma área nova:** acrescente-a em `shared/permissions.js`, proteja as rotas com `requireArea` e crie uma migração que
   amplie o CHECK das colunas `areas`. Regras em `shared/permissions.js`; espaço de trabalho em `src/middleware/workspace.js`.
 
+## Foto de perfil (Minha conta)
+
+Clicar na conta, no canto do menu, abre **Minha conta**: a pessoa escolhe uma foto, ajusta o recorte (arrastar, zoom, girar, teclado) e salva;
+também troca o nome e remove a foto. A foto aparece no menu e para a equipe (na tela **Colaboradores** o dono vê a foto de cada um).
+Colaboradores configuram a própria foto sem precisar de nenhuma área.
+
+- **O arquivo enviado nunca é guardado como veio.** O navegador recorta e reduz (JPEG 512 px); o servidor confirma pelo **conteúdo** que é JPG/PNG
+  (o `Content-Type` é só dica; SVG, HTML, GIF e afins são recusados), lê as dimensões do cabeçalho (recusa imagens enormes, contra “bomba de
+  descompressão”) e **recodifica no FFmpeg** (mesmo cuidado dos criativos: sem shell, formato fixo, só protocolo `file`, tempo e tamanho
+  limitados) para um JPEG 256×256 **sem metadados** e sem qualquer conteúdo escondido. Limite de 1 MB no envio.
+- Guardada no banco (`user_avatars`, `BYTEA` até 200 KB, só `image/jpeg`; RLS sem políticas), em tabela própria para não pesar as consultas.
+- `GET /api/avatars/:userId` só entrega a foto à própria pessoa, ao dono do espaço e aos colegas de equipe (e ao admin); qualquer outro caso é 404.
+  A URL leva `?v=<versão>`, então a troca aparece na hora e o navegador reaproveita o cache (`private`) enquanto a foto não muda.
+- API: `POST /api/profile/avatar` (corpo binário `image/jpeg` ou `image/png`), `DELETE /api/profile/avatar`, `PATCH /api/profile` (`{ name }`; e-mail,
+  função e status nunca vêm do cliente). Limite de 20 trocas por minuto por pessoa.
+
 ## Biblioteca de criativos
 
 - **Criativos** (menu lateral): cada usuário guarda os próprios arquivos (JPG/PNG até 10 MB, MP4/MOV até 200 MB, cota de 2 GB por padrão,
@@ -241,6 +257,7 @@ src/
     tiktok/            Business Centers (cliente da API, conexão por link/OAuth, repositórios, serviço, rotas)
     creatives/         biblioteca de criativos (armazenamento, validação por conteúdo, rotas)
     team/              colaboradores: convites, aceite, áreas de acesso (repositório, serviço, rotas)
+    profile/           Minha conta: foto de perfil (recodificada no FFmpeg) e nome
     mail/              envio de e-mail pelo Resend e modelo do convite
 scripts/               utilitários: db (check/migrate), import-sqlite, supabase-setup.sql
 shared/                regras compartilhadas (navegador + servidor): campanhas, etiquetas de conta, permissões por área

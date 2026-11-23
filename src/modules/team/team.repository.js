@@ -1,6 +1,9 @@
 import { toIso } from '../../db/helpers.js';
 
-const toMember = (row) => ({ id: row.id, userId: row.user_id, name: row.name, email: row.email, areas: row.areas, createdAt: toIso(row.created_at) });
+const toMember = (row) => ({
+  id: row.id, userId: row.user_id, name: row.name, email: row.email, areas: row.areas, createdAt: toIso(row.created_at),
+  avatarVersion: row.avatar_updated_at ? Date.parse(toIso(row.avatar_updated_at)) : null, // foto do colaborador: /api/avatars/:userId?v=…
+});
 const toInvite = (row) => ({ id: row.id, name: row.name, email: row.email, areas: row.areas, expiresAt: toIso(row.expires_at), createdAt: toIso(row.created_at) });
 
 /**
@@ -8,7 +11,7 @@ const toInvite = (row) => ({ id: row.id, name: row.name, email: row.email, areas
  * colaboradores de outro. O token do convite nunca é guardado (só o hash SHA-256).
  */
 export function createTeamRepository(db) {
-  const MEMBER_SELECT = 'SELECT m.id, m.user_id, m.areas, m.created_at, u.name, u.email FROM workspace_members m JOIN users u ON u.id = m.user_id';
+  const MEMBER_SELECT = 'SELECT m.id, m.user_id, m.areas, m.created_at, u.name, u.email, (SELECT updated_at FROM user_avatars WHERE user_id = u.id) AS avatar_updated_at FROM workspace_members m JOIN users u ON u.id = m.user_id';
   return {
     async listMembers(ownerId) {
       const { rows } = await db.query(`${MEMBER_SELECT} WHERE m.owner_id = $1 ORDER BY lower(u.name), m.id`, [ownerId]);

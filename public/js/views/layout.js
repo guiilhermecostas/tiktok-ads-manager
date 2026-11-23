@@ -2,6 +2,8 @@ import { post } from '../api.js';
 import { h, icon } from '../dom.js';
 import { can, isWorkspaceOwner, state } from '../state.js';
 import { openCampaignWizard } from './campaign-wizard/index.js';
+import { avatarEl } from './avatar.js';
+import { openProfile } from './profile.js';
 
 // `areas`: o item aparece para quem tem ao menos uma destas áreas (o dono da conta tem todas); `ownerOnly`: só o dono do espaço.
 const NAV = [
@@ -21,15 +23,6 @@ const readCollapsed = () => {
     return false;
   }
 };
-
-function initials(name) {
-  return name
-    .split(' ')
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0].toUpperCase())
-    .join('');
-}
 
 // Atalho ⌘K / Ctrl+K para focar a busca (registrado uma única vez).
 document.addEventListener('keydown', (event) => {
@@ -165,11 +158,12 @@ export function renderLayout(ctx, currentPath, content) {
     h(
       'div',
       { class: 'sidebar__bottom' },
+      // Clicar na conta abre "Minha conta" (foto e nome). Os nós com data-account-* são atualizados sem recarregar a página.
       h(
-        'div',
-        { class: 'account' },
-        h('span', { class: 'avatar', 'aria-hidden': 'true' }, initials(user.name)),
-        h('div', { class: 'account__text' }, h('span', { class: 'account__name' }, user.name), h('span', { class: 'account__sub' }, !isWorkspaceOwner() ? `Equipe de ${state.workspace.ownerName}` : user.role === 'admin' ? user.email : (user.company ?? user.email))),
+        'button',
+        { type: 'button', class: 'account account--button', title: 'Minha conta', 'aria-label': 'Abrir minha conta (foto e nome)', onClick: () => openProfile(ctx) },
+        h('span', { class: 'account__avatar', 'data-account-avatar': true }, avatarEl(user, { size: 'sm' })),
+        h('div', { class: 'account__text' }, h('span', { class: 'account__name', 'data-account-name': true }, user.name), h('span', { class: 'account__sub' }, !isWorkspaceOwner() ? `Equipe de ${state.workspace.ownerName}` : user.role === 'admin' ? user.email : (user.company ?? user.email))),
       ),
       h('button', { type: 'button', class: 'logout', title: 'Sair', onClick: logout }, icon('logout', 18), h('span', { class: 'logout__label' }, 'Sair')),
     ),

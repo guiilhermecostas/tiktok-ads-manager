@@ -5,7 +5,7 @@ import { MIGRATIONS, findTablesWithoutRls, runMigrations } from '../src/db/migra
 import { createPgliteDatabase } from '../src/db/adapters/pglite.js';
 import { all, one } from './helpers.js';
 
-const EXPECTED_TABLES = ['campaign_creative_assets', 'campaign_publications', 'campaigns', 'creative_tiktok_assets', 'creatives', 'proxies', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'users', 'workspace_invites', 'workspace_members'];
+const EXPECTED_TABLES = ['campaign_creative_assets', 'campaign_publications', 'campaigns', 'creative_tiktok_assets', 'creatives', 'proxies', 'sessions', 'tiktok_advertisers', 'tiktok_business_centers', 'tiktok_oauth_attempts', 'user_avatars', 'users', 'workspace_invites', 'workspace_members'];
 const config = { url: null, sslCaPath: null, poolMax: 1, devDataDir: null, requireRls: true };
 const silent = { info() {}, warn() {}, error() {} };
 
@@ -327,6 +327,28 @@ describe('Colaboradores (migração v9)', () => {
       assert.equal((await db.query('SELECT 1 FROM workspace_members')).rows.length, 0);
       await db.query('DELETE FROM users WHERE id = $1', [owner]);
       assert.deepEqual((await db.query('SELECT token_hash FROM workspace_invites')).rows.map((r) => r.token_hash), ['hash-3']);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe('Foto de perfil (migração v10)', () => {
+  it('uma foto por usuário, só JPEG até 200 KB, e some junto com o usuário', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      assert.deepEqual(await findTablesWithoutRls(db), []);
+      const user = (await db.query("INSERT INTO users (email, name, password_hash) VALUES ('a@example.com', 'A', 'x') RETURNING id")).rows[0].id;
+      const insert = (data, mime) => db.query('INSERT INTO user_avatars (user_id, data, mime) VALUES ($1, $2, COALESCE($3, \'image/jpeg\'))', [user, data, mime ?? null]);
+      await assert.rejects(() => insert(Buffer.alloc(0)), (e) => e.code === '23514', 'vazio');
+      await assert.rejects(() => insert(Buffer.alloc(204_801)), (e) => e.code === '23514', 'maior que 200 KB');
+      await assert.rejects(() => insert(Buffer.from([1, 2, 3]), 'image/svg+xml'), (e) => e.code === '23514', 'SVG nunca');
+      await assert.rejects(() => insert(Buffer.from([1, 2, 3]), 'text/html'), (e) => e.code === '23514');
+      await insert(Buffer.alloc(204_800, 1));
+      await assert.rejects(() => insert(Buffer.from([1])), (e) => e.code === '23505', 'uma por usuário');
+      await db.query('DELETE FROM users WHERE id = $1', [user]);
+      assert.equal((await db.query('SELECT 1 FROM user_avatars')).rows.length, 0, 'cascata');
     } finally {
       await db.close();
     }

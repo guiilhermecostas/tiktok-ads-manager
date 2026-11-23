@@ -27,7 +27,8 @@ export function createSessionsRepository(db, { ttlMs }) {
       if (typeof token !== 'string' || token.length < 20 || token.length > 200) return null;
       const { rows } = await db.query(
         `SELECT s.token_hash, s.csrf_token, s.expires_at, u.*,
-                m.owner_id AS ws_owner_id, m.areas AS ws_areas, o.name AS ws_owner_name, o.status AS ws_owner_status
+                m.owner_id AS ws_owner_id, m.areas AS ws_areas, o.name AS ws_owner_name, o.status AS ws_owner_status,
+                (SELECT updated_at FROM user_avatars WHERE user_id = u.id) AS avatar_updated_at
            FROM sessions s
            JOIN users u ON u.id = s.user_id
            LEFT JOIN workspace_members m ON m.user_id = u.id

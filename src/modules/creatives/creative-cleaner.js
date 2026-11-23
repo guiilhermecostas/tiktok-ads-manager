@@ -62,7 +62,7 @@ function imageFilter({ salt }) {
 }
 
 /** Roda o FFmpeg e devolve o texto de erro/informação (limitado). Rejeita em falha, tempo esgotado ou binário ausente. */
-function runFfmpeg(ffmpegPath, args, { timeoutMs }) {
+export function runFfmpeg(ffmpegPath, args, { timeoutMs }) {
   return new Promise((resolve, reject) => {
     let stderr = '';
     let stdout = '';

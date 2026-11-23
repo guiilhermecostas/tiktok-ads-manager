@@ -157,8 +157,15 @@ a { color: var(--tt-red-dark); }
 .account__sub { font-size: 11px; color: #c4c4c9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .avatar {
   flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 12px;
-  background: var(--tt-cyan); color: var(--tt-black); box-shadow: 2px 2px 0 var(--tt-red);
+  background: var(--tt-cyan); color: var(--tt-black); box-shadow: 2px 2px 0 var(--tt-red); overflow: hidden; user-select: none;
 }
+.avatar__img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar--md { width: 38px; height: 38px; font-size: 14px; }
+.avatar--lg { width: 112px; height: 112px; font-size: 38px; box-shadow: 4px 4px 0 var(--tt-red); }
+.account__avatar { display: inline-flex; flex: none; }
+.account--button { width: 100%; background: transparent; border: 0; border-radius: 10px; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.account--button:hover { background: var(--side-hover); }
+.account--button:focus-visible { outline: 2px solid var(--tt-cyan); outline-offset: 2px; }
 .logout {
   display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; background: transparent;
   border: 0; color: #f0f0f2; font: inherit; cursor: pointer; text-align: left;
@@ -647,3 +654,21 @@ body.modal-open { overflow: hidden; }
 .hub-legend dt { font-weight: 700; white-space: nowrap; }
 .hub-legend dt::after { content: ':'; }
 .hub-legend dd { margin: 0; color: var(--muted); }
+
+/* ============ Minha conta (foto e nome) e editor de foto ============ */
+.profile { display: flex; flex-direction: column; gap: 18px; }
+.profile__photo { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.profile__photo-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; flex: 1 1 200px; }
+.profile__name { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.profile__name .field { flex: 1 1 220px; margin: 0; }
+.profile__info { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 20px; font-size: 13px; }
+.profile__info dt { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.profile__info dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.profile__subtitle { margin: 0; font-size: 16px; }
+.photo-editor { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.photo-editor__canvas { width: 288px; max-width: 100%; height: auto; aspect-ratio: 1; border-radius: 14px; background: #fff; cursor: grab; touch-action: none; outline-offset: 3px; }
+.photo-editor__canvas.is-dragging { cursor: grabbing; }
+.photo-editor__zoom-row { display: flex; align-items: center; gap: 10px; width: 288px; max-width: 100%; }
+.photo-editor__zoom { flex: 1; min-width: 0; accent-color: var(--tt-black); }
+.photo-editor__tools { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.team__person { display: flex; align-items: center; gap: 12px; min-width: 0; }

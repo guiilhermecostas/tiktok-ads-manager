@@ -8,6 +8,10 @@ import { createAuthService } from './modules/auth/auth.service.js';
 import { createSessionsRepository } from './modules/auth/sessions.repository.js';
 import { createCampaignsRepository } from './modules/campaigns/campaigns.repository.js';
 import { createCampaignsRouter } from './modules/campaigns/campaigns.routes.js';
+import { createAvatarProcessor } from './modules/profile/avatar-processor.js';
+import { createAvatarsRepository } from './modules/profile/avatars.repository.js';
+import { createAvatarsRouter, createProfileRouter } from './modules/profile/profile.routes.js';
+import { createProfileService } from './modules/profile/profile.service.js';
 import { createMailer } from './modules/mail/mailer.js';
 import { createCreativeCleaner } from './modules/creatives/creative-cleaner.js';
 import { createLocalCreativeStorage } from './modules/creatives/creative-storage.js';
@@ -38,7 +42,7 @@ const SHARED_DIR = path.join(ROOT_DIR, 'shared');
 /**
  * Monta a aplicação Express. Recebe dependências (config, db, log) para facilitar testes.
  */
-export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer }) {
+export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer, avatarProcessor }) {
   const users = createUsersRepository(db);
   const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
   const campaigns = createCampaignsRepository(db);
@@ -58,6 +62,10 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // E-mail (convites de colaboradores) pelo Resend. `mailer` pode ser injetado nos testes.
   const mail = mailer ?? createMailer({ config, fetchFn, log });
   const teamService = createTeamService({ repo: createTeamRepository(db), mailer: mail, sessions, config, log });
+
+  // Foto de perfil: o arquivo enviado é sempre recodificado no servidor (JPEG 256x256, sem metadados). Mesmo FFmpeg dos criativos.
+  const avatarsProcessor = avatarProcessor ?? createAvatarProcessor({ ffmpegPath: cleaning.ffmpegPath ?? null, tmpDir: creativeStorage.tmpDir });
+  const profileService = createProfileService({ avatars: createAvatarsRepository(db), users, storage: creativeStorage, processor: avatarsProcessor });
 
   const app = express();
   app.set('trust proxy', config.trustProxy ?? 0); // 0: ignora X-Forwarded-*; N: confia nos N proxies à frente (IP real do cliente)
@@ -137,6 +145,11 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Ver criativos serve a quem publica campanhas; enviar, renomear e excluir é de quem gerencia a biblioteca.
   const creativesRouter = createCreativesRouter({ service: creativesService, limits });
   protectedApi.use('/creatives', requireAreaByMethod({ read: ['creatives', 'campaigns'], write: ['creatives'] }), creativesRouter);
+  // Perfil (nome e foto) é da PESSOA logada, qualquer que seja o espaço onde ela trabalha: sem exigir área.
+  const profileRouter = createProfileRouter({ service: profileService, limits });
+  protectedApi.use('/profile', profileRouter);
+  const avatarsRouter = createAvatarsRouter({ service: profileService, limits });
+  protectedApi.use('/avatars', avatarsRouter);
   // Equipe e administração: nunca para colaboradores (a administração usa a conta real da pessoa, não o espaço).
   const teamRouter = createTeamRouter({ service: teamService, limits });
   protectedApi.use('/team', requireOwner, teamRouter);
@@ -178,6 +191,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
       tiktokCallbackRouter.stop();
       creativesRouter.stop();
       teamRouter.stop();
+      profileRouter.stop();
+      avatarsRouter.stop();
       invitationsRouter.stop();
       campaignsRouter.stop();
     },
