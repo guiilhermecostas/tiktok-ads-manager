@@ -6,8 +6,7 @@ import { button, emptyState } from '../ui.js';
 import { openCampaignWizard } from './campaign-wizard/index.js';
 import { pageHeader } from './layout.js';
 
-const metric = (label, value, accent = 'neutral') =>
-  h('div', { class: `card metric metric--${accent}` }, h('span', { class: 'metric__label' }, label), h('strong', { class: 'metric__value' }, value));
+const metric = (label, value) => h('div', { class: 'card metric' }, h('span', { class: 'metric__label' }, label), h('strong', { class: 'metric__value' }, value));
 
 const OVERVIEW_DAYS = 7;
 
@@ -52,12 +51,12 @@ function tiktokSection(overview) {
       h(
         'div',
         { class: 'grid grid--6' },
-        metric('Gasto', money(g.totals.spend), 'cyan'),
+        metric('Gasto', money(g.totals.spend)),
         metric('Impressões', formatNumber(g.totals.impressions)),
         metric('Cliques', formatNumber(g.totals.clicks)),
         metric('CTR', formatPercent(g.totals.ctr)),
         metric('CPC', money(g.totals.cpc)),
-        metric('Conversões', formatNumber(g.totals.conversions), 'red'),
+        metric('Conversões', formatNumber(g.totals.conversions)),
       ),
     );
   });
@@ -124,10 +123,10 @@ export async function dashboardView(ctx) {
             h(
               'div',
               { class: 'grid grid--4' },
-              metric('Campanhas', String(summary.total), 'neutral'),
-              metric('Ativas', String(summary.active), 'cyan'),
-              metric('Pausadas', String(summary.paused), 'red'),
-              metric('Orçamento diário ativo', formatMoney(summary.activeBudget), 'neutral'),
+              metric('Campanhas', String(summary.total)),
+              metric('Ativas', String(summary.active)),
+              metric('Pausadas', String(summary.paused)),
+              metric('Orçamento diário ativo', formatMoney(summary.activeBudget)),
             ),
           ]
         : null,

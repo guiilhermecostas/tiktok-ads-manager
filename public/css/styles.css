@@ -211,9 +211,7 @@ a { color: var(--tt-red-dark); }
 .card__title { font-size: 15px; }
 .grid { display: grid; gap: 16px; margin-bottom: 20px; }
 .grid--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.metric { padding: 16px 18px; margin: 0; display: flex; flex-direction: column; gap: 6px; border-top: 3px solid var(--tt-black); }
-.metric--cyan { border-top-color: var(--tt-cyan); }
-.metric--red { border-top-color: var(--tt-red); }
+.metric { padding: 16px 18px; margin: 0; display: flex; flex-direction: column; gap: 6px; } /* cartões neutros: sem faixas coloridas */
 .metric__label { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .metric__value { font-size: 26px; letter-spacing: -0.02em; }
 

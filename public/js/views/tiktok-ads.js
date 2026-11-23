@@ -5,7 +5,7 @@ import { alertBox, badge, emptyState, field, spinner } from '../ui.js';
 import { pageHeader } from './layout.js';
 
 function metric(label, value) {
-  return h('div', { class: 'card metric metric--sm metric--neutral' }, h('span', { class: 'metric__label' }, label), h('strong', { class: 'metric__value' }, value));
+  return h('div', { class: 'card metric metric--sm' }, h('span', { class: 'metric__label' }, label), h('strong', { class: 'metric__value' }, value));
 }
 
 /** Página alimentada pelas Business Centers cadastradas: contas, desempenho e campanhas do TikTok. */
