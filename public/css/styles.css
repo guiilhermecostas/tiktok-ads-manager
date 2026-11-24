@@ -246,7 +246,10 @@ a { color: var(--tt-red-dark); }
 
 /* ============ Modal, toast, vazio, loading ============ */
 .overlay { position: fixed; inset: 0; background: rgba(1, 1, 1, 0.55); display: grid; place-items: center; padding: 20px; z-index: 50; }
-.modal { width: 100%; max-width: 480px; background: #fff; border-radius: 16px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35); overflow: hidden; }
+/* Altura máxima = a da tela: o conteúdo rola DENTRO do pop-up (cabeçalho fixo), nunca vaza para fora da janela. */
+.modal { width: 100%; max-width: 480px; max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; background: #fff; border-radius: 16px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35); overflow: hidden; }
+.modal > .modal__header { flex: none; }
+.modal > :not(.modal__header) { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .modal__header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 14px 20px; border-bottom: 1px solid var(--border); }
 .modal__title { font-size: 16px; }
 .modal__body { padding: 20px; margin: 0; }
@@ -876,8 +879,23 @@ body.modal-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } .chat__suggestion, .kpi { transition: none; } }
 
 /* ============ "+ CA": criar contas de anúncio dentro de uma Business Center ============ */
-.create-ca { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.create-ca__form { display: flex; flex-direction: column; gap: 14px; margin-top: 0; }
+/* "+ CA" em etapas: tamanho padrão (não pula de uma etapa para outra); só a área do meio rola e o rodapé fica sempre visível. */
+.create-ca { display: flex; flex-direction: column; gap: 14px; min-width: 0; height: min(620px, calc(100vh - 120px)); height: min(620px, calc(100dvh - 120px)); overflow: hidden; }
+.create-ca.is-result { height: auto; max-height: calc(100dvh - 120px); overflow-y: auto; }
+.create-ca__form { display: flex; flex-direction: column; gap: 14px; margin-top: 0; flex: 1; min-height: 0; }
+.create-ca__steps { flex: none; }
+.create-ca__pane { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 2px 4px 4px 2px; margin-right: -4px; }
+.create-ca__pane > * { flex: none; } /* os blocos mantêm a altura: quem rola é a área, nada é espremido */
+.create-ca__footer { flex: none; margin-top: 0; padding-top: 12px; border-top: 1px solid var(--border); }
+.create-ca__section { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.create-ca__review { margin: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.create-ca__review-row { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; padding: 6px 14px; border-bottom: 1px solid #eeeeef; font-size: 13px; }
+.create-ca__review-row:last-child { border-bottom: 0; }
+.create-ca__review-row dt { color: var(--muted); font-weight: 600; }
+.create-ca__review-row dd { margin: 0; overflow-wrap: anywhere; }
+.create-ca__optional { display: flex; flex-direction: column; gap: 10px; }
+.create-ca .stepper__label { font-size: 11px; }
+@media (max-width: 560px) { .create-ca__review-row { grid-template-columns: minmax(0, 1fr); gap: 2px; } .create-ca .stepper__item:not(.is-current) .stepper__label { display: none; } }
 .create-ca__bc { margin: 0; font-size: 13px; color: var(--muted); }
 .create-ca__bc strong { color: var(--tt-black); }
 .create-ca__qty { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 14px; align-items: start; }
@@ -888,9 +906,6 @@ body.modal-open { overflow: hidden; }
 .create-ca__form > div:empty { display: none; } /* espaço do aviso de erro: só ocupa lugar quando há aviso */
 .create-ca__preview { margin: 0; padding: 8px 12px; border-radius: 10px; background: #f6f6f7; font-size: 13px; overflow-wrap: anywhere; }
 .create-ca__status { margin: 0; font-size: 12px; min-height: 1.2em; }
-.create-ca__more { border: 1px dashed var(--border); border-radius: 10px; padding: 8px 12px; }
-.create-ca__more summary { cursor: pointer; font-size: 13px; font-weight: 600; }
-.create-ca__more .invite-fields { margin-top: 12px; }
 .create-ca__headline { margin: 0; font-size: 16px; font-weight: 700; }
 .create-ca__list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; }
 .create-ca__list li { padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; overflow-wrap: anywhere; }
@@ -1064,3 +1079,63 @@ body.modal-open { overflow: hidden; }
   .manager .table td.manager__date { white-space: normal; }
 }
 @media (prefers-reduced-motion: reduce) { .switch-ad, .switch-ad__thumb { transition: none; } }
+
+/* ============ Catálogo de produtos ============ */
+/* O pop-up "+ Catálogo" reaproveita as classes create-ca* (etapas, miolo que rola, rodapé fixo e revisão). */
+.catalog__toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; }
+.catalog__toolbar .toolbar__search { flex: 1 1 240px; max-width: 360px; }
+.catalog__toolbar select.input { flex: 0 1 260px; }
+.catalog__actions { text-align: right; white-space: nowrap; }
+.catalog__count { margin: 10px 0 0; font-size: 13px; }
+.catalog__issue { white-space: normal; font-family: inherit; max-width: 280px; }
+.catalog__body { padding-bottom: 88px; } /* o botão flutuante "Publicar campanha" não cobre as últimas linhas */
+.catalog-detail { padding-bottom: 88px; }
+.catalog-detail__head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 0 0 14px; }
+.catalog-detail__title { flex: 1 1 260px; min-width: 0; }
+.catalog-detail__title .page-title { margin: 0; overflow-wrap: anywhere; }
+.catalog-detail__title p { margin: 2px 0 0; }
+.catalog-detail__summary { display: flex; align-items: stretch; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+.catalog-detail__summary .kpi { min-width: 120px; }
+.catalog-detail__hint { flex: 1 1 100%; margin: 0; font-size: 13px; }
+.catalog-detail__content { min-width: 0; }
+.catalog-add { display: flex; flex-direction: column; gap: 18px; }
+.catalog-add__intro p { margin: 0 0 6px; }
+.catalog-add__intro p:last-child { margin-bottom: 0; }
+.catalog-add__file-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
+.catalog-add__file { max-width: 100%; }
+.catalog-add__errors, .catalog-add__queue { margin-top: 10px; max-height: 360px; overflow: auto; }
+.catalog-add__more { margin: 8px 12px; font-size: 13px; }
+.catalog-add__send { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.catalog-add__more-fields { margin: 12px 0; border: 1px dashed var(--border); border-radius: 10px; padding: 8px 12px; }
+.catalog-add__more-fields summary { cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.catalog-sets .form-section { margin-top: 18px; }
+.catalog code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f1f1f2; border-radius: 6px; padding: 2px 6px; }
+@media (max-width: 720px) {
+  .catalog__toolbar select.input, .catalog__toolbar .toolbar__search { flex: 1 1 100%; max-width: none; }
+  .catalog__actions { text-align: left; }
+  .catalog__issue { max-width: none; }
+}
+
+/* ============ Respostas ricas do assistente (Início) ============ */
+.chat__bubble--rich { white-space: normal; max-width: min(760px, 94%); }
+.rich { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.rich__p { margin: 0; }
+.rich__h { margin: 10px 0 0; font-size: 14px; }
+.rich__list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.rich__list--steps { padding-left: 22px; }
+.rich__list li::marker { font-weight: 700; color: var(--muted); }
+.rich__note { margin: 0; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); background: #f6f6f7; font-size: 13px; }
+.rich__note--warn { background: #fff8e1; border-color: #ffe08a; color: #6b4a00; }
+.rich__note--good { background: #d9fffd; border-color: #8ceae6; color: #075e5a; }
+.rich__kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.rich__kpi { display: flex; flex-direction: column; gap: 2px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 12px; background: #fafafa; min-width: 0; }
+.rich__kpi-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.rich__kpi-value { font-size: 17px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.rich__kpi-delta { font-size: 12px; color: var(--muted); }
+.rich__table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+.rich__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.rich__table th { text-align: left; padding: 7px 10px; background: #fafafa; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.rich__table td { padding: 7px 10px; border-bottom: 1px solid #eeeeef; overflow-wrap: anywhere; }
+.rich__table tr:last-child td { border-bottom: 0; }
+.rich__table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rich__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }

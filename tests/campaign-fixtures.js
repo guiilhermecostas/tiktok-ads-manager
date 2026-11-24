@@ -10,7 +10,7 @@ export function completeConfig(objective = 'TRAFFIC', over = {}) {
     ad: { name: 'Anúncio 1', identityType: 'CUSTOMIZED_USER', identityId: 'id-123456', displayName: 'Minha Loja', videoCreativeId: 1, text: 'Aproveite agora!', landingPageUrl: 'https://loja.example.com/promo' },
   };
   if (['WEB_CONVERSIONS', 'PRODUCT_SALES'].includes(objective)) Object.assign(base.adGroup, { pixelId: '123456', optimizationEvent: 'SHOPPING' });
-  if (objective === 'PRODUCT_SALES') base.adGroup.catalogId = '777';
+  if (objective === 'PRODUCT_SALES') { base.adGroup.catalogId = '777'; base.adGroup.catalogBcId = '111'; base.ad.callToAction = 'SHOP_NOW'; base.ad.format = 'CATALOG_VIDEO'; delete base.ad.videoCreativeId; }
   if (objective === 'APP_PROMOTION') { base.campaign.appPromotionType = 'APP_INSTALL'; base.adGroup.appPlatform = 'APP_ANDROID'; base.adGroup.appId = '555'; delete base.ad.landingPageUrl; }
   if (objective === 'LEAD_GENERATION') base.adGroup.leadDestination = 'WEBSITE';
   if (['REACH', 'VIDEO_VIEWS', 'ENGAGEMENT'].includes(objective)) delete base.ad.landingPageUrl;

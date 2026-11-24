@@ -75,7 +75,7 @@ const CALLS_TO_ACTION = [
 const GOALS_BY_OBJECTIVE = {
   TRAFFIC: [['CLICK', 'Cliques'], ['LANDING_PAGE_VIEW', 'Visualizações da página de destino']],
   WEB_CONVERSIONS: [['CONVERT', 'Conversões'], ['VALUE', 'Valor de conversão (ROAS)']],
-  PRODUCT_SALES: [['CONVERT', 'Conversões'], ['VALUE', 'Valor de conversão (ROAS)']],
+  PRODUCT_SALES: [['CLICK', 'Cliques'], ['CONVERT', 'Conversões'], ['VALUE', 'Valor de conversão (ROAS)']],
   LEAD_GENERATION: [['LEAD_GENERATION', 'Leads'], ['CONVERT', 'Conversões']],
   APP_PROMOTION: [['INSTALL', 'Instalações'], ['CONVERT', 'Ações no app'], ['VALUE', 'Valor no app']],
   REACH: [['REACH', 'Alcance']],
@@ -97,10 +97,17 @@ const BILLING_BY_GOAL = {
   PROFILE_VIEWS: [['OCPM', 'oCPM (otimizado por mil impressões)']],
 };
 
+const GENERIC_AD_FORMATS = [['SINGLE_VIDEO', 'Vídeo único'], ['SINGLE_IMAGE', 'Imagem única'], ['CAROUSEL_ADS', 'Carrossel de imagens']];
+// Campanha de catálogo (Catalog Ads): vídeo gerado com os produtos do catálogo, ou o seu vídeo mostrando produtos do catálogo.
+const CATALOG_AD_FORMATS = [['CATALOG_VIDEO', 'Vídeo do catálogo (gerado com os seus produtos)'], ['SINGLE_VIDEO', 'Vídeo único (o seu vídeo + produtos do catálogo)']];
+const AD_FORMATS_BY_OBJECTIVE = {};
 const toOptions = (pairs) => pairs.map(([value, label]) => ({ value, label }));
 const optionsMap = (map) => Object.fromEntries(Object.entries(map).map(([k, v]) => [k, toOptions(v)]));
+for (const objective of OBJECTIVES) AD_FORMATS_BY_OBJECTIVE[objective.value] = toOptions(objective.value === 'PRODUCT_SALES' ? CATALOG_AD_FORMATS : GENERIC_AD_FORMATS);
 
 const CONVERSION_GOALS = ['CONVERT', 'VALUE'];
+const CATALOG = ['PRODUCT_SALES']; // "campanha de catálogo": Vendas de produtos com origem dos produtos = catálogo (Catalog Ads / Video Shopping Ads)
+const CATALOG_CONVERSION = { 'campaign.objective': CATALOG, 'adGroup.optimizationGoal': CONVERSION_GOALS };
 const WEB_LIKE = ['TRAFFIC', 'WEB_CONVERSIONS', 'LEAD_GENERATION', 'PRODUCT_SALES', 'REACH', 'VIDEO_VIEWS', 'ENGAGEMENT'];
 
 // ---------------------------------------------------------------------------
@@ -116,12 +123,13 @@ export const STEPS = [
 
 // ---------------------------------------------------------------------------
 // Campos
-// Atributos: key, label, type, step, group, help, placeholder, default, required, requiredWhen,
-// showWhen, perAccount, options | optionsBy {path,map}, min, max, maxItems, pattern, itemPattern, urlSchemes
+// Atributos: key, label, type, lineOnly (lista separada só por linha), step, group, help, placeholder, default, required, requiredWhen,
+// showWhen, hideWhen, perAccount, options | optionsBy {path,map}, min, max, maxItems, pattern, itemPattern, urlSchemes
 // Condições (showWhen/requiredWhen): { 'caminho.do.campo': [valores aceitos] } — todas precisam bater (E).
 // ---------------------------------------------------------------------------
 const ID_PATTERN = /^\d{1,24}$/;
 const MEDIA_ID_PATTERN = /^[\w-]{4,100}$/;
+const SKU_PATTERN = /^[^\p{Cc}\p{Extended_Pictographic}]{1,100}$/u; // SKU do catálogo: até 100 caracteres, sem emoji nem controle
 
 export const FIELDS = {
   campaign: [
@@ -137,6 +145,8 @@ export const FIELDS = {
     { key: 'name', label: 'Nome da campanha', type: 'string', step: 'campaign', required: true, min: 2, max: 100, placeholder: 'Ex.: Black Friday – Conversões', group: 'Identificação' },
     {
       key: 'budgetMode', label: 'Orçamento da campanha', type: 'enum', step: 'campaign', group: 'Orçamento', default: 'BUDGET_MODE_INFINITE',
+      // Campanha de catálogo: o orçamento da CAMPANHA exige otimização de orçamento (CBO), que o TikTok só libera por allowlist. O orçamento fica no grupo de anúncios.
+      hideWhen: { 'campaign.objective': CATALOG },
       help: 'Sem limite: o orçamento é definido no grupo de anúncios. Diário/total: o limite vale para toda a campanha.',
       options: [
         { value: 'BUDGET_MODE_INFINITE', label: 'Sem limite (definir no grupo de anúncios)' },
@@ -151,6 +161,7 @@ export const FIELDS = {
     },
     {
       key: 'specialIndustries', label: 'Categorias especiais de anúncio', type: 'enumList', step: 'campaign', group: 'Conformidade', maxItems: 3,
+      hideWhen: { 'campaign.objective': CATALOG }, // em campanha de catálogo é recurso liberado só por allowlist
       help: 'Marque se o anúncio trata de moradia, emprego ou crédito (políticas especiais do TikTok).',
       options: [{ value: 'HOUSING', label: 'Moradia' }, { value: 'EMPLOYMENT', label: 'Emprego' }, { value: 'CREDIT', label: 'Crédito' }],
     },
@@ -161,7 +172,8 @@ export const FIELDS = {
 
     // Específicos do objetivo
     { key: 'pixelId', perAccount: true, label: 'ID do Pixel do TikTok', type: 'string', step: 'adGroup', group: 'Conversão', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
-      showWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'] }, requiredWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'] },
+      // Conversões no site sempre usa pixel; em campanha de catálogo só nas metas de conversão (com meta "Cliques" o TikTok recusa o pixel).
+      showWhen: [{ 'campaign.objective': ['WEB_CONVERSIONS'] }, CATALOG_CONVERSION], requiredWhen: [{ 'campaign.objective': ['WEB_CONVERSIONS'] }, CATALOG_CONVERSION],
       help: 'Encontre em Gerenciador de Eventos → Pixel.' },
     { key: 'appPlatform', label: 'Plataforma do app', type: 'enum', step: 'adGroup', group: 'Aplicativo',
       options: [{ value: 'APP_ANDROID', label: 'Android' }, { value: 'APP_IOS', label: 'iOS' }],
@@ -169,9 +181,11 @@ export const FIELDS = {
     { key: 'appId', perAccount: true, label: 'ID do app', type: 'string', step: 'adGroup', group: 'Aplicativo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': ['APP_PROMOTION'] }, requiredWhen: { 'campaign.objective': ['APP_PROMOTION'] } },
     { key: 'catalogId', perAccount: true, label: 'ID do catálogo', type: 'string', step: 'adGroup', group: 'Catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
-      showWhen: { 'campaign.objective': ['PRODUCT_SALES'] }, requiredWhen: { 'campaign.objective': ['PRODUCT_SALES'] } },
-    { key: 'productSetId', perAccount: true, label: 'ID do conjunto de produtos (opcional)', type: 'string', step: 'adGroup', group: 'Catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
-      showWhen: { 'campaign.objective': ['PRODUCT_SALES'] } },
+      showWhen: { 'campaign.objective': CATALOG }, requiredWhen: { 'campaign.objective': CATALOG },
+      help: 'Escolha um catálogo da sua Business Center (menu Catálogo) com produtos disponíveis.' },
+    { key: 'catalogBcId', perAccount: true, label: 'ID da Business Center dona do catálogo', type: 'string', step: 'adGroup', group: 'Catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+      showWhen: { 'campaign.objective': CATALOG }, requiredWhen: { 'campaign.objective': CATALOG },
+      help: 'O catálogo é um ativo de uma Business Center; o TikTok exige o ID dela (catalog_authorized_bc_id).' },
     { key: 'leadDestination', label: 'Destino dos leads', type: 'enum', step: 'adGroup', group: 'Leads', default: 'WEBSITE',
       options: [{ value: 'INSTANT_FORM', label: 'Formulário instantâneo do TikTok' }, { value: 'WEBSITE', label: 'Site' }],
       showWhen: { 'campaign.objective': ['LEAD_GENERATION'] } },
@@ -244,7 +258,7 @@ export const FIELDS = {
   ad: [
     { key: 'name', label: 'Nome do anúncio', type: 'string', step: 'ad', required: true, min: 2, max: 100, group: 'Identificação' },
     { key: 'format', label: 'Formato', type: 'enum', step: 'ad', group: 'Criativo', default: 'SINGLE_VIDEO',
-      options: [{ value: 'SINGLE_VIDEO', label: 'Vídeo único' }, { value: 'SINGLE_IMAGE', label: 'Imagem única' }, { value: 'CAROUSEL_ADS', label: 'Carrossel de imagens' }] },
+      optionsBy: { path: 'campaign.objective', map: AD_FORMATS_BY_OBJECTIVE } },
     { key: 'identityType', perAccount: true, label: 'Tipo de identidade', type: 'enum', step: 'ad', group: 'Identidade', default: 'CUSTOMIZED_USER', required: true,
       options: [
         { value: 'CUSTOMIZED_USER', label: 'Identidade personalizada' }, { value: 'AUTH_CODE', label: 'Conta do TikTok (código de autorização)' },
@@ -257,15 +271,27 @@ export const FIELDS = {
     { key: 'videoCreativeId', label: 'Vídeo', type: 'creative', creativeKind: 'video', step: 'ad', group: 'Criativo',
       showWhen: { 'ad.format': ['SINGLE_VIDEO'] }, requiredWhen: { 'ad.format': ['SINGLE_VIDEO'] }, help: 'Escolha um vídeo da sua biblioteca de criativos.' },
     { key: 'coverCreativeId', label: 'Imagem de capa (opcional)', type: 'creative', creativeKind: 'image', step: 'ad', group: 'Criativo',
-      showWhen: { 'ad.format': ['SINGLE_VIDEO'] } },
+      showWhen: { 'ad.format': ['SINGLE_VIDEO'] },
+      requiredWhen: { 'campaign.objective': CATALOG, 'ad.format': ['SINGLE_VIDEO'] }, help: 'Em campanha de catálogo a capa é obrigatória.' },
+    // Produtos do catálogo que o anúncio mostra (Catalog Ads: product_specific_type)
+    { key: 'productSpecificType', label: 'Produtos do anúncio', type: 'enum', step: 'ad', group: 'Produtos do catálogo', default: 'ALL',
+      options: [{ value: 'ALL', label: 'Todos os produtos do catálogo' }, { value: 'PRODUCT_SET', label: 'Um conjunto de produtos' }, { value: 'CUSTOMIZED_PRODUCTS', label: 'Produtos específicos (até 20)' }],
+      showWhen: { 'campaign.objective': CATALOG }, help: 'Só entram produtos aprovados e disponíveis (em estoque, sob encomenda ou pré-venda).' },
+    { key: 'productSetId', perAccount: true, label: 'ID do conjunto de produtos', type: 'string', step: 'ad', group: 'Produtos do catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+      showWhen: { 'campaign.objective': CATALOG, 'ad.productSpecificType': ['PRODUCT_SET'] }, requiredWhen: { 'campaign.objective': CATALOG, 'ad.productSpecificType': ['PRODUCT_SET'] },
+      help: 'Crie conjuntos no menu Catálogo → Conjuntos.' },
+    { key: 'skuIds', label: 'SKUs dos produtos', type: 'stringList', lineOnly: true, step: 'ad', group: 'Produtos do catálogo', itemPattern: SKU_PATTERN, maxItems: 20,
+      showWhen: { 'campaign.objective': CATALOG, 'ad.productSpecificType': ['CUSTOMIZED_PRODUCTS'] }, requiredWhen: { 'campaign.objective': CATALOG, 'ad.productSpecificType': ['CUSTOMIZED_PRODUCTS'] },
+      help: 'Um SKU por linha, exatamente como está no catálogo (de 1 a 20).' },
     { key: 'imageCreativeIds', label: 'Imagens', type: 'creativeList', creativeKind: 'image', step: 'ad', group: 'Criativo', maxItems: 10,
       showWhen: { 'ad.format': ['SINGLE_IMAGE', 'CAROUSEL_ADS'] }, requiredWhen: { 'ad.format': ['SINGLE_IMAGE', 'CAROUSEL_ADS'] },
       help: 'Imagem única: 1 imagem. Carrossel: de 2 a 10, na ordem em que serão exibidas.' },
     { key: 'text', label: 'Texto do anúncio', type: 'string', step: 'ad', group: 'Texto e chamada', required: true, min: 1, max: 100, multiline: true },
-    { key: 'callToAction', label: 'Botão de chamada para ação', type: 'enum', step: 'ad', group: 'Texto e chamada', options: toOptions(CALLS_TO_ACTION), help: 'Vazio = sem botão.' },
+    { key: 'callToAction', label: 'Botão de chamada para ação', type: 'enum', step: 'ad', group: 'Texto e chamada', options: toOptions(CALLS_TO_ACTION), help: 'Vazio = sem botão (em campanha de catálogo o botão é obrigatório).',
+      requiredWhen: { 'campaign.objective': CATALOG } },
     { key: 'landingPageUrl', label: 'URL de destino', type: 'url', step: 'ad', group: 'Destino', max: 2000, urlSchemes: ['https:', 'http:'],
       showWhen: { 'campaign.objective': WEB_LIKE },
-      requiredWhen: { 'campaign.objective': ['TRAFFIC', 'WEB_CONVERSIONS'] } },
+      requiredWhen: { 'campaign.objective': ['TRAFFIC', 'WEB_CONVERSIONS', ...CATALOG] } },
     { key: 'deeplinkUrl', label: 'Deeplink do app', type: 'url', step: 'ad', group: 'Destino', max: 2000, urlSchemes: ['https:', 'http:', '*'],
       showWhen: { 'campaign.objective': ['APP_PROMOTION', 'TRAFFIC'] } },
     { key: 'utmParams', label: 'Parâmetros UTM', type: 'string', step: 'ad', group: 'Destino', max: 300, pattern: /^[\w\-.~%=&+]*$/, patternMessage: 'Use o formato utm_source=tiktok&utm_medium=cpc (sem espaços).',
@@ -299,9 +325,13 @@ export function getPath(config, path) {
   return current;
 }
 
-const matches = (cond, config) => !cond || Object.entries(cond).every(([path, allowed]) => allowed.includes(getPath(config, path)));
+/**
+ * Condição de visibilidade/obrigatoriedade: { 'caminho': [valores] } (todas precisam bater, E) ou uma LISTA de condições
+ * (basta uma bater, OU), ex.: pixel em Conversões no site OU em Vendas de produtos com meta de conversão.
+ */
+const matches = (cond, config) => !cond || (Array.isArray(cond) ? cond.some((c) => matches(c, config)) : Object.entries(cond).every(([path, allowed]) => allowed.includes(getPath(config, path))));
 
-export const isVisible = (field, config) => matches(field.showWhen, config);
+export const isVisible = (field, config) => matches(field.showWhen, config) && !(field.hideWhen && matches(field.hideWhen, config));
 export const isRequired = (field, config) => Boolean(field.required) || (field.requiredWhen !== undefined && matches(field.requiredWhen, config));
 
 export function getOptions(field, config) {
@@ -384,7 +414,11 @@ function parseValue(field, raw, config) {
     case 'enum':
     case 'objective': {
       if (typeof raw !== 'string') return { error: 'Opção inválida.' };
-      return getOptions(field, config).some((o) => o.value === raw) ? { value: raw } : { error: 'Opção inválida.', stale: Boolean(field.optionsBy) };
+      if (getOptions(field, config).some((o) => o.value === raw)) return { value: raw };
+      // "Obsoleto" = já foi uma opção válida para OUTRO valor do campo pai (a pessoa mudou o objetivo): descarta sem erro. Um valor que nunca
+      // existiu em nenhuma lista é erro de verdade (nunca é trocado em silêncio pelo padrão).
+      const wasValid = field.optionsBy ? Object.values(field.optionsBy.map).some((list) => list.some((o) => o.value === raw)) : false;
+      return { error: 'Opção inválida.', stale: wasValid };
     }
     case 'enumList': {
       if (!Array.isArray(raw) || raw.length > (field.maxItems ?? 50)) return { error: 'Seleção inválida.' };
@@ -439,6 +473,20 @@ const CROSS_RULES = [
       err(frequency === undefined ? 'adGroup.frequency' : 'adGroup.frequencyDays', 'Informe a frequência e o período juntos (ou deixe ambos vazios).');
     }
   },
+  // ----- Campanha de catálogo: combinações que o contrato oficial do TikTok exige (Catalog Ads) -----
+  (c, err) => {
+    if (c.campaign.objective !== 'PRODUCT_SALES') return;
+    const g = c.adGroup;
+    if (g.optimizationGoal === 'CLICK' && g.billingEvent && g.billingEvent !== 'CPC') err('adGroup.billingEvent', 'Na meta "Cliques" de uma campanha de catálogo a cobrança é CPC.');
+    if (g.optimizationGoal && g.optimizationGoal !== 'CLICK' && g.billingEvent && g.billingEvent !== 'OCPM') err('adGroup.billingEvent', 'Nas metas de conversão de uma campanha de catálogo a cobrança é oCPM.');
+    if (g.optimizationGoal === 'VALUE') {
+      if (g.optimizationEvent && g.optimizationEvent !== 'SHOPPING') err('adGroup.optimizationEvent', 'Na meta de valor (ROAS) de uma campanha de catálogo o evento é "Compra (geral)".');
+      if (g.bidType === 'BID_TYPE_CUSTOM') err('adGroup.bidType', 'Na meta de valor (ROAS) de uma campanha de catálogo a estratégia é "Menor custo (automático)".');
+    }
+    if (g.bidType === 'BID_TYPE_NO_BID' && g.pacing === 'PACING_MODE_FAST') err('adGroup.pacing', 'Com "Menor custo (automático)" o ritmo de entrega é o padrão.');
+    if (g.placementType === 'PLACEMENT_TYPE_NORMAL' && g.placements?.some((p) => p !== 'PLACEMENT_TIKTOK')) err('adGroup.placements', 'Campanha de catálogo só pode exibir no TikTok (sem Pangle).');
+    if (c.ad.format === 'CATALOG_VIDEO' && c.ad.identityType && c.ad.identityType !== 'CUSTOMIZED_USER') err('ad.identityType', 'O vídeo do catálogo exige identidade personalizada.');
+  },
   (c, err) => {
     const count = c.ad.imageCreativeIds?.length ?? 0;
     if (c.ad.format === 'SINGLE_IMAGE' && count > 1) err('ad.imageCreativeIds', 'Imagem única aceita apenas 1 imagem.');
@@ -476,7 +524,8 @@ export function validateConfig(raw, { requireComplete = false, steps } = {}) {
       if (result.error) {
         // Valor que deixou de ser válido porque o campo "pai" mudou (ex.: trocou o objetivo): descarta sem erro.
         if (!result.stale) parseErrors[path] = result.error;
-        delete typed[section][field.key];
+        if (result.stale && field.default !== undefined) typed[section][field.key] = field.default; // obsoleto: volta ao padrão do campo
+        else delete typed[section][field.key];
       } else {
         typed[section][field.key] = result.value;
       }
@@ -496,7 +545,8 @@ export function validateConfig(raw, { requireComplete = false, steps } = {}) {
         continue;
       }
       if (field.optionsBy && value !== undefined && !getOptions(field, typed).some((o) => o.value === value)) {
-        delete typed[section][field.key];
+        if (field.default !== undefined) typed[section][field.key] = field.default; // a opção deixou de existir: volta ao padrão
+        else delete typed[section][field.key];
       }
     }
   }
@@ -534,7 +584,8 @@ export function reconcileConfig(config) {
         if (field.default !== undefined) next[section][field.key] = field.default;
         else delete next[section][field.key];
       } else if (value !== undefined && field.optionsBy && !getOptions(field, next).some((o) => o.value === value)) {
-        delete next[section][field.key];
+        if (field.default !== undefined) next[section][field.key] = field.default;
+        else delete next[section][field.key];
       }
     }
   }

@@ -141,3 +141,28 @@ export function emptyState({ title, text, action }) {
 }
 
 export const spinner = () => h('div', { class: 'loading', role: 'status' }, h('span', { class: 'spinner' }), 'Carregando…');
+
+/**
+ * Indicador de etapas (círculos ligados por uma linha). `steps`: [{ title }]. Etapas até `maxStep` são clicáveis (voltar/avançar sem perder o
+ * que foi preenchido); a atual é marcada e as anteriores ganham ✓. Usado pelo assistente de campanha e pelo "+ CA".
+ */
+export function stepper({ steps, current, maxStep = current, disabled = false, onGo, label = 'Etapas' }) {
+  return h(
+    'ol',
+    { class: 'stepper', 'aria-label': label },
+    steps.map((step, i) => {
+      const done = i < current || (i <= maxStep && i !== current);
+      return h(
+        'li',
+        { class: `stepper__item${i === current ? ' is-current' : ''}${done ? ' is-done' : ''}` },
+        h(
+          'button',
+          { type: 'button', class: 'stepper__btn', disabled: i > maxStep || disabled, 'aria-current': i === current ? 'step' : null, onClick: () => onGo?.(i) },
+          h('span', { class: 'stepper__num' }, done && i !== current ? '✓' : String(i + 1)),
+          h('span', { class: 'stepper__label' }, step.title),
+        ),
+      );
+    }),
+  );
+}
+

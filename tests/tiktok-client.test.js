@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
 import { HttpError } from '../src/lib/http-error.js';
-import { createTiktokClient } from '../src/modules/tiktok/tiktok.client.js';
+import { createTiktokClient, usableEmail } from '../src/modules/tiktok/tiktok.client.js';
 
 const config = { tiktok: { apiBase: 'https://business-api.tiktok.com' } };
 const TOKEN = 'token-secreto-1234567890';
@@ -370,3 +370,72 @@ describe('cliente TikTok: Business Center dona da conta (owner_bc_id)', () => {
     await rejectsWith(client.listBusinessCenters(TOKEN), { status: 502, code: 'tiktok_error' });
   });
 });
+
+describe('ritmo e repetição diante do limite de frequência do TikTok (documentação: 10/s e 600/min por endpoint e por app; código 40100)', () => {
+  const limited = { code: 40100, message: 'Too many requests' };
+  const ok = { code: 0, data: { list: [], page_info: { total_page: 1 } } };
+  const pacedConfig = (extra) => ({ tiktok: { apiBase: 'https://business-api.tiktok.com', ...extra } });
+  const make = (handler, extra) => {
+    const calls = [];
+    const fetchFn = async (url) => {
+      calls.push({ url: new URL(url), at: Date.now() });
+      return handler(calls.length);
+    };
+    return { client: createTiktokClient({ config: pacedConfig(extra), fetchFn }), calls };
+  };
+
+  it('consulta (GET) limitada é repetida e, se o limite passar, dá certo', async () => {
+    const { client, calls } = make((n) => json(n <= 2 ? limited : ok), { rateLimitRetries: 2, retryDelayMs: 5 });
+    const result = await client.listAds(TOKEN, '1');
+    assert.deepEqual(result, { ads: [], truncated: false });
+    assert.equal(calls.length, 3, 'duas recusas e uma resposta');
+  });
+
+  it('se o limite continuar, desiste depois das repetições e devolve 429 tiktok_rate_limited', async () => {
+    const { client, calls } = make(() => json(limited), { rateLimitRetries: 2, retryDelayMs: 5 });
+    await rejectsWith(client.listAds(TOKEN, '1'), { status: 429, code: 'tiktok_rate_limited' });
+    assert.equal(calls.length, 3, '1 tentativa + 2 repetições');
+  });
+
+  it('sem configuração de repetição (padrão dos testes e do contrato) não repete', async () => {
+    const { client, calls } = make(() => json(limited));
+    await rejectsWith(client.listAds(TOKEN, '1'), { status: 429, code: 'tiktok_rate_limited' });
+    assert.equal(calls.length, 1);
+  });
+
+  it('criação (POST que não se repete com segurança) NUNCA é repetida; ativar/pausar (idempotente) é', async () => {
+    const created = make(() => json(limited), { rateLimitRetries: 2, retryDelayMs: 5 });
+    await rejectsWith(created.client.createCampaign(TOKEN, { advertiser_id: '1', campaign_name: 'x', objective_type: 'TRAFFIC', operation_status: 'DISABLE' }), { status: 429, code: 'tiktok_rate_limited' });
+    assert.equal(created.calls.length, 1, 'criar campanha duas vezes duplicaria');
+    const toggled = make((n) => json(n === 1 ? limited : { code: 0, data: { ad_ids: ['7'] } }), { rateLimitRetries: 2, retryDelayMs: 5 });
+    assert.deepEqual(await toggled.client.updateAdStatus(TOKEN, '1', ['7'], 'DISABLE'), ['7']);
+    assert.equal(toggled.calls.length, 2);
+  });
+
+  it('o ritmo por endpoint vale para todos os clientes: chamadas simultâneas ao mesmo endpoint saem espaçadas', async () => {
+    const a = make(() => json(ok), { minIntervalMs: 40 });
+    const b = make(() => json(ok), { minIntervalMs: 40 });
+    await Promise.all([a.client.listAds(TOKEN, '1'), b.client.listAds(TOKEN, '2'), a.client.listAds(TOKEN, '3'), b.client.listAds(TOKEN, '4')]);
+    const starts = [...a.calls, ...b.calls].map((c) => c.at).sort((x, y) => x - y);
+    assert.ok(starts[3] - starts[0] >= 100, `4 chamadas simultâneas levam ao menos ~120 ms (3 intervalos de 40 ms; foram ${starts[3] - starts[0]} ms)`);
+  });
+});
+
+describe('e-mail de contato mascarado pelo TikTok (documentação de /advertiser/info/: "l***********@*************")', () => {
+  it('só um e-mail completo e sem máscara serve para pré-preencher', () => {
+    assert.equal(usableEmail('ads@empresa.com'), 'ads@empresa.com');
+    assert.equal(usableEmail('  ads@empresa.com '), 'ads@empresa.com');
+    for (const bad of ['l***********@*************', 'l***@gmail.com', 'ads@***.com', '', null, undefined, 42, 'sem-arroba', 'a b@c.com', `${'a'.repeat(250)}@x.com`]) assert.equal(usableEmail(bad), null, String(bad));
+  });
+
+  it('getAdvertiserProfile NÃO devolve o e-mail mascarado (o formulário de "+ CA" ficaria com um valor que o servidor recusa)', async () => {
+    const info = (email) => json({ code: 0, data: { list: [{ advertiser_id: '1', company: 'Acme', country: 'us', currency: 'usd', timezone: 'America/New_York', email, industry: '290216' }] } });
+    const masked = setup(() => info('l***********@*************'));
+    const profile = await masked.client.getAdvertiserProfile(TOKEN, '1');
+    assert.equal(profile.contactEmail, null);
+    assert.deepEqual([profile.company, profile.country, profile.currency, profile.industry], ['Acme', 'US', 'USD', '290216'], 'o resto do perfil continua vindo');
+    assert.equal((await setup(() => info('ads@acme.com')).client.getAdvertiserProfile(TOKEN, '1')).contactEmail, 'ads@acme.com');
+    assert.equal((await setup(() => info(null)).client.getAdvertiserProfile(TOKEN, '1')).contactEmail, null);
+  });
+});
+

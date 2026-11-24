@@ -5,7 +5,8 @@ import { HttpError, badRequest, notFound } from '../../lib/http-error.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
 
 const CACHE_TTL_MS = 60_000;
-const CONCURRENCY = 6; // contas consultadas ao mesmo tempo (o TikTok limita a frequência)
+const CONCURRENCY = 4; // contas consultadas ao mesmo tempo (o ritmo por endpoint é controlado pelo cliente; o TikTok limita 10/s por app)
+const ACCOUNT_REUSE_MS = 15_000; // "Atualizar" reaproveita contas que acabaram de carregar certo (só refaz as que falharam ou ficaram velhas)
 const MAX_ACCOUNTS = 100;
 const MAX_ADS_TOTAL = 20_000;
 const STATUS_CHUNK = 20; // /ad/status/update/: até 20 anúncios por pedido
@@ -34,12 +35,21 @@ export function createManagerService({ tiktok, connections, views, log = console
   const cache = new TtlCache({ ttlMs: CACHE_TTL_MS, maxEntries: 50 });
   const inflight = new Map();
   const versions = new Map(); // pessoa -> contador que invalida o cache dela depois de ativar/pausar
+  const accountVersions = new Map(); // `pessoa:conta` -> contador (ativar/pausar numa conta só invalida aquela conta)
+  const accountResults = new TtlCache({ ttlMs: CACHE_TTL_MS * 2, maxEntries: 500 }); // resultado COMPLETO de cada conta (a idade fica em `at`)
 
+  /** Anúncios primeiro; o desempenho só é pedido se a conta TEM anúncios (conta vazia = 1 chamada, não 2). */
   async function fetchAccount(account, range) {
     try {
       return await tiktok.withToken(account.businessCenterId, async (token, api) => {
-        const [ads, metrics] = await Promise.allSettled([api.listAds(token, account.id), api.getAdMetrics(token, account.id, { startDate: range.from, endDate: range.to })]);
-        for (const r of [ads, metrics]) if (r.status === 'rejected' && r.reason instanceof HttpError && r.reason.code === 'tiktok_reauth') throw r.reason;
+        const ads = (await Promise.allSettled([api.listAds(token, account.id)]))[0];
+        if (ads.status === 'rejected') {
+          if (ads.reason instanceof HttpError && ads.reason.code === 'tiktok_reauth') throw ads.reason;
+          return { ads, metrics: ads };
+        }
+        if (!ads.value.ads.length) return { ads, metrics: { status: 'fulfilled', value: { metrics: new Map(), hasResult: true } } };
+        const metrics = (await Promise.allSettled([api.getAdMetrics(token, account.id, { startDate: range.from, endDate: range.to })]))[0];
+        if (metrics.status === 'rejected' && metrics.reason instanceof HttpError && metrics.reason.code === 'tiktok_reauth') throw metrics.reason;
         return { ads, metrics };
       });
     } catch (err) {
@@ -49,15 +59,34 @@ export function createManagerService({ tiktok, connections, views, log = console
     }
   }
 
-  async function build(actor, { preset, from, to, accounts }) {
+  const isThrottled = (result) => [result.ads, result.metrics].some((r) => r.status === 'rejected' && r.reason instanceof HttpError && r.reason.code === 'tiktok_rate_limited');
+  const completed = (result) => result.ads.status === 'fulfilled' && result.metrics.status === 'fulfilled';
+  const PAUSED = 'O TikTok pediu uma pausa nas consultas (limite de frequência). Clique em Atualizar em alguns instantes: só esta conta será consultada de novo.';
+
+  async function build(actor, { preset, from, to, accounts, fresh }) {
     const tasks = accounts.map((account) => ({ account, range: resolveRange(preset, { timeZone: account.timezone, now: now(), from, to }) }));
     const results = new Array(tasks.length);
     let next = 0;
+    let throttled = false; // o TikTok pediu pausa: não insiste nas contas que faltam (a suspensão pode durar minutos)
+    const accountKey = ({ account, range }) => `acct:${actor.id}:${account.id}:${range.from}:${range.to}:${accountVersions.get(`${actor.id}:${account.id}`) ?? 0}`;
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, async () => {
       while (next < tasks.length) {
         const index = next;
         next += 1;
-        results[index] = await fetchAccount(tasks[index].account, tasks[index].range);
+        const key = accountKey(tasks[index]);
+        const saved = accountResults.get(key);
+        if (saved && now().getTime() - saved.at < (fresh ? ACCOUNT_REUSE_MS : CACHE_TTL_MS)) {
+          results[index] = saved.result;
+          continue;
+        }
+        if (throttled) {
+          results[index] = { ads: { status: 'rejected', reason: null, message: PAUSED }, metrics: { status: 'rejected', reason: null, message: PAUSED } };
+          continue;
+        }
+        const result = await fetchAccount(tasks[index].account, tasks[index].range);
+        if (isThrottled(result)) throttled = true;
+        if (completed(result)) accountResults.set(key, { at: now().getTime(), result }); // só guarda o que carregou inteiro
+        results[index] = result;
       }
     }));
 
@@ -135,7 +164,7 @@ export function createManagerService({ tiktok, connections, views, log = console
       const cached = cache.get(key);
       if (cached) return cached;
       if (inflight.has(key)) return inflight.get(key);
-      const promise = build(actor, { ...range, accounts }).then((data) => {
+      const promise = build(actor, { ...range, accounts, fresh }).then((data) => {
         cache.set(key, { ...data, totalAccounts: all.length });
         return { ...data, totalAccounts: all.length };
       }).finally(() => inflight.delete(key));
@@ -166,6 +195,7 @@ export function createManagerService({ tiktok, connections, views, log = console
         }
       }
       versions.set(actor.id, (versions.get(actor.id) ?? 0) + 1); // a próxima consulta já mostra o novo status
+      accountVersions.set(`${actor.id}:${advertiserId}`, (accountVersions.get(`${actor.id}:${advertiserId}`) ?? 0) + 1);
       log.info?.(`[gerenciador] usuário ${actor.id}: ${status} em ${updated.length} anúncio(s) da conta ${advertiserId}`);
       return { status, updated, failed: unique.filter((id) => !updated.includes(id)), failure };
     },

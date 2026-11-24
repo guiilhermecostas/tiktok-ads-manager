@@ -96,6 +96,8 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
    (autoatendimento ou não; com busca), exige `qualification_info.promotion_link` (site da empresa) em BC de **agência** (AGENCY/SELF_SERVICE_AGENCY), NÃO envia `qualification_info` em BC DIRECT,
    bloqueia quem não é **administrador** da BC e recusa países que exigem documentos (BR, MX, FR, CN, HK: licença/CNPJ, imagens, e-mail e cobrança, ainda não enviados por aqui). Erros comuns do
    TikTok viram instruções em português (com a mensagem original entre parênteses). Listas oficiais em `shared/tiktok-timezones.js`, `tiktok-locations.js` e `tiktok-industries.js`.
+   **E-mail de contato:** o TikTok devolve o e-mail da conta **mascarado** (`l***@***`, documentação de `/advertiser/info/`); ele nunca é pré-preenchido nem enviado (só um endereço completo). O e-mail só é obrigatório para BR, MX e FR.
+   **Pop-up em 3 etapas** (Contas → Empresa e região → Revisar e criar), de tamanho fixo: só o miolo rola e o rodapé fica sempre visível; qualquer pop-up do sistema tem altura máxima = a da tela, com rolagem interna.
    **Pendente de conferência com o TikTok real:** a permissão do token (precisa ser de administrador da BC com acesso à gestão de contas), o formato da
    resposta (o ID é lido de forma defensiva) e as exigências por país (ex.: Brasil, México e França pedem documentos/CNPJ e e-mail; o sistema mostra o
    erro do TikTok quando faltarem — ainda não há envio de documentos).
@@ -203,6 +205,12 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
 
 ## Início (chat), Relatórios, Arquivos e demais telas
 
+- **Menu lateral por grupos:** **Início** (sem título, é a porta de entrada) → **Ads** (Gerenciador, Criativos, Catálogo) → **BC e CA** (Contas TikTok, Saldo) → **Gestão** (Colaboradores, Administração) → **KPI** (Relatórios). O título de um grupo só aparece se a pessoa vê algum item dele; a busca do menu esconde os títulos.
+- **Assistente do Início (chat):** não há um modelo de linguagem por trás; ele reconhece os assuntos abaixo (pelas 4 sugestões ou por palavras-chave na pergunta digitada, em `shared/chat-topics.js`) e responde de verdade:
+  **Resumo do desempenho** e **Onde estou gastando** consultam as contas (últimos 7 dias, com variação sobre o período anterior, por moeda, nunca somando moedas diferentes, e observações automáticas; exigem a área Relatórios);
+  **Ideias de criativo** (5 ganchos com roteiro e como transformá-los em anúncio aqui) e **Nova campanha** (tutorial detalhado: antes de começar, as 5 etapas do assistente, o que fazer depois de publicar) são tutoriais; também há **catálogo** e **conectar a Business Center**.
+  Sem contas conectadas, ele ensina a conectar. O que não reconhece recebe uma resposta honesta com os assuntos disponíveis e botões para cada um. As respostas são blocos (`public/js/views/chat/`) desenhados sem HTML; o texto digitado nunca é interpretado.
+
 - **Início** é um chat no estilo ChatGPT (por enquanto só o design: sugestões clicáveis, campo que cresce, "Enter envia", botão de avião de papel, respostas de exemplo; sem logo).
   O chat ocupa a altura da tela: a conversa rola dentro da própria área e o campo de mensagem fica fixo embaixo, sem cobrir nada. A
   conversa fica só na memória do navegador (nada vai ao servidor) e é descartada se outra pessoa entrar. O texto entra sempre como texto.
@@ -304,6 +312,51 @@ custo por resultado, conversões, custo por conversão e editado em. Rodapé com
   `npm run test:live` confirma que os endpoints existem). API: `GET /api/tiktok/manager/ads?preset=&from=&to=&refresh=1`, `POST /api/tiktok/manager/ads/status`,
   `GET/POST/PATCH/DELETE /api/tiktok/manager/views`. Regras de colunas/períodos em `shared/manager-columns.js` (servidor e tela usam a mesma fonte).
 
+## Catálogo de produtos (Catalog API do TikTok)
+
+**Catálogo** (menu lateral, grupo **Ads**; exige a área “Campanhas”) mostra os catálogos de **todas** as Business Centers da pessoa e é o passo que faltava para campanhas de
+**Vendas de produtos** (um catálogo com produtos aprovados é obrigatório). Tudo segue a documentação oficial v1.3 (conferida na API pública de documentação):
+
+- **Listar** (`GET /catalog/get/`, paginado): nome, ID, BC, país/moeda e se o catálogo já serve para anúncios (`ad_creation_eligible`). Falha em uma BC (ex.: o acesso não inclui “Catálogo”) aparece
+  naquela BC e as outras seguem. O cache de 60 s inclui as conexões, então conectar uma BC mostra os catálogos na hora.
+- **Criar** (`POST /catalog/create/`), pop-up em 3 etapas (Catálogo → País e moeda → Revisar e criar): `bc_id`, `name` (até 128), `catalog_type` ECOM e `catalog_conf` (`region_code` + `currency`).
+  Os países vêm de `/catalog/available_country/get/` e as moedas de cada país de `/catalog/location_currency/get/`; o servidor confere os dois **antes** de criar. País e moeda **não podem ser alterados
+  depois** (regra do TikTok), por isso a revisão avisa e pede confirmação. Só o dono da conexão (ou admin) cria; BC compartilhada é somente leitura.
+  Só o tipo **E-commerce** é criado por aqui (hotel, voo, automóvel etc. usam outros esquemas e não servem a Vendas de produtos; multi-país e “entretenimento/minissérie” dependem de allowlist do TikTok).
+- **Produtos** (`POST /catalog/product/upload/`, até 5.000 por chamada; a tela envia em lotes de até 500 produtos e ~1,5 MB): formulário ou **importação de CSV** (aceita as colunas do modelo para baixar, do Google
+  Merchant e do Meta: `id`, `title`, `availability` “in stock”, `price` “79,90”…). Campos obrigatórios da API: `sku_id` (100, sem emoji), `title` (500), `description` (10.000), `availability`, `brand` (150),
+  `image_url`, `product_detail.condition`, `price_info.price` e `landing_page.landing_page_url`. Valida no navegador e **de novo no servidor** com as mesmas regras (`shared/catalog.js`); um produto inválido
+  recusa o lote inteiro. O envio é incremental (mesmo SKU atualiza) e o TikTok processa em segundo plano: a tela acompanha `/catalog/product/log/` e mostra novos, atualizados e erros (campo, problema, sugestão, SKUs).
+  Imagens: JPG/PNG de pelo menos 500 × 500 px e públicas (senão o produto é reprovado).
+- **Produtos do catálogo** (`GET /catalog/product/get/`, `/catalog/overview/`): aprovação (aprovado/reprovado/em análise), estoque e se o produto **pode ser usado em anúncios** (aprovado + ativo + em estoque, sob encomenda ou pré-venda).
+- **Conjuntos de produtos** (`/catalog/set/get/` e `/catalog/set/create/`): filtros simples (marcas, palavras do título, preço mínimo/máximo, estoque, condição) viram as `conditions` oficiais (campo + operador da tabela “Product set operators and fields”).
+- API: `GET /api/tiktok/catalogs`, `GET .../meta`, `POST /api/tiktok/catalogs`, `GET .../:id/overview|products|logs/:feedLogId|sets`, `POST .../:id/products|sets`. **Toda** chamada traz a conexão e a BC; o servidor confere que a
+  conexão é do usuário e que a BC é uma das dela (nunca aceita BC solta) e que o ID do catálogo é numérico. O token nunca sai do servidor. Limites próprios de leitura, atualização e escrita.
+
+**Campanha de catálogo** (assistente → objetivo “Vendas de produtos”) agora segue o contrato oficial de **Catalog Ads** (Video Shopping Ads com produtos de catálogo):
+
+| Nível | O que é enviado |
+|---|---|
+| Campanha | `objective_type: PRODUCT_SALES` + `campaign_product_source: CATALOG`; **sem** otimização de orçamento (CBO é allowlist para catálogo) nem categorias especiais: o orçamento fica no grupo |
+| Grupo de anúncios | `shopping_ads_type: VIDEO`, `product_source: CATALOG`, `catalog_id`, `catalog_authorized_bc_id` (a BC dona do catálogo), `promotion_type: WEBSITE`, `shopping_ads_retargeting_type: OFF`, posicionamento automático ou só TikTok; sem identidade no grupo |
+| Metas | **Cliques** (cobrança CPC, sem pixel), **Conversões** (pixel + evento, oCPM; lance manual em `conversion_bid_price`) e **Valor/ROAS** (pixel + evento “Compra”, menor custo + `deep_bid_type: VO_HIGHEST_VALUE`) |
+| Anúncio | `identity_type: CUSTOMIZED_USER`, `catalog_id`, `product_specific_type` (**todos**, **conjunto** com `product_set_id` ou **até 20 SKUs** em `sku_ids`), `ad_format: SINGLE_VIDEO` com `vertical_video_strategy` **CATALOG_VIDEOS** (vídeo gerado com os produtos) ou **SINGLE_VIDEO** (o seu vídeo + capa), `dynamic_format: UNSET`, texto e botão obrigatórios, destino dinâmico (`DLP`) nas metas de conversão e a URL da loja como plano B (`shopping_ads_fallback_type: CUSTOM`) |
+
+Na tela, o catálogo e o conjunto de produtos são **escolhidos de listas** (o ID da BC dona é preenchido junto; os campos para digitar o ID continuam). As combinações que o TikTok recusa (ex.: pixel na meta Cliques, Pangle, ritmo acelerado
+com menor custo) são bloqueadas no assistente e no servidor. Fora do escopo: catálogo por app (`APP_ANDROID`/`APP_IOS`), carrossel de catálogo (exige música), vídeos próprios do catálogo (allowlist), retargeting e **TikTok Shop** (a partir
+do 3º trimestre de 2025 o TikTok exige o GMV Max). “Catalog Ads” é liberado automaticamente para anunciantes de comércio na web; para app é por allowlist.
+**Pendente de conferência com o TikTok real:** as respostas de `/catalog/*` e a criação de anúncio de catálogo com um token de verdade (os testes usam um TikTok simulado que **recusa** tudo o que fugir do contrato oficial).
+
+## Limites de frequência do TikTok
+
+O TikTok limita as chamadas **por endpoint e por app** (nível Basic: **10 por segundo e 600 por minuto**, somando todos os usuários e a coleta por hora). Passou disso, responde `40100`; no limite por minuto o endpoint fica
+suspenso por 5 minutos. Com dezenas de contas isso aparecia no Gerenciador (“O TikTok limitou as consultas”). O que o sistema faz agora:
+- **Ritmo único por endpoint** no processo inteiro (`TIKTOK_MIN_INTERVAL_MS`, 120 ms = no máximo ~8 por segundo) e **repetição com espera crescente** das consultas recusadas por frequência (`TIKTOK_RATE_LIMIT_RETRIES`, `TIKTOK_RETRY_DELAY_MS`). Criações
+  nunca são repetidas (poderiam duplicar); ativar/pausar anúncio, por ser idempotente, é.
+- **Gerenciador:** pede o desempenho só das contas que **têm anúncios** (conta vazia = 1 chamada), consulta 4 contas por vez, guarda o resultado **por conta** e, se o TikTok pedir pausa, não insiste nas demais: avisa e o “Atualizar” consulta **só**
+  as contas que faltaram (as que carregaram há menos de 15 s são reaproveitadas).
+- Se o app subir de nível (Advanced/Premium/Ultimate, em Meus apps → Autorização), reduza `TIKTOK_MIN_INTERVAL_MS`.
+
 ## Campanhas (assistente passo a passo)
 
 - O botão flutuante **Publicar campanha** (canto inferior direito, em todas as telas) abre o assistente em um **pop-up**, já no passo
@@ -361,6 +414,7 @@ src/
     mail/              envio de e-mail pelo Resend e modelo do convite
     hooks/             Hook com IA: cliente da Kling, geração em segundo plano, FFmpeg (cortar e juntar ao vídeo), rotas
     manager/           Gerenciador de anúncios: todos os anúncios das contas, ativar/pausar, visualizações salvas (serviço, repositório, rotas)
+    catalog/           Catálogo de produtos: catálogos das BCs, criar catálogo, enviar produtos, conjuntos de produtos (serviço, mapeamento oficial, rotas)
 scripts/               utilitários: db (check/migrate), import-sqlite, supabase-setup.sql
 shared/                regras compartilhadas (navegador + servidor): campanhas, etiquetas de conta, permissões por área, criação de contas
 public/                SPA em JS puro (sem innerHTML), CSS e views

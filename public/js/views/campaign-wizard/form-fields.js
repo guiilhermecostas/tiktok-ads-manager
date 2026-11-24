@@ -3,6 +3,7 @@ import { h } from '../../dom.js';
 import { centsToInput, parseMoneyToCents } from '../../format.js';
 import { creativeThumb } from '../creatives/thumb.js';
 import { createMultiChoice } from './choice-controls.js';
+import { createCatalogPicker, createProductSetPicker } from './catalog-picker.js';
 import { createPixelPicker } from './pixel-picker.js';
 
 let uid = 0;
@@ -71,6 +72,22 @@ function renderField({ section, field }, ctx) {
     return wrapper({ path, field, id, wide: true, error, describedBy, control: picker, required });
   }
 
+  // Catálogo: escolhe entre os catálogos das BCs das contas (e preenche a BC dona dele). Conjunto de produtos: lista os do catálogo escolhido.
+  if (field.key === 'catalogId' && ctx.pixelAccounts?.length) {
+    const picker = createCatalogPicker({
+      id, value, disabled, error: Boolean(error), describedBy, accounts: ctx.pixelAccounts,
+      onPick: (catalogId, bcId) => {
+        ctx.set(path, catalogId);
+        if (bcId) ctx.set('adGroup.catalogBcId', bcId, { rerender: true });
+      },
+    });
+    return wrapper({ path, field, id, wide: true, error, describedBy, control: picker, required });
+  }
+  if (field.key === 'productSetId' && ctx.pixelAccounts?.length) {
+    const picker = createProductSetPicker({ id, value, catalogId: getPath(ctx.config, 'adGroup.catalogId'), disabled, error: Boolean(error), describedBy, onPick: (v) => ctx.set(path, v) });
+    return wrapper({ path, field, id, wide: true, error, describedBy, control: picker, required });
+  }
+
   let control;
   switch (field.type) {
     case 'objective':
@@ -105,7 +122,7 @@ function renderField({ section, field }, ctx) {
       control = h('textarea', {
         id, class: `input input--area${error ? ' input--error' : ''}`, rows: 3, disabled, value: (value ?? []).join('\n'),
         'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy,
-        onInput: (e) => ctx.set(path, e.target.value.split(/[\n,;]+/).map((v) => v.trim()).filter(Boolean)),
+        onInput: (e) => ctx.set(path, e.target.value.split(field.lineOnly ? /\n+/ : /[\n,;]+/).map((v) => v.trim()).filter(Boolean)),
       });
       break;
     case 'url':
@@ -147,7 +164,11 @@ function objectiveCards(field, value, path, ctx, error) {
     return h(
       'label',
       { class: `objective-card${selected ? ' is-selected' : ''}` },
-      h('input', { type: 'radio', name: 'objective', value: optionValue, checked: selected, disabled: ctx.readOnly, onChange: () => ctx.set(path, optionValue, { rerender: true }) }),
+      h('input', { type: 'radio', name: 'objective', value: optionValue, checked: selected, disabled: ctx.readOnly, onChange: () => {
+        // Campanha de catálogo: o formato mais natural é o vídeo gerado com os produtos (a pessoa ainda pode escolher o seu vídeo).
+        if (optionValue === 'PRODUCT_SALES') ctx.set('ad.format', 'CATALOG_VIDEO');
+        ctx.set(path, optionValue, { rerender: true });
+      } }),
       h('span', { class: 'objective-card__check', 'aria-hidden': 'true' }, '✓'),
       h('span', { class: 'objective-card__title' }, OBJECTIVES.find((o) => o.value === optionValue).label),
       h('span', { class: 'objective-card__text' }, meta),

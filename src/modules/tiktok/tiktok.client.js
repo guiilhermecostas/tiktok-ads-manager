@@ -28,6 +28,11 @@ const AD_FIELDS = ['ad_id', 'ad_name', 'advertiser_id', 'campaign_id', 'campaign
 // Métricas do relatório por anúncio (nomes da documentação oficial). "clicks" e "cpc" são os de DESTINO (cliques no link).
 const AD_METRICS_FULL = ['spend', 'impressions', 'clicks', 'ctr', 'cpc', 'result', 'cost_per_result', 'conversion', 'cost_per_conversion'];
 const AD_METRICS_BASIC = ['spend', 'impressions', 'clicks', 'ctr', 'cpc', 'conversion', 'cost_per_conversion'];
+const CATALOG_PAGE_SIZE = 100; // /catalog/get/: page_size de 1 a 1.000
+const CATALOG_MAX_PAGES = 10;
+const PRODUCT_PAGE_SIZE_MAX = 500; // /catalog/product/get/: page_size até 500 (e page × page_size ≤ 10.000)
+const CATALOG_UPLOAD_MAX = 5000; // /catalog/product/upload/: até 5.000 produtos por chamada
+const FEED_LOG_RE = /^[\w-]{1,64}$/;
 const AD_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 const PIXEL_PAGE_SIZE = 20; // documentação oficial de /pixel/list/: page_size de 1 a 20
 const PIXEL_MAX_PAGES = 10;
@@ -37,6 +42,30 @@ const PROFILE_FIELDS = ['advertiser_id', 'company', 'country', 'currency', 'time
 const TOKEN_ERROR_CODES = new Set([40104, 40105]);
 // Limite de requisições do TikTok (código 40100 e mensagens equivalentes).
 const RATE_LIMIT_CODES = new Set([40100]);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Ritmo das chamadas. O limite do TikTok é por ENDPOINT e por APP (Basic: 10 por segundo e 600 por minuto, somando todos os usuários e a coleta
+ * por hora; passou, responde 40100). Por isso o ritmo é um só para o processo inteiro (vale para todos os clientes, com ou sem proxy):
+ * o início de cada chamada ao mesmo endpoint respeita um intervalo mínimo (`tiktok.minIntervalMs`; 0 desliga, como nos testes).
+ */
+const nextSlot = new Map();
+async function pace(path, intervalMs) {
+  if (!intervalMs) return;
+  const now = Date.now();
+  const at = Math.max(now, nextSlot.get(path) ?? 0);
+  nextSlot.set(path, at + intervalMs);
+  if (at > now) await sleep(at - now);
+}
+
+/**
+ * E-mail de contato lido do TikTok. Na documentação oficial de `/advertiser/info/` ele vem MASCARADO (ex.: "l***@***"): isso não é um e-mail
+ * de verdade e nunca deve ser pré-preenchido nem enviado de volta. Só devolve um endereço completo e sem máscara; senão, null.
+ */
+export function usableEmail(value) {
+  const email = typeof value === 'string' ? value.trim() : '';
+  return email.length <= 254 && /^[^\s@*]+@[^\s@*]+\.[^\s@*]+$/.test(email) ? email : null;
+}
 
 /** IDs de mídia do TikTok não são numéricos (ex.: "v10033g50000…", "ad-site-i18n/2020…"). */
 function requireMediaId(value, what) {
@@ -81,6 +110,8 @@ const num = (value) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
 };
+/** Número ou null (campo ausente não vira zero). */
+const numOrNull = (value) => (value === undefined || value === null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value));
 
 /**
  * Cliente mínimo da TikTok Marketing/Business API (v1.3). Isolado do restante do sistema:
@@ -89,8 +120,25 @@ const num = (value) => {
  */
 export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
   const { apiBase } = config.tiktok;
+  const minIntervalMs = config.tiktok.minIntervalMs ?? 0;
+  const rateLimitRetries = config.tiktok.rateLimitRetries ?? 0; // repetições (com espera crescente) quando o TikTok responde 40100
+  const retryDelayMs = config.tiktok.retryDelayMs ?? 1500;
 
-  async function call(path, { token, query, method = 'GET', body, form, timeoutMs = TIMEOUT_MS }) {
+  /** Uma chamada com ritmo controlado. Consultas (GET) e chamadas marcadas com `retry` (idempotentes) repetem se o TikTok limitar a frequência. */
+  async function call(path, options) {
+    const retryable = (options.method ?? 'GET') === 'GET' || options.retry === true;
+    for (let attempt = 0; ; attempt += 1) {
+      await pace(path, minIntervalMs);
+      try {
+        return await callOnce(path, options);
+      } catch (err) {
+        if (!(retryable && err?.code === 'tiktok_rate_limited' && attempt < rateLimitRetries)) throw err;
+        await sleep(retryDelayMs * 2 ** attempt + Math.random() * retryDelayMs * 0.3);
+      }
+    }
+  }
+
+  async function callOnce(path, { token, query, method = 'GET', body, form, timeoutMs = TIMEOUT_MS }) {
     const url = new URL(`${API_PREFIX}${path}`, apiBase);
     for (const [key, value] of Object.entries(query ?? {})) {
       url.searchParams.set(key, typeof value === 'string' ? value : JSON.stringify(value));
@@ -243,7 +291,7 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         country: typeof a.country === 'string' ? a.country.slice(0, 2).toUpperCase() : null,
         currency: typeof a.currency === 'string' ? a.currency.slice(0, 3).toUpperCase() : null,
         timezone: typeof a.timezone === 'string' ? a.timezone.slice(0, 64) : null,
-        contactEmail: typeof (a.email ?? a.contact_email) === 'string' ? String(a.email ?? a.contact_email).slice(0, 254) : null,
+        contactEmail: usableEmail(a.email ?? a.contact_email),
         industry: /^\d{1,9}$/.test(String(a.industry ?? '')) ? String(a.industry) : null, // ID do ramo de atividade (obrigatório ao criar contas)
       };
     },
@@ -425,8 +473,143 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
     async updateAdStatus(token, advertiserId, adIds, status) {
       if (!['ENABLE', 'DISABLE'].includes(status)) throw new HttpError(400, 'Status inválido.', 'validation_error');
       if (!adIds.length || adIds.length > AD_STATUS_MAX_IDS || !adIds.every((id) => /^\d{1,24}$/.test(id))) throw new HttpError(400, 'Escolha de 1 a 20 anúncios.', 'validation_error');
-      const data = await call('/ad/status/update/', { token, method: 'POST', body: { advertiser_id: advertiserId, ad_ids: adIds, operation_status: status } });
+      const data = await call('/ad/status/update/', { token, method: 'POST', retry: true, body: { advertiser_id: advertiserId, ad_ids: adIds, operation_status: status } });
       return (Array.isArray(data.ad_ids) ? data.ad_ids : []).map((id) => digitsOrNull(id)).filter(Boolean);
+    },
+
+    // ---------- Catálogo de produtos (Catalog API v1.3; o catálogo é um ativo da Business Center) ----------
+    /** Catálogos da Business Center (`/catalog/get/`, paginado). Só o necessário, com texto limitado. */
+    async listCatalogs(token, bcId) {
+      const catalogs = new Map();
+      for (let page = 1; page <= CATALOG_MAX_PAGES; page += 1) {
+        const data = await call('/catalog/get/', { token, query: { bc_id: bcId, page, page_size: CATALOG_PAGE_SIZE } });
+        const list = Array.isArray(data.list) ? data.list : [];
+        for (const item of list) {
+          const id = digitsOrNull(item?.catalog_id);
+          if (!id || catalogs.has(id)) continue;
+          catalogs.set(id, {
+            id,
+            name: String(item.catalog_name ?? '').slice(0, 200),
+            type: /^[A-Z_]{2,30}$/.test(String(item.catalog_type ?? '')) ? item.catalog_type : null,
+            adCreationEligible: item.ad_creation_eligible === 'AVAILABLE', // pode ser usado em anúncios quando tiver produtos disponíveis
+            createdAt: typeof item.create_time === 'string' ? item.create_time.slice(0, 19) : null,
+            updatedAt: typeof item.update_time === 'string' ? item.update_time.slice(0, 19) : null,
+            bcId: digitsOrNull(item.bc_info?.bc_id) ?? bcId,
+            bcName: typeof item.bc_info?.bc_name === 'string' ? item.bc_info.bc_name.slice(0, 200) : null,
+            regionCode: typeof item.catalog_conf?.country === 'string' ? item.catalog_conf.country.slice(0, 2).toUpperCase() : null,
+            currency: typeof item.catalog_conf?.currency === 'string' ? item.catalog_conf.currency.slice(0, 3).toUpperCase() : null,
+            multiCountry: item.catalog_conf?.is_multi_country === true,
+          });
+        }
+        const totalPages = numOrNull(data.page_info?.total_page);
+        if (!list.length || list.length < CATALOG_PAGE_SIZE || page >= (totalPages || page)) break;
+      }
+      return [...catalogs.values()];
+    },
+
+    /** Países/regiões para onde os anúncios de um catálogo podem ser entregues (`/catalog/available_country/get/`). */
+    async getCatalogRegions(token, bcId) {
+      const data = await call('/catalog/available_country/get/', { token, query: { bc_id: bcId } });
+      return (Array.isArray(data.region_codes) ? data.region_codes : []).filter((code) => /^[A-Z]{2}$/.test(String(code)));
+    },
+
+    /** Moedas aceitas em cada país/região (`/catalog/location_currency/get/`): { US: ['USD'], ... }. */
+    async getCatalogLocationCurrencies(token) {
+      const data = await call('/catalog/location_currency/get/', { token });
+      const result = {};
+      for (const item of Array.isArray(data.list) ? data.list : []) {
+        if (!/^[A-Z]{2}$/.test(String(item?.location ?? ''))) continue;
+        const currencies = (Array.isArray(item.currency) ? item.currency : [item.currency]).filter((c) => /^[A-Z]{3}$/.test(String(c)));
+        if (currencies.length) result[item.location] = currencies;
+      }
+      return result;
+    },
+
+    /** Cria um catálogo (`/catalog/create/`). País e moeda não podem ser alterados depois. Devolve o ID do catálogo. */
+    async createCatalog(token, { bcId, name, regionCode, currency, catalogType = 'ECOM' }) {
+      const data = await call('/catalog/create/', {
+        token, method: 'POST',
+        body: { bc_id: bcId, name, catalog_type: catalogType, catalog_conf: { region_code: regionCode, currency } },
+      });
+      return requireId(data.catalog_id, 'do catálogo');
+    },
+
+    /** Quantos produtos estão aprovados, reprovados e em análise (`/catalog/overview/`). */
+    async getCatalogOverview(token, { bcId, catalogId }) {
+      const data = await call('/catalog/overview/', { token, query: { bc_id: bcId, catalog_id: catalogId } });
+      return { approved: numOrNull(data.approved) ?? 0, rejected: numOrNull(data.rejected) ?? 0, processing: numOrNull(data.processing) ?? 0 };
+    },
+
+    /**
+     * Envia produtos em lote (`/catalog/product/upload/`, até 5.000; atualização INCREMENTAL: produto novo entra, o mesmo SKU atualiza).
+     * O TikTok processa em segundo plano e devolve o `feed_log_id` para acompanhar em `getCatalogProductLog`.
+     */
+    async uploadCatalogProducts(token, { bcId, catalogId, products }) {
+      if (!Array.isArray(products) || !products.length || products.length > CATALOG_UPLOAD_MAX) throw new HttpError(400, `Envie de 1 a ${CATALOG_UPLOAD_MAX} produtos por chamada.`, 'validation_error');
+      const data = await call('/catalog/product/upload/', { token, method: 'POST', body: { bc_id: bcId, catalog_id: catalogId, products } });
+      const id = String(data.feed_log_id ?? '');
+      if (!FEED_LOG_RE.test(id)) throw new HttpError(502, 'O TikTok não retornou o ID do processamento dos produtos.', 'tiktok_bad_response');
+      return id;
+    },
+
+    /** Resultado do processamento de um envio (`/catalog/product/log/`): status, contagens e os primeiros problemas. */
+    async getCatalogProductLog(token, { bcId, catalogId, feedLogId, language = 'en' }) {
+      const data = await call('/catalog/product/log/', { token, query: { bc_id: bcId, catalog_id: catalogId, feed_log_id: feedLogId, language } });
+      const log = data.product_feed_log ?? {};
+      const issues = (list) => (Array.isArray(list) ? list : []).slice(0, 20).map((entry) => ({
+        field: typeof entry?.field === 'string' ? entry.field.slice(0, 100) : null,
+        issue: typeof entry?.issue === 'string' ? entry.issue.slice(0, 500) : null,
+        suggestion: typeof entry?.suggestion === 'string' ? entry.suggestion.slice(0, 500) : null,
+        count: numOrNull(entry?.affected_product_count) ?? 0,
+        items: (Array.isArray(entry?.affected_product_item_list) ? entry.affected_product_item_list : []).slice(0, 5).map((p) => ({
+          index: numOrNull(p?.index), skuId: typeof p?.sku_id === 'string' ? p.sku_id.slice(0, 100) : null, title: typeof p?.title === 'string' ? p.title.slice(0, 200) : null,
+        })),
+      }));
+      const status = ['WAITING', 'PROCESSING', 'SUCCESS', 'FAILED'].includes(log.process_status) ? log.process_status : 'PROCESSING';
+      return {
+        status, addCount: numOrNull(log.add_count) ?? 0, updateCount: numOrNull(log.update_count) ?? 0, deleteCount: numOrNull(log.delete_count) ?? 0,
+        errorCount: numOrNull(log.error_count) ?? 0, warnCount: numOrNull(log.warn_count) ?? 0,
+        errors: issues(log.feed_log_data?.error_affected_products), warnings: issues(log.feed_log_data?.warn_affected_products),
+      };
+    },
+
+    /** Produtos do catálogo (`/catalog/product/get/`): situação de aprovação e se já servem para anúncios. */
+    async listCatalogProducts(token, { bcId, catalogId, page = 1, pageSize = 50, skuIds = null, productSetId = null, availableOnly = false }) {
+      const size = Math.min(Math.max(1, pageSize), PRODUCT_PAGE_SIZE_MAX);
+      const query = { bc_id: bcId, catalog_id: catalogId, page, page_size: size };
+      if (skuIds?.length) query.sku_ids = skuIds;
+      if (productSetId) query.product_set_ids = [productSetId];
+      if (availableOnly) query.product_available_type = 'AVAILABLE';
+      const data = await call('/catalog/product/get/', { token, query });
+      const products = (Array.isArray(data.list) ? data.list : []).map((p) => ({
+        skuId: String(p?.sku_id ?? '').slice(0, 100),
+        title: String(p?.title ?? '').slice(0, 500),
+        brand: typeof p?.brand === 'string' ? p.brand.slice(0, 150) : null,
+        availability: /^[A-Z_]{2,30}$/.test(String(p?.availability ?? '')) ? p.availability : null,
+        imageUrl: typeof p?.image_url === 'string' && /^https?:\/\//i.test(p.image_url) ? p.image_url.slice(0, 2000) : null,
+        price: numOrNull(p?.price?.price), salePrice: numOrNull(p?.price?.sale_price), currency: typeof p?.price?.currency === 'string' ? p.price.currency.slice(0, 3) : null,
+        auditStatus: ['approved', 'rejected', 'processing'].includes(p?.audit?.audit_status) ? p.audit.audit_status : null,
+        rejectedReasons: (Array.isArray(p?.audit?.rejected_info) ? p.audit.rejected_info : []).slice(0, 3).map((r) => String(r?.reason ?? '').slice(0, 300)).filter(Boolean),
+        suggestion: typeof p?.audit?.suggestion === 'string' ? p.audit.suggestion.slice(0, 300) : null,
+        imageStatus: typeof p?.image_status === 'string' ? p.image_status.slice(0, 30) : null,
+        adCreationEligible: p?.ad_creation_eligible === 'AVAILABLE',
+        active: p?.active_status === 'ACTIVATED',
+      })).filter((p) => p.skuId);
+      return { products, total: numOrNull(data.page_info?.total_number) ?? products.length, totalPages: numOrNull(data.page_info?.total_page) ?? 1 };
+    },
+
+    /** Conjuntos de produtos do catálogo (`/catalog/set/get/`). */
+    async listProductSets(token, { bcId, catalogId }) {
+      const data = await call('/catalog/set/get/', { token, query: { bc_id: bcId, catalog_id: catalogId, return_product_count: true } });
+      return (Array.isArray(data.list) ? data.list : []).map((s) => ({
+        id: digitsOrNull(s?.product_set_id), name: String(s?.product_set_name ?? '').slice(0, 200), productCount: numOrNull(s?.product_count),
+      })).filter((s) => s.id);
+    },
+
+    /** Cria um conjunto de produtos por condições (`/catalog/set/create/`). */
+    async createProductSet(token, { bcId, catalogId, name, conditions }) {
+      const data = await call('/catalog/set/create/', { token, method: 'POST', body: { bc_id: bcId, catalog_id: catalogId, product_set_name: name, conditions } });
+      return { id: requireId(data.product_set_id, 'do conjunto de produtos'), name: String(data.product_set_name ?? name).slice(0, 200), productCount: numOrNull(data.product_count) };
     },
 
     /** Campanhas da conta (paginado: até CAMPAIGN_MAX_PAGES páginas; `total` é o total real no TikTok). */

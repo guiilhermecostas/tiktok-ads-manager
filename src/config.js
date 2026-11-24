@@ -110,6 +110,10 @@ function loadTiktokConfig(context) {
   const encryptionKey = rawKey ? parseEncryptionKey(rawKey) : null;
   return {
     apiBase: 'https://business-api.tiktok.com',
+    // Limite oficial do app (Basic): 10 chamadas/s por endpoint. 120 ms entre chamadas ao mesmo endpoint = no máximo ~8 por segundo.
+    minIntervalMs: integer('TIKTOK_MIN_INTERVAL_MS', 120, 0, 5000),
+    rateLimitRetries: integer('TIKTOK_RATE_LIMIT_RETRIES', 2, 0, 5),
+    retryDelayMs: integer('TIKTOK_RETRY_DELAY_MS', 1500, 100, 30_000),
     encryptionKey,
     oauth: loadOauthConfig({ ...context, encryptionKey }),
     // Sem a chave não é possível guardar tokens com segurança: o cadastro de Business Centers fica desligado.

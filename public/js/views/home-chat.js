@@ -2,21 +2,18 @@ import { h, icon, setChildren } from '../dom.js';
 import { state } from '../state.js';
 import { toast } from '../ui.js';
 import { avatarEl } from './avatar.js';
+import { TOPICS, blocksToText, detectTopic } from '/shared/chat-topics.js';
 import { openCampaignWizard } from './campaign-wizard/index.js';
+import { answerFor } from './chat/answers.js';
+import { renderBlocks } from './chat/rich.js';
 
 const MAX_LENGTH = 4000;
-const SUGGESTIONS = [
-  { title: 'Resumo do desempenho', text: 'Como foi o desempenho das minhas contas nos últimos 7 dias?' },
-  { title: 'Onde estou gastando', text: 'Qual conta de anúncio mais gastou esta semana?' },
-  { title: 'Ideias de criativo', text: 'Me dê 5 ideias de gancho para um anúncio em vídeo.' },
-  { title: 'Nova campanha', text: 'Quero criar uma campanha de tráfego. Por onde começo?', action: 'campaign' },
-];
-const PLACEHOLDER_REPLY = 'O assistente ainda está sendo preparado e não consegue responder de verdade por enquanto. Em breve você vai poder perguntar sobre suas campanhas, contas e relatórios aqui.';
+const SUGGESTIONS = TOPICS;
 
 // A conversa vale só nesta sessão do navegador (nada vai ao servidor) e é descartada se outra pessoa entrar.
 let conversation = { ownerId: null, messages: [] };
 
-/** Início: conversa com o assistente, no estilo de um chat (design pronto; as respostas reais entram depois). */
+/** Início: conversa com o assistente. Responde os assuntos do menu de sugestões (dados reais das contas e tutoriais); veja ./chat/answers.js. */
 export function homeChatView(ctx) {
   if (conversation.ownerId !== state.user.id) conversation = { ownerId: state.user.id, messages: [] };
   const firstName = state.user.name.split(' ')[0];
@@ -43,6 +40,7 @@ export function homeChatView(ctx) {
   function messageEl(message) {
     if (message.role === 'user') return h('div', { class: 'chat__msg chat__msg--user' }, h('div', { class: 'chat__bubble' }, message.text), avatarEl(state.user, { size: 'sm' }));
     if (message.typing) return h('div', { class: 'chat__msg' }, h('div', { class: 'chat__bubble chat__bubble--typing', 'aria-label': 'O assistente está escrevendo' }, h('span', { class: 'dot' }), h('span', { class: 'dot' }), h('span', { class: 'dot' })));
+    if (message.blocks) return h('div', { class: 'chat__msg' }, h('div', { class: 'chat__bubble chat__bubble--rich' }, renderBlocks(message.blocks, { openWizard: () => openCampaignWizard(ctx), ask: (text) => submit(text) }), h('div', { class: 'chat__actions' }, copyButton(message.text))));
     return h('div', { class: 'chat__msg' }, h('div', { class: 'chat__bubble' }, message.text, h('div', { class: 'chat__actions' }, copyButton(message.text))));
   }
 
@@ -52,7 +50,7 @@ export function homeChatView(ctx) {
       { class: 'chat__hero' },
       h('h1', { class: 'chat__title' }, `Olá, ${firstName}. Como posso ajudar?`),
       h('p', { class: 'muted chat__subtitle' }, 'Pergunte sobre suas campanhas, contas e relatórios, ou escolha uma sugestão.'),
-      h('div', { class: 'chat__suggestions' }, SUGGESTIONS.map((s) => h('button', { type: 'button', class: 'chat__suggestion', onClick: () => (s.action === 'campaign' ? openCampaignWizard(ctx) : submit(s.text)) }, h('strong', null, s.title), h('span', { class: 'muted' }, s.text)))),
+      h('div', { class: 'chat__suggestions' }, SUGGESTIONS.map((s) => h('button', { type: 'button', class: 'chat__suggestion', onClick: () => submit(s.text, s.id) }, h('strong', null, s.title), h('span', { class: 'muted' }, s.text)))),
     );
   }
 
@@ -63,7 +61,7 @@ export function homeChatView(ctx) {
   }
 
   // ---------- envio ----------
-  function submit(text) {
+  function submit(text, topicId = null) {
     const value = String(text ?? '').trim();
     if (!value || waiting) return;
     waiting = true;
@@ -73,14 +71,18 @@ export function homeChatView(ctx) {
     resize();
     draw();
     const owner = conversation;
-    setTimeout(() => {
+    const topic = topicId ?? detectTopic(value);
+    answerFor(topic).then(
+      (blocks) => ({ blocks, text: blocksToText(blocks) }),
+      (err) => ({ blocks: null, text: `Não consegui buscar isso agora: ${err.message || 'erro desconhecido'}. Tente de novo em instantes.` }),
+    ).then((reply) => {
       waiting = false;
       if (conversation !== owner) return; // trocou de conversa ou de usuária no meio
       conversation.messages = conversation.messages.filter((m) => !m.typing);
-      conversation.messages.push({ role: 'assistant', text: PLACEHOLDER_REPLY });
+      conversation.messages.push({ role: 'assistant', ...reply });
       if (body.isConnected) draw();
       refreshSend();
-    }, 900);
+    });
     refreshSend();
   }
 

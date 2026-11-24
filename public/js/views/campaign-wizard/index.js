@@ -4,7 +4,7 @@ import { STEPS, collectCreativeRefs, defaultConfig, findField, reconcileConfig, 
 import { get, post, put } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
 import { parseMoneyToCents } from '../../format.js';
-import { alertBox, button, confirmDialog, openModal, spinner, toast } from '../../ui.js';
+import { alertBox, button, confirmDialog, openModal, spinner, stepper as stepperView, toast } from '../../ui.js';
 import { pickCreatives } from '../creatives/picker.js';
 import { renderStepForm } from './form-fields.js';
 import { createPublishTargets } from './publish-targets.js';
@@ -351,26 +351,7 @@ export function openCampaignWizard(ctx, { campaignId = null } = {}) {
     }
 
     // ---------- desenho ----------
-    function stepper() {
-      return h(
-        'ol',
-        { class: 'stepper', 'aria-label': 'Etapas da campanha' },
-        STEPS.map((s, i) => {
-          const done = i < st.step || (i <= st.maxStep && i !== st.step);
-          const reachable = i <= st.maxStep;
-          return h(
-            'li',
-            { class: `stepper__item${i === st.step ? ' is-current' : ''}${done ? ' is-done' : ''}` },
-            h(
-              'button',
-              { type: 'button', class: 'stepper__btn', disabled: !reachable || st.busy !== null, 'aria-current': i === st.step ? 'step' : null, onClick: () => goTo(i) },
-              h('span', { class: 'stepper__num' }, done && i !== st.step ? '✓' : String(i + 1)),
-              h('span', { class: 'stepper__label' }, s.title),
-            ),
-          );
-        }),
-      );
-    }
+    const stepper = () => stepperView({ steps: STEPS, current: st.step, maxStep: st.maxStep, disabled: st.busy !== null, onGo: goTo, label: 'Etapas da campanha' });
 
     function drawBanner() {
       bannerSlot.replaceChildren(...(st.banner ? [alertBox(st.banner)] : []));

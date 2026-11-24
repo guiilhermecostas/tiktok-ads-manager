@@ -41,6 +41,8 @@ import { createManagerService } from './modules/manager/manager.service.js';
 import { createManagerViewsRepository } from './modules/manager/manager-views.repository.js';
 import { createBalanceRouter } from './modules/tiktok/balance.routes.js';
 import { createBalanceService } from './modules/tiktok/balance.service.js';
+import { createCatalogRouter } from './modules/catalog/catalog.routes.js';
+import { createCatalogService } from './modules/catalog/catalog.service.js';
 import { createHourlyRepository } from './modules/tiktok/hourly.repository.js';
 import { createHourlyRouter } from './modules/tiktok/hourly.routes.js';
 import { createHourlyService } from './modules/tiktok/hourly.service.js';
@@ -72,6 +74,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Saldo (BCs e contas de anúncio) direto da API do TikTok, em cache curto.
   const balanceService = createBalanceService({ tiktok: tiktokService, connections: businessCenters, log, now: clock });
   // Gerenciador de anúncios: todos os anúncios de todas as contas, com desempenho, ativar/pausar e visualizações salvas por pessoa.
+  const catalogService = createCatalogService({ tiktok: tiktokService, connections: businessCenters, log });
   const managerService = createManagerService({ tiktok: tiktokService, connections: businessCenters, views: createManagerViewsRepository(db), log, now: clock });
   // Gasto por hora: coleta a cada 30 min (ligada só pelo servidor, em server.js) e leitura para a aba Relatórios → Por hora.
   const hourlyService = createHourlyService({ tiktok: tiktokService, connections: businessCenters, repo: createHourlyRepository(db), log, now: clock, pauseMs: hourlyPauseMs });
@@ -140,6 +143,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   });
   // A configuração completa de uma campanha é maior que os demais corpos; o parser abaixo (10 kb) vale para o restante da API.
   api.use('/campaigns', express.json({ limit: '64kb' }));
+  api.use('/tiktok/catalogs', express.json({ limit: '2mb' })); // lotes de até 500 produtos (descrições longas); o resto da API fica em 10 kb
   api.use(express.json({ limit: '10kb' }));
   api.use(sameOriginOnly);
 
@@ -178,6 +182,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   protectedApi.use('/proxies', requireArea('accounts'), proxiesRouter);
   // As áreas de cada rota do TikTok (contas, relatórios, lista de contas de anúncio) são exigidas dentro do próprio roteador.
   const managerRouter = createManagerRouter({ service: managerService, limits });
+  const catalogRouter = createCatalogRouter({ service: catalogService, limits });
+  protectedApi.use('/tiktok/catalogs', catalogRouter);
   protectedApi.use('/tiktok/manager', managerRouter);
   const balanceRouter = createBalanceRouter({ service: balanceService, limits });
   protectedApi.use('/tiktok/balance', balanceRouter);
@@ -237,6 +243,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
     close: () => {
       hourlyService.stop();
       balanceRouter.stop();
+      catalogRouter.stop();
       managerRouter.stop();
       hooksService.stop();
       hooksRouter.stop();

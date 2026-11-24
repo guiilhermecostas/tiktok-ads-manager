@@ -90,6 +90,7 @@ describe('Gerenciador de anúncios', () => {
     fake.state.validTokens.add(GOOD_TOKEN);
     fake.state.validTokens.add(OTHER_TOKEN);
     fake.state.failAdsFor = new Set();
+    fake.state.rateLimitFor = new Set();
     fake.state.failAdStatusFor = new Set();
     fake.state.failReportFor = new Set();
     fake.state.rejectResultMetric = false;
@@ -151,6 +152,7 @@ describe('Gerenciador de anúncios', () => {
     await connect(user, '111');
     const dates = async (query) => {
       fake.state.calls.length = 0;
+      nowMs += 20_000; // passou o prazo em que "Atualizar" reaproveita contas recém-carregadas
       const res = await get(user, `${query}${query.includes('?') ? '&' : '?'}refresh=1`);
       assert.equal(res.status, 200, res.text);
       return [adReports()[0].query.start_date, adReports()[0].query.end_date];
@@ -241,7 +243,48 @@ describe('Gerenciador de anúncios', () => {
     await get(user, '?preset=yesterday');
     assert.equal(callsOf('/ad/get/').length, first + 2, 'outro período = outra consulta');
     await get(user, '?refresh=1');
-    assert.equal(callsOf('/ad/get/').length, first + 4, 'atualizar ignora o cache');
+    assert.equal(callsOf('/ad/get/').length, first + 2, 'atualizar logo depois reaproveita as contas que acabaram de carregar certo');
+    nowMs += 20_000;
+    await get(user, '?refresh=1');
+    assert.equal(callsOf('/ad/get/').length, first + 4, 'depois de 15 s, atualizar vai ao TikTok de novo');
+  });
+
+  it('conta SEM anúncios não pede o relatório de desempenho (menos chamadas ao TikTok)', async () => {
+    const user = await setup();
+    await connect(user, '111');
+    await connect(user, '222');
+    fake.state.calls.length = 0;
+    const res = await get(user);
+    assert.equal(res.status, 200, res.text);
+    assert.equal(callsOf('/ad/get/').length, 3, 'as 3 contas têm a lista consultada');
+    assert.deepEqual(adReports().map((c) => c.query.advertiser_id).sort(), ['9001', '9002'], 'a conta vazia (9101) não pede relatório');
+  });
+
+  it('limite de frequência do TikTok (40100): avisa, não insiste, e "Atualizar" consulta só as contas que faltaram', async () => {
+    const user = await setup();
+    const ids = ['9001', '9002', '9003', '9004', '9005', '9006'];
+    fake.state.bcs = { 111: ids, 222: [] };
+    fake.state.currencies = Object.fromEntries(ids.map((id) => [id, 'USD']));
+    fake.state.ads = Object.fromEntries(ids.map((id, i) => [id, [ad(3000 + i, { advertiser_id: id })]]));
+    fake.state.adMetrics = Object.fromEntries(ids.map((id, i) => [id, { [3000 + i]: metrics(5) }]));
+    await connect(user, '111');
+    fake.state.rateLimitFor = new Set(['9001']);
+    fake.state.calls.length = 0;
+    const first = (await get(user)).json;
+    const failed = first.accounts.filter((a) => a.status === 'error');
+    assert.ok(failed.some((a) => a.id === '9001'), 'a conta limitada aparece com erro');
+    assert.ok(failed.every((a) => /limit|pausa/i.test(a.error)), `a mensagem fala do limite: ${JSON.stringify(failed.map((a) => a.error))}`);
+    assert.ok(first.accounts.some((a) => a.status === 'ok'), 'as outras contas carregam');
+    assert.ok(callsOf('/ad/get/').length <= 6);
+    const okBefore = first.accounts.filter((a) => a.status === 'ok').map((a) => a.id);
+    // o limite passou: "Atualizar" refaz SÓ o que falhou
+    fake.state.rateLimitFor = new Set();
+    fake.state.calls.length = 0;
+    const second = (await get(user, '?refresh=1')).json;
+    assert.ok(second.accounts.every((a) => a.status === 'ok'), JSON.stringify(second.accounts.map((a) => [a.id, a.status, a.error])));
+    assert.deepEqual(callsOf('/ad/get/').map((c) => c.query.advertiser_id).sort(), failed.map((a) => a.id).sort(), 'só as contas que falharam foram consultadas');
+    assert.ok(okBefore.every((id) => !callsOf('/ad/get/').some((c) => c.query.advertiser_id === id)));
+    assert.equal(second.ads.length, 6);
   });
 
   it('conectar uma BC logo depois de ver a lista vazia mostra os anúncios na hora (o cache muda com as contas)', async () => {

@@ -4,12 +4,13 @@ import { TIKTOK_LOCATIONS } from '/shared/tiktok-locations.js';
 import { TIKTOK_TIMEZONES } from '/shared/tiktok-timezones.js';
 import { get, post } from '../api.js';
 import { h, setChildren } from '../dom.js';
-import { alertBox, button, confirmDialog, field, openModal } from '../ui.js';
+import { alertBox, button, confirmDialog, field, openModal, stepper } from '../ui.js';
 import { plural } from './hub.js';
 
 const clampCount = (value) => Math.min(MAX_CREATE_ADVERTISERS, Math.max(1, Math.trunc(Number(value)) || 1));
 const BC_TYPES = { NORMAL: 'comum', DIRECT: 'direta', AGENCY: 'de agência', SELF_SERVICE: 'de autoatendimento', SELF_SERVICE_AGENCY: 'de agência (autoatendimento)' };
 const COUNTRIES = [...TIKTOK_LOCATIONS].sort((a, b) => a[1].localeCompare(b[1]));
+const STEPS = [{ title: 'Contas' }, { title: 'Empresa e região' }, { title: 'Revisar e criar' }];
 const normalize = (text) => String(text ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 
 /**
@@ -28,6 +29,7 @@ export function createAdvertisersDialog({ bc, onDone }) {
   const body = h('div', { class: 'modal__body create-ca' });
   const modal = openModal({
     title: 'Criar contas de anúncio',
+    size: 'md',
     body,
     dismissOnOverlay: false,
     canClose: () => !busy,
@@ -69,7 +71,15 @@ export function createAdvertisersDialog({ bc, onDone }) {
   const infoSlot = h('div', { class: 'create-ca__bcinfo' });
   const promoSlot = h('div', { class: 'create-ca__wide' });
   const moreFields = h('div', { class: 'invite-fields' }, email.element);
-  const submit = button('Criar 1 conta', { variant: 'primary', type: 'submit' });
+  let step = 0; // etapa atual (0 a 2) e a mais distante já alcançada
+  let maxStep = 0;
+  let createLabel = 'Criar 1 conta';
+  const submit = button('Continuar', { variant: 'primary', type: 'submit' }); // "Continuar" nas duas primeiras etapas; "Criar N contas" na última
+  const back = button('Cancelar', { onClick: () => (step === 0 ? modal.requestClose() : goTo(step - 1)) });
+  const stepSlot = h('div', { class: 'create-ca__steps' });
+  const pane = h('div', { class: 'create-ca__pane' });
+  const review = h('dl', { class: 'create-ca__review' });
+  const optional = h('div', { class: 'create-ca__optional' });
   const minus = button('−', { small: true, ariaLabel: 'Diminuir a quantidade', onClick: () => setCount(clampCount(count.control.value) - 1) });
   const plus = button('+', { small: true, ariaLabel: 'Aumentar a quantidade', onClick: () => setCount(clampCount(count.control.value) + 1) });
   const qtyField = h('div', { class: 'field' }, count.element.querySelector('label'), h('div', { class: 'create-ca__stepper' }, minus, count.control, plus));
@@ -84,7 +94,8 @@ export function createAdvertisersDialog({ bc, onDone }) {
     const typed = name.control.value.trim();
     const names = accountNames(typed || 'Nome', n);
     preview.textContent = !typed ? `Digite o nome para ver como ${n === 1 ? 'a conta vai se chamar' : 'as contas vão se chamar'}.` : n === 1 ? `Será criada 1 conta: ${names[0]}` : `Serão criadas ${n} contas: ${names.slice(0, 3).join(', ')}${n > 3 ? `… até ${names[n - 1]}` : ''}`;
-    submit.textContent = `Criar ${plural(n, 'conta', 'contas')}`;
+    createLabel = `Criar ${plural(n, 'conta', 'contas')}`;
+    syncButtons();
   }
   for (const f of [count, name]) f.control.addEventListener('input', refresh);
 
@@ -118,7 +129,7 @@ export function createAdvertisersDialog({ bc, onDone }) {
     const problem = blocked();
     if (problem) notes.push(alertBox(problem, 'warning'));
     setChildren(infoSlot, notes);
-    submit.disabled = busy || Boolean(problem);
+    syncButtons();
   }
 
   /** Aplica o que o TikTok informou da BC: moeda travada, ramos do tipo, site da empresa (só BC de agência) e avisos. */
@@ -164,14 +175,17 @@ export function createAdvertisersDialog({ bc, onDone }) {
     loadDefaults();
   });
 
-  /** Lê e confere os campos; devolve o corpo do pedido ou lança o aviso para o usuário. */
-  function readForm() {
+  // ---------- conferência por etapa (cada "Continuar" confere só o que a etapa pede; "Criar" confere tudo) ----------
+  function checkAccounts() {
     const problem = blocked();
     if (problem) throw new Error(problem);
     const n = Number(count.control.value);
     if (!Number.isInteger(n) || n < 1 || n > MAX_CREATE_ADVERTISERS) throw new Error(`A quantidade deve ser de 1 a ${MAX_CREATE_ADVERTISERS}.`);
-    const baseName = name.control.value.trim();
-    if (baseName.length < 2) throw new Error('Informe o nome das contas.');
+    if (name.control.value.trim().length < 2) throw new Error('Informe o nome das contas.');
+  }
+  function checkCompany() {
+    const problem = blocked();
+    if (problem) throw new Error(problem);
     const cur = normalizeCurrency(currency.control.value);
     if (!cur) throw new Error('Informe a moeda com 3 letras (ex.: USD ou BRL).');
     if (bcInfo?.currency && cur !== bcInfo.currency) throw new Error(`A moeda precisa ser a da Business Center (${bcInfo.currency}).`);
@@ -182,11 +196,24 @@ export function createAdvertisersDialog({ bc, onDone }) {
     const link = promotion.control.value.trim();
     if (bcInfo?.requiresPromotionLink && !link) throw new Error('Esta Business Center é de agência: informe o site da empresa.');
     if (link && !normalizePromotionLink(link)) throw new Error('Site da empresa inválido: use um endereço completo, como https://minhaempresa.com.');
+  }
+  function checkOptional() {
+    const value = email.control.value.trim();
+    if (value && !/^[^\s@*]+@[^\s@*]+\.[^\s@*]+$/.test(value)) throw new Error('E-mail de contato inválido: informe o endereço completo (ou deixe em branco).');
+    const link = promotion.control.value.trim();
+    if (link && !normalizePromotionLink(link)) throw new Error('Site da empresa inválido: use um endereço completo, como https://minhaempresa.com.');
+  }
+  const CHECKS = [checkAccounts, checkCompany, checkOptional];
+
+  /** Lê e confere TODOS os campos; devolve o corpo do pedido ou lança o aviso para o usuário. */
+  function readForm() {
+    for (const check of CHECKS) check();
+    const link = promotion.control.value.trim();
     return {
       bcId: selectedBc(),
-      count: n,
-      name: baseName,
-      currency: cur,
+      count: Number(count.control.value),
+      name: name.control.value.trim(),
+      currency: normalizeCurrency(currency.control.value),
       timezone: timezone.control.value,
       company: company.control.value.trim(),
       registeredArea: country.control.value,
@@ -205,6 +232,7 @@ export function createAdvertisersDialog({ bc, onDone }) {
       result.created.map((c) => h('li', null, h('strong', null, c.name), c.id ? h('span', { class: 'muted' }, ` · ID ${c.id}`) : h('span', { class: 'muted' }, ' · ID não informado pelo TikTok'))),
     );
     const notVisible = ok - result.visible;
+    body.classList.add('is-result'); // o resultado não precisa do tamanho fixo das etapas
     setChildren(
       body,
       h('p', { class: 'create-ca__headline' }, ok === result.requested ? `${plural(ok, 'conta criada', 'contas criadas')} no TikTok.` : `${ok} de ${result.requested} contas criadas.`),
@@ -222,57 +250,114 @@ export function createAdvertisersDialog({ bc, onDone }) {
     );
   }
 
+  // ---------- etapas ----------
+  const selectedOption = (f) => f.control.selectedOptions[0]?.textContent ?? '';
+  function drawReview() {
+    const n = clampCount(count.control.value);
+    const rows = [
+      ['Business Center', selectedBc()],
+      [n === 1 ? 'Conta' : 'Contas', preview.textContent.replace(/^Ser(á|ão) criadas? \d+ contas?: /, '')],
+      ['Moeda', normalizeCurrency(currency.control.value) ?? '—'],
+      ['Fuso horário', selectedOption(timezone) || '—'],
+      ['Empresa', company.control.value.trim() || '—'],
+      ['País de registro', selectedOption(country) || '—'],
+      ['Ramo de atividade', selectedOption(industry) || '—'],
+      ...(promotion.control.value.trim() ? [['Site da empresa', promotion.control.value.trim()]] : []),
+    ];
+    setChildren(review, rows.map(([label, value]) => h('div', { class: 'create-ca__review-row' }, h('dt', null, label), h('dd', null, value))));
+  }
+
+  function drawStep({ keepError = false } = {}) {
+    if (!keepError) errorSlot.replaceChildren();
+    if (step === 0) setChildren(pane, errorSlot, bcSelect ? bcSelect.element : h('p', { class: 'create-ca__bc' }, 'Business Center do TikTok: ', h('strong', null, bcIds[0])), infoSlot, h('div', { class: 'create-ca__qty' }, qtyField, name.element), preview);
+    else if (step === 1) setChildren(pane, errorSlot, h('div', { class: 'invite-fields' }, currency.element, timezone.element, company.element, country.element, industry.element), promoSlot);
+    else {
+      drawReview();
+      setChildren(optional, h('p', { class: 'create-ca__section' }, 'Opcional'), moreFields);
+      setChildren(pane, errorSlot, h('p', { class: 'create-ca__section' }, 'Confira antes de criar'), review, optional, h('p', { class: 'field__hint' }, 'As contas ficam no seu TikTok e não podem ser desfeitas por aqui.'));
+    }
+    setChildren(stepSlot, stepper({ steps: STEPS, current: step, maxStep, disabled: busy, onGo: goTo, label: 'Etapas da criação de contas' }));
+    pane.scrollTop = 0;
+    syncButtons();
+  }
+
+  function syncButtons() {
+    const last = step === STEPS.length - 1;
+    back.textContent = step === 0 ? 'Cancelar' : 'Voltar';
+    back.disabled = busy;
+    submit.textContent = busy ? 'Criando no TikTok…' : last ? createLabel : 'Continuar';
+    submit.disabled = busy || (last && Boolean(blocked()));
+    status.hidden = last && !busy; // o texto de "preenchido com os dados…" só vale antes da revisão
+  }
+
+  /** Ir para uma etapa já alcançada; para a frente só passando pela conferência de cada etapa no caminho. */
+  function goTo(target) {
+    if (busy || target === step) return;
+    if (target > step) {
+      try {
+        for (let i = step; i < target; i += 1) CHECKS[i]();
+      } catch (err) {
+        errorSlot.replaceChildren(alertBox(err.message));
+        return;
+      }
+    }
+    step = target;
+    maxStep = Math.max(maxStep, step);
+    drawStep();
+  }
+
+  async function create() {
+    errorSlot.replaceChildren();
+    let payload;
+    try {
+      payload = readForm();
+    } catch (err) {
+      errorSlot.replaceChildren(alertBox(err.message));
+      return;
+    }
+    const ok = await confirmDialog({
+      title: `Criar ${plural(payload.count, 'conta de anúncio', 'contas de anúncio')}?`,
+      message: `${accountNames(payload.name, payload.count).slice(0, 3).join(', ')}${payload.count > 3 ? '…' : ''} ${payload.count === 1 ? 'será criada' : 'serão criadas'} na Business Center ${payload.bcId}, em ${payload.currency}. ${payload.count === 1 ? 'Ela fica' : 'Elas ficam'} no seu TikTok e não ${payload.count === 1 ? 'pode ser desfeita' : 'podem ser desfeitas'} por aqui.`,
+      confirmLabel: 'Criar agora',
+    });
+    if (!ok) return;
+    busy = true;
+    syncButtons();
+    stepSlot.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    status.textContent = 'Isso pode levar alguns segundos. Não feche esta janela.';
+    try {
+      showResult(await post(`/tiktok/business-centers/${bc.id}/advertisers`, payload));
+    } catch (err) {
+      errorSlot.replaceChildren(alertBox(err.message), h('p', { class: 'field__hint' }, 'Se a mensagem falar em permissão, o acesso desta conexão pode não incluir a criação de contas: renove o acesso (ou gere um token) com um usuário administrador da Business Center. Se a BC for de agência, preencha o site da empresa em “Empresa e região”.'));
+      status.textContent = '';
+      pane.scrollTop = 0;
+      refresh();
+    } finally {
+      busy = false;
+      if (pane.isConnected) drawStep({ keepError: true });
+    }
+  }
+
   const form = h(
     'form',
     {
       class: 'form create-ca__form',
       novalidate: true,
-      onSubmit: async (event) => {
+      onSubmit: (event) => {
         event.preventDefault();
         if (busy) return;
-        errorSlot.replaceChildren();
-        let payload;
-        try {
-          payload = readForm();
-        } catch (err) {
-          errorSlot.replaceChildren(alertBox(err.message));
-          return;
-        }
-        const ok = await confirmDialog({
-          title: `Criar ${plural(payload.count, 'conta de anúncio', 'contas de anúncio')}?`,
-          message: `${accountNames(payload.name, payload.count).slice(0, 3).join(', ')}${payload.count > 3 ? '…' : ''} ${payload.count === 1 ? 'será criada' : 'serão criadas'} na Business Center ${payload.bcId}, em ${payload.currency}. ${payload.count === 1 ? 'Ela fica' : 'Elas ficam'} no seu TikTok e não ${payload.count === 1 ? 'pode ser desfeita' : 'podem ser desfeitas'} por aqui.`,
-          confirmLabel: 'Criar agora',
-        });
-        if (!ok) return;
-        busy = true;
-        submit.disabled = true;
-        submit.textContent = 'Criando no TikTok…';
-        status.textContent = 'Isso pode levar alguns segundos. Não feche esta janela.';
-        try {
-          showResult(await post(`/tiktok/business-centers/${bc.id}/advertisers`, payload));
-        } catch (err) {
-          errorSlot.replaceChildren(alertBox(err.message), h('p', { class: 'field__hint' }, 'Se a mensagem falar em permissão, o acesso desta conexão pode não incluir a criação de contas: renove o acesso (ou gere um token) com um usuário administrador da Business Center. Se a BC for de agência, preencha o site da empresa em “Mais opções”.'));
-          status.textContent = '';
-          refresh();
-        } finally {
-          busy = false;
-          submit.disabled = Boolean(blocked());
-        }
+        if (step < STEPS.length - 1) goTo(step + 1);
+        else create();
       },
     },
-    errorSlot,
-    bcSelect ? bcSelect.element : h('p', { class: 'create-ca__bc' }, 'Business Center do TikTok: ', h('strong', null, bcIds[0])),
-    infoSlot,
-    h('div', { class: 'create-ca__qty' }, qtyField, name.element),
-    preview,
-    h('div', { class: 'invite-fields' }, currency.element, timezone.element, company.element, country.element, industry.element),
-    promoSlot,
-    h('details', { class: 'create-ca__more' }, h('summary', null, 'Mais opções'), moreFields),
+    stepSlot,
+    pane,
     status,
-    h('div', { class: 'modal__footer' }, button('Cancelar', { onClick: () => modal.requestClose() }), submit),
+    h('div', { class: 'modal__footer create-ca__footer' }, back, submit),
   );
   body.append(form);
   applyBc();
   refresh();
+  drawStep();
   loadDefaults();
 }

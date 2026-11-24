@@ -281,7 +281,7 @@ describe('summarize', () => {
 
 describe('ajustes por conta de anúncio (publicar a mesma campanha em contas diferentes)', () => {
   it('só os IDs que dependem da conta podem ser ajustados', () => {
-    assert.deepEqual([...ACCOUNT_FIELDS].sort(), ['ad.identityId', 'ad.identityType', 'adGroup.appId', 'adGroup.catalogId', 'adGroup.leadFormId', 'adGroup.pixelId', 'adGroup.productSetId']);
+    assert.deepEqual([...ACCOUNT_FIELDS].sort(), ['ad.identityId', 'ad.identityType', 'ad.productSetId', 'adGroup.appId', 'adGroup.catalogBcId', 'adGroup.catalogId', 'adGroup.leadFormId', 'adGroup.pixelId']);
   });
 
   it('aplica o ajuste só na cópia: a campanha base nunca muda', () => {

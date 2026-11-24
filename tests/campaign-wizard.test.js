@@ -73,9 +73,9 @@ describe('payloads da Marketing API', () => {
     assert.ok(!('lead_form_id' in buildAdGroupPayload('1', '2', lead)), 'não existe no grupo de anúncios (SDK oficial)');
     assert.equal(buildAdPayload('1', '2', lead).creatives[0].page_id, 88, 'vai no criativo como page_id numérico');
     assert.equal(buildAdGroupPayload('1', '2', valid('PRODUCT_SALES')).catalog_id, '777');
-    const sales = valid('PRODUCT_SALES', { adGroup: { productSetId: '4242' } });
+    const sales = valid('PRODUCT_SALES', { ad: { productSpecificType: 'PRODUCT_SET', productSetId: '4242' } });
     assert.ok(!('product_set_id' in buildAdGroupPayload('1', '2', sales)), 'product_set_id não existe no grupo');
-    assert.deepEqual([buildAdPayload('1', '2', sales).creatives[0].catalog_id, buildAdPayload('1', '2', sales).creatives[0].product_set_id], ['777', '4242']);
+    assert.deepEqual([buildAdPayload('1', '2', sales).creatives[0].catalog_id, buildAdPayload('1', '2', sales).creatives[0].product_set_id, buildAdPayload('1', '2', sales).creatives[0].product_specific_type], ['777', '4242', 'PRODUCT_SET']);
     assert.equal(buildAdGroupPayload('1', '2', valid('REACH', { adGroup: { frequency: 3, frequencyDays: 7 } })).frequency_schedule, 7);
   });
 

@@ -62,11 +62,23 @@ export function createFakeTiktok() {
     adMetricsByDate: {}, // conta -> { 'YYYY-MM-DD': { adId -> métricas } }: tem prioridade quando start_date = end_date
     rejectResultMetric: false, // true: o relatório por anúncio recusa a métrica "result"
     failAdsFor: new Set(), // contas cuja listagem de anúncios responde erro
+    rateLimitFor: new Set(), // contas cuja listagem de anúncios responde 40100 (limite de frequência do TikTok)
     failAdStatusFor: new Set(), // contas em que ativar/pausar responde erro
     balances: { bc: {}, advertisers: {} }, // BC -> campos de saldo | BC -> [contas com saldo] (formato inferido: o TikTok não documenta a resposta)
     balanceListKey: 'advertiser_account_list', // nome da lista na resposta de /advertiser/balance/get/ (o TikTok não documenta)
     failBalanceBc: new Set(), // BCs cujo /bc/balance/get/ responde "sem permissão"
     failBalanceAdvertisers: new Set(), // BCs cujo /advertiser/balance/get/ responde "sem permissão"
+    // Catálogo (Catalog API v1.3)
+    catalogs: {}, // BC -> [{ catalog_id, catalog_name, catalog_type, ad_creation_eligible, create_time, update_time, bc_info, catalog_conf }]
+    catalogRegions: ['US', 'BR', 'GB'], // /catalog/available_country/get/
+    locationCurrencies: [{ location: 'US', currency: ['USD'] }, { location: 'BR', currency: ['BRL'] }, { location: 'GB', currency: ['GBP'] }], // /catalog/location_currency/get/
+    catalogProducts: {}, // catálogo -> [produtos aceitos, no formato do upload + audit]
+    catalogFeedLogs: {}, // feed_log_id -> product_feed_log
+    catalogSets: {}, // catálogo -> [{ product_set_id, product_set_name, product_count, conditions }]
+    failCatalogFor: new Set(), // BCs cujas chamadas de catálogo respondem "sem permissão"
+    rejectProductSkus: new Set(), // SKUs que o processamento marca como erro
+    strictCatalog: true, // true: campanha/grupo/anúncio de catálogo são conferidos contra o contrato oficial e recusados se fugirem dele
+    campaignsById: {}, adgroupsById: {}, // o que foi criado (para conferir a coerência entre os níveis)
     manyCampaigns: 0, // >0: devolve essa quantidade de campanhas, paginadas
     // Autorização por link: auth_code -> { token, advertisers } (uso único, como no TikTok).
     authCodes: new Map(),
@@ -84,6 +96,89 @@ export function createFakeTiktok() {
     new Response(JSON.stringify({ code, message, request_id: 'x', data }), { status: 200, headers: { 'content-type': 'application/json' } });
 
   const jsonReply = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  /** Contrato OFICIAL de "Catalog Ads" (Product Sales + catálogo): devolve a mensagem do 1º desvio, ou null. */
+  const catalogCampaignError = (b) => {
+    if (b.objective_type !== 'PRODUCT_SALES') return null;
+    if (b.campaign_product_source !== 'CATALOG') return 'campaign_product_source must be CATALOG for catalog sales';
+    if (b.budget_optimize_on === true) return 'Campaign Budget Optimization is not supported for catalog sales without allowlist';
+    if (b.special_industries?.length) return 'special_industries is allowlist-only for catalog sales';
+    return null;
+  };
+  const catalogAdGroupError = (b) => {
+    const campaign = state.campaignsById[b.campaign_id];
+    const isCatalog = b.product_source === 'CATALOG' || campaign?.objective_type === 'PRODUCT_SALES';
+    if (!isCatalog) return null;
+    if (b.shopping_ads_type !== 'VIDEO') return 'shopping_ads_type must be VIDEO';
+    if (b.product_source !== 'CATALOG') return 'product_source must be CATALOG';
+    if (!/^\d+$/.test(String(b.catalog_id ?? ''))) return 'catalog_id is required';
+    if (!/^\d+$/.test(String(b.catalog_authorized_bc_id ?? ''))) return 'catalog_authorized_bc_id is required for catalogs under a Business Center';
+    for (const key of ['identity_type', 'identity_id', 'identity_authorized_bc_id', 'store_id', 'store_authorized_bc_id', 'saved_audience_id', 'creative_material_mode', 'auto_targeting_enabled', 'smart_audience_enabled']) if (b[key] !== undefined) return `${key} must not be passed`;
+    if (b.promotion_type !== 'WEBSITE') return 'promotion_type must be WEBSITE';
+    if (b.placement_type === 'PLACEMENT_TYPE_NORMAL' && JSON.stringify(b.placements) !== '["PLACEMENT_TIKTOK"]') return 'placements must be ["PLACEMENT_TIKTOK"]';
+    if (!['PLACEMENT_TYPE_NORMAL', 'PLACEMENT_TYPE_AUTOMATIC'].includes(b.placement_type)) return 'placement_type is required';
+    if (b.shopping_ads_retargeting_type !== 'OFF') return 'shopping_ads_retargeting_type must be OFF';
+    const goal = b.optimization_goal;
+    if (!['CLICK', 'CONVERT', 'VALUE'].includes(goal)) return 'optimization_goal must be CLICK, CONVERT or VALUE';
+    if (goal === 'CLICK') {
+      if (b.pixel_id !== undefined || b.optimization_event !== undefined) return 'pixel_id and optimization_event must not be passed for CLICK';
+      if (b.billing_event !== 'CPC') return 'billing_event must be CPC for CLICK';
+    } else {
+      if (!/^\d+$/.test(String(b.pixel_id ?? '')) || !b.optimization_event) return 'pixel_id and optimization_event are required for CONVERT and VALUE';
+      if (b.billing_event !== 'OCPM') return 'billing_event must be OCPM';
+    }
+    if (goal === 'VALUE') {
+      if (b.optimization_event !== 'SHOPPING') return 'optimization_event must be SHOPPING for VALUE';
+      if (b.bid_type !== 'BID_TYPE_NO_BID' || !['VO_HIGHEST_VALUE', 'VO_MIN_ROAS'].includes(b.deep_bid_type)) return 'VALUE requires BID_TYPE_NO_BID and deep_bid_type';
+    } else if (b.deep_bid_type !== undefined || b.roas_bid !== undefined) return 'deep_bid_type and roas_bid must not be passed';
+    if (b.bid_type === 'BID_TYPE_CUSTOM') {
+      if (goal === 'CLICK' && !(b.bid_price > 0)) return 'bid_price is required for CLICK with BID_TYPE_CUSTOM';
+      if (goal === 'CONVERT' && !(b.conversion_bid_price > 0)) return 'conversion_bid_price is required for CONVERT with BID_TYPE_CUSTOM';
+      if (goal === 'CONVERT' && b.bid_price !== undefined) return 'bid_price must not be passed for CONVERT';
+    }
+    if (b.bid_type === 'BID_TYPE_NO_BID' && b.pacing === 'PACING_MODE_FAST') return 'BID_TYPE_NO_BID only supports PACING_MODE_SMOOTH';
+    return null;
+  };
+  const catalogAdError = (c, adgroup) => {
+    if (!adgroup || adgroup.product_source !== 'CATALOG') return null;
+    if (String(c.catalog_id) !== String(adgroup.catalog_id)) return 'catalog_id must match the ad group catalog_id';
+    if (!['ALL', 'PRODUCT_SET', 'CUSTOMIZED_PRODUCTS'].includes(c.product_specific_type)) return 'product_specific_type is required';
+    if (c.product_specific_type === 'PRODUCT_SET' && !c.product_set_id && !c.item_group_ids?.length) return 'product_set_id or item_group_ids is required for PRODUCT_SET';
+    if (c.product_specific_type === 'CUSTOMIZED_PRODUCTS' && !(c.sku_ids?.length >= 1 && c.sku_ids.length <= 20)) return 'sku_ids (1-20) is required for CUSTOMIZED_PRODUCTS';
+    if (c.product_specific_type !== 'PRODUCT_SET' && c.product_set_id !== undefined) return 'product_set_id only with PRODUCT_SET';
+    if (c.product_specific_type !== 'CUSTOMIZED_PRODUCTS' && c.sku_ids !== undefined) return 'sku_ids only with CUSTOMIZED_PRODUCTS';
+    if (c.dynamic_format !== 'UNSET') return 'dynamic_format must be UNSET';
+    if (c.ad_format !== 'SINGLE_VIDEO') return 'ad_format must be SINGLE_VIDEO';
+    if (c.vertical_video_strategy === 'CATALOG_VIDEOS') {
+      if (c.identity_type !== 'CUSTOMIZED_USER' || !c.identity_id) return 'catalog video requires a CUSTOMIZED_USER identity';
+      for (const key of ['video_id', 'image_ids', 'tiktok_item_id', 'music_id', 'card_id']) if (c[key] !== undefined) return `${key} must not be passed for catalog video`;
+    } else if (c.vertical_video_strategy === 'SINGLE_VIDEO') {
+      if (!c.video_id || !c.image_ids?.length) return 'video_id and image_ids are required for single video';
+      if (!c.identity_type || !c.identity_id) return 'identity is required';
+    } else return 'vertical_video_strategy must be CATALOG_VIDEOS or SINGLE_VIDEO';
+    if (!c.ad_text) return 'ad_text is required';
+    if (!c.call_to_action) return 'call_to_action is required';
+    if (!['UNSET', 'DLP'].includes(c.dynamic_destination)) return 'dynamic_destination is required (UNSET or DLP)';
+    if (c.dynamic_destination === 'DLP' && !['CONVERT', 'VALUE'].includes(adgroup.optimization_goal)) return 'dynamic_destination DLP is not supported for CLICK';
+    if (c.dynamic_destination === 'UNSET' && ['CONVERT', 'VALUE'].includes(adgroup.optimization_goal) && !c.landing_page_url) return 'landing_page_url is required';
+    if (c.shopping_ads_fallback_type !== 'CUSTOM' || !/^https?:\/\//.test(c.landing_page_url ?? '')) return 'shopping_ads_fallback_type CUSTOM with landing_page_url is required';
+    return null;
+  };
+
+  const ECOM_REQUIRED = (p) => {
+    const missing = [];
+    if (!p?.sku_id) missing.push('sku_id');
+    if (!p?.title) missing.push('title');
+    if (!p?.description) missing.push('description');
+    if (!['IN_STOCK', 'AVAILABLE_FOR_ORDER', 'PREORDER', 'OUT_OF_STOCK', 'DISCONTINUED'].includes(p?.availability)) missing.push('availability');
+    if (!p?.brand) missing.push('brand');
+    if (!/^https?:\/\//.test(p?.image_url ?? '')) missing.push('image_url');
+    if (!['NEW', 'REFURBISHED', 'USED'].includes(p?.product_detail?.condition)) missing.push('product_detail.condition');
+    if (!(typeof p?.price_info?.price === 'number' && p.price_info.price > 0)) missing.push('price_info.price');
+    if (!/^https?:\/\//.test(p?.landing_page?.landing_page_url ?? '')) missing.push('landing_page.landing_page_url');
+    return missing;
+  };
+  const catalogOf = (bc, id) => (state.catalogs[bc] ?? []).find((c) => c.catalog_id === String(id));
 
   const fetchFn = async (url, init) => {
     const u = new URL(url);
@@ -195,6 +290,7 @@ export function createFakeTiktok() {
         return reply({ [state.balanceListKey]: all.slice((size - 1) * per, size * per), page_info: { page: size, page_size: per, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / per)) } });
       }
       case '/ad/get/': {
+        if (state.rateLimitFor.has(query.advertiser_id)) return reply({}, 40100, 'Too many requests');
         if (state.failAdsFor.has(query.advertiser_id)) return reply({}, 40001, 'No permission to get ads');
         if (Number(query.page_size) > 1000 || Number(query.page_size) < 1) return reply({}, 40002, 'page_size must be between 1 and 1000');
         const all = (state.ads[query.advertiser_id] ?? []).filter((a) => !(JSON.parse(query.filtering ?? '{}').primary_status === 'STATUS_NOT_DELETE' && a.operation_status === 'DELETE'));
@@ -283,17 +379,133 @@ export function createFakeTiktok() {
       case '/file/video/ad/upload/':
         if (state.failUpload.has('video')) return reply({}, 40002, 'Video file is invalid');
         return reply([{ video_id: `v10033g5000video${++state.nextId}`, duration: 5 }]);
+      // ---------- Catálogo (Catalog API v1.3) ----------
+      case '/catalog/get/': {
+        if (state.failCatalogFor.has(query.bc_id)) return reply({}, 40002, 'No permission to access catalog assets');
+        if (!query.bc_id) return reply({}, 40002, 'bc_id is required');
+        const size = Number(query.page_size ?? 10);
+        if (size < 1 || size > 1000) return reply({}, 40002, 'page_size must be between 1 and 1000');
+        const page = Number(query.page ?? 1);
+        let all = state.catalogs[query.bc_id] ?? [];
+        if (query.catalog_id) all = all.filter((c) => c.catalog_id === query.catalog_id);
+        return reply({ list: all.slice((page - 1) * size, page * size), page_info: { page, page_size: size, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / size)) } });
+      }
+      case '/catalog/available_country/get/':
+        if (state.failCatalogFor.has(query.bc_id)) return reply({}, 40002, 'No permission to access catalog assets');
+        if (!query.bc_id) return reply({}, 40002, 'bc_id is required');
+        return reply({ region_codes: state.catalogRegions });
+      case '/catalog/location_currency/get/':
+        return reply({ list: state.locationCurrencies });
+      case '/catalog/create/': {
+        if (state.failCatalogFor.has(body?.bc_id)) return reply({}, 40002, 'No permission to create catalogs');
+        if (typeof body?.bc_id !== 'string' || !body.bc_id) return reply({}, 40002, 'bc_id is required (string)');
+        if (!body.name || body.name.length > 128) return reply({}, 40002, 'name is required (up to 128 characters)');
+        if (!['ECOM', 'HOTEL', 'FLIGHT', 'DESTINATION', 'ENTERTAINMENT', 'AUTO_VEHICLE', 'AUTO_MODEL', 'MINI_SERIES', 'GENERIC', 'ONLINE_TO_OFFLINE'].includes(body.catalog_type)) return reply({}, 40002, 'catalog_type is invalid');
+        const conf = body.catalog_conf;
+        if (!conf || typeof conf !== 'object') return reply({}, 40002, 'catalog_conf is required');
+        if (!state.catalogRegions.includes(conf.region_code)) return reply({}, 40002, 'region_code is not supported');
+        if (!state.locationCurrencies.find((l) => l.location === conf.region_code)?.currency.includes(conf.currency)) return reply({}, 40002, 'currency is not supported for this region');
+        const id = String(++state.nextId);
+        (state.catalogs[body.bc_id] ??= []).push({
+          catalog_id: id, catalog_name: body.name, catalog_type: body.catalog_type, ad_creation_eligible: 'NOT_AVAILABLE',
+          create_time: '2026-11-24 10:00:00', update_time: '2026-11-24 10:00:00', bc_info: { bc_id: body.bc_id, bc_name: `BC ${body.bc_id}`, picture_url: '' },
+          catalog_conf: { country: conf.region_code, currency: conf.currency, channel: 'CLIENT' },
+        });
+        state.catalogProducts[id] = [];
+        return reply({ catalog_id: id });
+      }
+      case '/catalog/overview/': {
+        if (state.failCatalogFor.has(query.bc_id)) return reply({}, 40002, 'No permission to access catalog assets');
+        if (!catalogOf(query.bc_id, query.catalog_id)) return reply({}, 40002, 'Catalog not found');
+        const list = state.catalogProducts[query.catalog_id] ?? [];
+        const count = (status) => list.filter((p) => p.audit.audit_status === status).length;
+        return reply({ approved: count('approved'), rejected: count('rejected'), processing: count('processing') });
+      }
+      case '/catalog/product/upload/': {
+        if (state.failCatalogFor.has(body?.bc_id)) return reply({}, 40002, 'No permission to upload products');
+        if (typeof body?.bc_id !== 'string' || !catalogOf(body.bc_id, body?.catalog_id)) return reply({}, 40002, 'Catalog not found');
+        if (!Array.isArray(body.products) || body.products.length < 1 || body.products.length > 5000) return reply({}, 40002, 'products: allowed size 1-5000');
+        const skus = new Set();
+        for (const [index, p] of body.products.entries()) {
+          const missing = ECOM_REQUIRED(p);
+          if (missing.length) return reply({}, 40002, `products[${index}]: invalid or missing ${missing.join(', ')}`);
+          if (skus.has(p.sku_id)) return reply({}, 40002, `Duplicate SKU IDs are not supported: ${p.sku_id}`);
+          skus.add(p.sku_id);
+        }
+        const list = (state.catalogProducts[body.catalog_id] ??= []);
+        let add = 0; let update = 0; let errors = 0;
+        const errorItems = [];
+        body.products.forEach((p, index) => {
+          if (state.rejectProductSkus.has(p.sku_id)) { errors += 1; errorItems.push({ index: index + 2, sku_id: p.sku_id, title: p.title }); return; }
+          const entry = { ...p, audit: { audit_status: 'approved' }, active_status: 'ACTIVATED', image_status: 'SUCCESS' };
+          const at = list.findIndex((x) => x.sku_id === p.sku_id);
+          if (at >= 0) { list[at] = entry; update += 1; } else { list.push(entry); add += 1; }
+        });
+        const bc = body.bc_id;
+        if (list.some((p) => ['IN_STOCK', 'AVAILABLE_FOR_ORDER', 'PREORDER'].includes(p.availability))) catalogOf(bc, body.catalog_id).ad_creation_eligible = 'AVAILABLE';
+        const feedLogId = String(++state.nextId);
+        state.catalogFeedLogs[feedLogId] = {
+          catalog_id: body.catalog_id, add_count: add, update_count: update, delete_count: 0, error_count: errors, warn_count: 0, process_status: 'SUCCESS', update_mode: 'INCREASE',
+          start_time: '2026-11-24 10:00:00', end_time: '2026-11-24 10:00:01',
+          feed_log_data: errors ? { error_affected_products: [{ affected_product_count: errors, affected_product_item_list: errorItems, field: 'image_url', issue: 'Image is too small', suggestion: 'Upload an image of at least 500x500 px.' }], warn_affected_products: [] } : { error_affected_products: [], warn_affected_products: [] },
+        };
+        return reply({ feed_log_id: feedLogId });
+      }
+      case '/catalog/product/log/': {
+        if (!query.bc_id || !query.catalog_id || !query.feed_log_id) return reply({}, 40002, 'bc_id, catalog_id and feed_log_id are required');
+        const log = state.catalogFeedLogs[query.feed_log_id];
+        if (!log || log.catalog_id !== query.catalog_id) return reply({}, 40002, 'Feed log not found');
+        return reply({ product_feed_log: log });
+      }
+      case '/catalog/product/get/': {
+        if (state.failCatalogFor.has(query.bc_id)) return reply({}, 40002, 'No permission to access catalog assets');
+        if (!catalogOf(query.bc_id, query.catalog_id)) return reply({}, 40002, 'Catalog not found');
+        const size = Number(query.page_size ?? 10);
+        if (size < 1 || size > 500) return reply({}, 40002, 'page_size must be within 500');
+        const page = Number(query.page ?? 1);
+        if (page * size > 10000) return reply({}, 40002, 'page * page_size must be no more than 10,000');
+        let all = state.catalogProducts[query.catalog_id] ?? [];
+        if (query.sku_ids) { const wanted = JSON.parse(query.sku_ids); all = all.filter((p) => wanted.includes(p.sku_id)); }
+        const toListItem = (p) => ({ sku_id: p.sku_id, title: p.title, brand: p.brand, availability: p.availability, image_url: p.image_url, audit: p.audit, active_status: p.active_status, image_status: p.image_status, price: { price: p.price_info.price, sale_price: p.price_info.sale_price, currency: 'USD' }, ad_creation_eligible: p.audit.audit_status === 'approved' && ['IN_STOCK', 'AVAILABLE_FOR_ORDER', 'PREORDER'].includes(p.availability) ? 'AVAILABLE' : 'NOT_AVAILABLE' });
+        if (query.product_available_type === 'AVAILABLE') all = all.filter((p) => toListItem(p).ad_creation_eligible === 'AVAILABLE');
+        return reply({ list: all.slice((page - 1) * size, page * size).map(toListItem), page_info: { page, page_size: size, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / size)) } });
+      }
+      case '/catalog/set/get/': {
+        if (!catalogOf(query.bc_id, query.catalog_id)) return reply({}, 40002, 'Catalog not found');
+        return reply({ list: state.catalogSets[query.catalog_id] ?? [] });
+      }
+      case '/catalog/set/create/': {
+        if (!catalogOf(body?.bc_id, body?.catalog_id)) return reply({}, 40002, 'Catalog not found');
+        if (!body.product_set_name || body.product_set_name.length > 128) return reply({}, 40002, 'product_set_name is required (up to 128 characters)');
+        const rules = body.conditions?.and ?? body.conditions?.or;
+        if (!Array.isArray(rules) || !rules.length) return reply({}, 40002, 'conditions is required');
+        const FIELDS = { title: ['EQUAL', 'NOT_EQUAL', 'WILDCARD', 'I_WILDCARD', 'NOT_WILDCARD', 'I_NOT_WILDCARD', 'PREFIX', 'I_PREFIX'], brand: ['CONTAIN', 'I_CONTAIN', 'EXCLUDE', 'I_EXCLUDE', 'WILDCARD', 'I_WILDCARD', 'NOT_WILDCARD', 'I_NOT_WILDCARD', 'PREFIX', 'I_PREFIX', 'NOT_EQUAL'], availability: ['EQUAL', 'NOT_EQUAL'], condition: ['EQUAL', 'NOT_EQUAL'], price: ['GT', 'GTE', 'LT', 'LTE', 'EQUAL'] };
+        for (const r of rules) if (!FIELDS[r.field]?.includes(r.operation) || r.value === undefined) return reply({}, 40002, `invalid condition ${r.field} ${r.operation}`);
+        const id = String(++state.nextId);
+        const set = { product_set_id: id, catalog_id: body.catalog_id, product_set_name: body.product_set_name, product_count: (state.catalogProducts[body.catalog_id] ?? []).length, conditions: body.conditions };
+        (state.catalogSets[body.catalog_id] ??= []).push(set);
+        return reply({ product_set_id: id, product_set_name: set.product_set_name, product_count: set.product_count });
+      }
+
       case '/campaign/create/':
         if (state.failForAdvertiser.get(body?.advertiser_id) === 'campaign') return reply({}, 40002, 'Campaign name already exists');
         if (state.failCreate.has('campaign')) return reply({}, 40002, 'Campaign name already exists');
+        if (state.strictCatalog && catalogCampaignError(body)) return reply({}, 40002, catalogCampaignError(body));
+        state.campaignsById[String(state.nextId + 1)] = body;
         return reply({ campaign_id: String(++state.nextId) });
       case '/adgroup/create/':
         if (state.failForAdvertiser.get(body?.advertiser_id) === 'adGroup') return reply({}, 40002, 'Invalid optimization goal for this objective');
         if (state.failCreate.has('adGroup')) return reply({}, 40002, 'Invalid optimization goal for this objective');
+        if (state.strictCatalog && catalogAdGroupError(body)) return reply({}, 40002, catalogAdGroupError(body));
+        state.adgroupsById[String(state.nextId + 1)] = body;
         return reply({ adgroup_id: String(++state.nextId) });
       case '/ad/create/':
         if (state.failForAdvertiser.get(body?.advertiser_id) === 'ad') return reply({}, 40002, 'Identity not found');
         if (state.failCreate.has('ad')) return reply({}, 40002, 'Identity not found');
+        if (state.strictCatalog) {
+          const problem = catalogAdError(body?.creatives?.[0] ?? {}, state.adgroupsById[body?.adgroup_id]);
+          if (problem) return reply({}, 40002, problem);
+        }
         return reply({ ad_ids: [String(++state.nextId)] });
       default:
         return reply({}, 40000, 'Unknown path');

@@ -6,15 +6,17 @@ import { avatarEl } from './avatar.js';
 import { openProfile } from './profile.js';
 
 // `areas`: o item aparece para quem tem ao menos uma destas áreas (o dono da conta tem todas); `ownerOnly`: só o dono do espaço.
+// Ordem do menu: Início (sem título, é a porta de entrada) → Ads → BC e CA → Gestão → KPI. O título de cada grupo só aparece se a pessoa vê algum item dele.
 const NAV = [
   { path: '/', label: 'Início', icon: 'home' },
-  { path: '/manager', label: 'Gerenciador', icon: 'sliders', areas: ['campaigns', 'reports'] },
-  { path: '/creatives', label: 'Criativos', icon: 'image', areas: ['creatives'] },
-  { path: '/reports', label: 'Relatórios', icon: 'chart', areas: ['reports'] },
-  { path: '/business-centers', label: 'Contas TikTok', icon: 'building', areas: ['accounts'] },
-  { path: '/balance', label: 'Saldo', icon: 'wallet', areas: ['accounts'] },
+  { path: '/manager', label: 'Gerenciador', icon: 'sliders', areas: ['campaigns', 'reports'], section: 'Ads' },
+  { path: '/creatives', label: 'Criativos', icon: 'image', areas: ['creatives'], section: 'Ads' },
+  { path: '/catalog', label: 'Catálogo', icon: 'box', areas: ['campaigns'], section: 'Ads' },
+  { path: '/business-centers', label: 'Contas TikTok', icon: 'building', areas: ['accounts'], section: 'BC e CA' },
+  { path: '/balance', label: 'Saldo', icon: 'wallet', areas: ['accounts'], section: 'BC e CA' },
   { path: '/team', label: 'Colaboradores', icon: 'users', ownerOnly: true, section: 'Gestão' },
   { path: '/admin', label: 'Administração', icon: 'shield', adminOnly: true, section: 'Gestão' },
+  { path: '/reports', label: 'Relatórios', icon: 'chart', areas: ['reports'], section: 'KPI' },
 ];
 
 const COLLAPSE_KEY = 'tt.sidebar.collapsed';
