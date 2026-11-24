@@ -205,6 +205,7 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
 
 ## Início (chat), Relatórios, Arquivos e demais telas
 
+- **Botões** mais arredondados (14 px; os pequenos 12 px), definidos por duas variáveis de CSS (`--radius-btn`, `--radius-btn-sm`) usadas por botões, abas e controles segmentados.
 - **Menu lateral por grupos:** **Início** (sem título, é a porta de entrada) → **Ads** (Gerenciador, Criativos, Catálogo) → **BC e CA** (Contas TikTok, Saldo) → **Gestão** (Colaboradores, Administração) → **KPI** (Relatórios). O título de um grupo só aparece se a pessoa vê algum item dele; a busca do menu esconde os títulos.
 - **Assistente do Início (chat):** não há um modelo de linguagem por trás; ele reconhece os assuntos abaixo (pelas 4 sugestões ou por palavras-chave na pergunta digitada, em `shared/chat-topics.js`) e responde de verdade:
   **Resumo do desempenho** e **Onde estou gastando** consultam as contas (últimos 7 dias, com variação sobre o período anterior, por moeda, nunca somando moedas diferentes, e observações automáticas; exigem a área Relatórios);
@@ -230,6 +231,7 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
   **Atenção na hospedagem:** a coleta roda DENTRO do servidor; num plano que "dorme" por inatividade (Render gratuito) ela só acontece enquanto o serviço estiver
   acordado. O plano `starter` do `render.yaml` fica sempre ligado; o gratuito não serve para isso. Pendente de conferência com um token real: o formato exato da resposta por hora.
 - **Hook com IA** (botão na biblioteca de Criativos; área "Criativos"): gera com a **Kling** um começo de **2 a 3 segundos**, fora do padrão, para prender a
+  **Roda no servidor, não no navegador:** gerar (Kling) e juntar ao vídeo (FFmpeg) continuam mesmo que a pessoa feche o pop-up, o site ou o navegador. O botão "Hook com IA" mostra uma **bolinha piscando** enquanto houver algo gerando ou sendo juntado (ela volta sozinha ao reabrir o site e some ao terminar, com um aviso e a biblioteca atualizada). Se o **servidor reiniciar** no meio da junção (ex.: uma atualização), o pedido fica guardado no banco (`apply_creative_id`, `apply_name`, `apply_with_video`) e a junção é **retomada** sozinha ao subir (até 2 retomadas; vídeo apagado nesse meio tempo ou pedido sem dados falha com mensagem clara, nunca guarda só o hook por engano).
   atenção (9 estilos "quebra-padrão" + ideia extra opcional; não precisa falar do produto), mostra a prévia e, com a sua escolha, **junta o hook ao início de um vídeo
   da biblioteca** (FFmpeg, no tamanho do vídeo, com áudio mudo no trecho do hook) ou guarda só o hook. O vídeo original **nunca é alterado**: o resultado é um criativo
   NOVO marcado como **"Gerado por IA"** (selo na biblioteca e aviso para ativar a divulgação de conteúdo de IA do TikTok ao publicar). A Kling gera no mínimo 3 s

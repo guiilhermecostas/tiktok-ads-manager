@@ -480,6 +480,19 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['manager_views'], revoke: ['manager_views'], identity: ['manager_views'] })}
     `,
   },
+  {
+    version: 16,
+    description: 'Hook com IA: a junção ao vídeo sobrevive a reinício do servidor (guarda o vídeo escolhido e o nome do resultado)',
+    sql: `
+      -- Ao pedir a junção, o servidor guarda qual vídeo e qual nome; se reiniciar no meio (ex.: atualização), retoma de onde parou em vez de
+      -- falhar. As tentativas de retomada são contadas para um problema que derruba o servidor não ficar se repetindo para sempre.
+      ALTER TABLE creative_hooks
+        ADD COLUMN apply_creative_id INTEGER REFERENCES creatives(id) ON DELETE SET NULL,
+        ADD COLUMN apply_name        TEXT    CHECK (apply_name IS NULL OR char_length(apply_name) BETWEEN 1 AND 100),
+        ADD COLUMN apply_with_video  BOOLEAN NOT NULL DEFAULT false,  -- a junção era com um vídeo (se ele for apagado, apply_creative_id vira NULL e a retomada avisa em vez de só guardar o hook)
+        ADD COLUMN apply_attempts    INTEGER NOT NULL DEFAULT 0 CHECK (apply_attempts >= 0);
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

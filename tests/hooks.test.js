@@ -590,7 +590,7 @@ describe('Hook com IA: criar, gerar, aplicar', () => {
     }
   });
 
-  it('depois de uma queda do servidor, o que estava "ajustando" volta a ser acompanhado e aplicações interrompidas falham', async () => {
+  it('depois de uma queda do servidor, o que estava "ajustando" volta a ser acompanhado e uma junção SEM os dados guardados (pedido antigo) falha com mensagem clara', async () => {
     const user = await owner();
     fake.state.pollsToSucceed = 3;
     const hook = (await create(user)).json.hooks[0];
@@ -605,6 +605,71 @@ describe('Hook com IA: criar, gerar, aplicar', () => {
     assert.equal(interrupted.applying, false);
     assert.match(interrupted.applyError, /interrompida/);
     assert.equal((await until(user, hook.id, ['ready', 'failed'])).status, 'ready');
+  });
+
+  it('pedir a junção GUARDA o vídeo escolhido e o nome, e ao terminar limpa esses dados', async () => {
+    const user = await owner();
+    const main = await uploadVideo(user, { audio: true, name: 'Anúncio guardado' });
+    const hook = await ready(user);
+    const res = await user.client.post(`/api/hooks/${hook.id}/apply`, { creativeId: main.id, name: 'Nome combinado' });
+    assert.equal(res.status, 202, res.text);
+    const saved = await one(ctx.db, 'SELECT apply_status, apply_creative_id, apply_name, apply_attempts, apply_with_video FROM creative_hooks WHERE id = $1', [hook.id]);
+    assert.deepEqual([saved.apply_status, saved.apply_creative_id, saved.apply_name, saved.apply_attempts, saved.apply_with_video], ['running', main.id, 'Nome combinado', 0, true]);
+    await ctx.hooks.idle();
+    const cleared = await one(ctx.db, 'SELECT apply_status, apply_creative_id, apply_name, apply_with_video FROM creative_hooks WHERE id = $1', [hook.id]);
+    assert.deepEqual([cleared.apply_status, cleared.apply_creative_id, cleared.apply_name, cleared.apply_with_video], [null, null, null, false]);
+  });
+
+  it('SE O SERVIDOR REINICIAR no meio da junção, ela é RETOMADA sozinha e o vídeo novo aparece na biblioteca', async () => {
+    const user = await owner();
+    const main = await uploadVideo(user, { audio: true, name: 'Anúncio retomado' });
+    const hook = await ready(user);
+    // simula o que o servidor deixou no banco quando caiu: junção "em andamento" com o pedido guardado
+    await run(ctx.db, "UPDATE creative_hooks SET apply_status = 'running', apply_creative_id = $2, apply_with_video = true, apply_name = 'Retomado após reinício', apply_attempts = 0 WHERE id = $1", [hook.id, main.id]);
+    assert.equal((await get(user, hook.id)).applying, true);
+    await ctx.hooks.start(); // "o servidor subiu de novo"
+    ctx.hooks.stop();
+    await ctx.hooks.idle();
+    const done = await get(user, hook.id);
+    assert.deepEqual([done.applying, done.applyError], [false, null]);
+    assert.ok(done.creativeId, 'o criativo novo foi criado');
+    const made = (await user.client.get(`/api/creatives/${done.creativeId}`)).json.creative;
+    assert.deepEqual({ name: made.name, kind: made.kind, ai: made.aiGenerated, hasFile: made.hasFile }, { name: 'Retomado após reinício', kind: 'video', ai: true, hasFile: true });
+    const { file } = await download(user, `/api/creatives/${made.id}/file`);
+    const info = await probeFile(file);
+    assert.ok(info.durationSeconds > 2, 'o vídeo juntado tem o hook + o anúncio');
+    assert.equal((await one(ctx.db, 'SELECT apply_attempts FROM creative_hooks WHERE id = $1', [hook.id])).apply_attempts, 1, 'a retomada foi contada');
+  });
+
+  it('retomada: pedido antigo sem dados, já retomado demais ou com o vídeo apagado nesse meio tempo falha com mensagem clara', async () => {
+    const user = await owner();
+    const main = await uploadVideo(user, { audio: true, name: 'Vai sumir' });
+    const [legacy, tooMany, vanished] = [await ready(user), await ready(user, { style: 'paper-tear' }), await ready(user, { style: 'liquid-splash' })];
+    await run(ctx.db, "UPDATE creative_hooks SET apply_status = 'running' WHERE id = $1", [legacy.id]); // sem apply_name
+    await run(ctx.db, "UPDATE creative_hooks SET apply_status = 'running', apply_creative_id = $2, apply_with_video = true, apply_name = 'x', apply_attempts = 2 WHERE id = $1", [tooMany.id, main.id]);
+    await run(ctx.db, "UPDATE creative_hooks SET apply_status = 'running', apply_creative_id = $2, apply_with_video = true, apply_name = 'y' WHERE id = $1", [vanished.id, main.id]);
+    assert.equal((await user.client.delete(`/api/creatives/${main.id}`)).status, 204); // o vínculo vira NULL (ON DELETE SET NULL), mas "era com vídeo" fica guardado
+    assert.equal((await one(ctx.db, 'SELECT apply_creative_id FROM creative_hooks WHERE id = $1', [vanished.id])).apply_creative_id, null);
+    await ctx.hooks.start();
+    ctx.hooks.stop();
+    await ctx.hooks.idle();
+    for (const id of [legacy.id, tooMany.id]) {
+      const row = await get(user, id);
+      assert.equal(row.applying, false);
+      assert.match(row.applyError, /interrompida/);
+    }
+    const guarded = await get(user, vanished.id);
+    assert.equal(guarded.applying, false, 'não fica preso em "juntando"');
+    assert.match(guarded.applyError, /vídeo escolhido foi apagado/);
+    assert.equal(guarded.creativeId, null, 'e NÃO guardou só o hook por engano');
+  });
+
+  it('as colunas novas são protegidas: nome de 1 a 100 caracteres e tentativas nunca negativas', async () => {
+    const user = await owner();
+    const hook = await ready(user);
+    for (const sql of ["UPDATE creative_hooks SET apply_name = '' WHERE id = $1", `UPDATE creative_hooks SET apply_name = '${'x'.repeat(101)}' WHERE id = $1`, 'UPDATE creative_hooks SET apply_attempts = -1 WHERE id = $1']) {
+      await assert.rejects(run(ctx.db, sql, [hook.id]), (e) => e.code === '23514', sql);
+    }
   });
 
   it('hooks antigos e não usados são apagados (e o arquivo também)', async () => {

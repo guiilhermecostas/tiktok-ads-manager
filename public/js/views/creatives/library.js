@@ -3,6 +3,7 @@ import { h, icon, setChildren } from '../../dom.js';
 import { formatBytes, formatDate } from '../../format.js';
 import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, spinner, toast } from '../../ui.js';
 import { DRAG_TYPE, FOLDER_ALL, FOLDER_NONE, createFolders, folderIdOf } from './folders.js';
+import { createHookActivity } from './hook-activity.js';
 import { openHookDialog } from './hook-dialog.js';
 import { creativeThumb } from './thumb.js';
 import { createUploader, uploadButton } from './uploader.js';
@@ -319,16 +320,35 @@ export async function creativesView() {
   document.addEventListener('dragover', onDragOver);
   document.addEventListener('drop', onDrop);
 
-  const actions = h('div', { class: 'page-header__actions' }, button('Hook com IA', { onClick: () => openHookDialog({ onCreated: () => { folders.refresh(); reload(); } }) }), button('Já está no TikTok? Adicionar por ID', { onClick: addFromTikTok }), uploadButton(uploader));
+  // Botão "Hook com IA": uma bolinha piscando mostra que há hook gerando ou sendo juntado a um vídeo. O trabalho roda no SERVIDOR, então a bolinha
+  // continua mesmo com o pop-up fechado (e volta ao reabrir o site). Ao terminar com o pop-up fechado, a biblioteca se atualiza sozinha.
+  const hookDot = h('span', { class: 'pulse-dot', 'aria-hidden': 'true' });
+  const hookButton = button('Hook com IA', { onClick: () => {
+    activity.pause();
+    openHookDialog({ onCreated: () => { folders.refresh(); reload(); }, onClose: () => activity.resume() });
+  } });
+  const activity = createHookActivity({
+    onBusy: (busy) => {
+      hookButton.classList.toggle('is-busy', busy);
+      if (busy) hookButton.prepend(hookDot);
+      else hookDot.remove();
+      hookButton.title = busy ? 'Há hooks sendo gerados ou juntados a um vídeo. Continua no servidor mesmo se você fechar o site.' : '';
+      hookButton.setAttribute('aria-label', busy ? 'Hook com IA (em andamento)' : 'Hook com IA');
+    },
+    onApplied: () => { folders.refresh(); reload(); },
+  });
+  const actions = h('div', { class: 'page-header__actions' }, hookButton, button('Já está no TikTok? Adicionar por ID', { onClick: addFromTikTok }), uploadButton(uploader));
   setChildren(root, h('div', { class: 'page-header' }, h('div', null, h('h1', { class: 'page-title' }, 'Criativos'), h('p', { class: 'muted' }, 'Guarde suas imagens e vídeos, organize por oferta em pastas e selecione nas campanhas.')), actions), meter, folders.element, uploader.element, h('div', { class: 'toolbar toolbar--row' }, tabs, search), selectionBar, grid, dropHint);
   drawTabs();
   drawMeter();
   drawSelection();
   await Promise.all([folders.refresh(), load()]);
+  activity.start();
 
   return {
     element: root,
     cleanup: () => {
+      activity.stop();
       loadId += 1;
       clearTimeout(searchTimer);
       document.removeEventListener('dragenter', onDragEnter);

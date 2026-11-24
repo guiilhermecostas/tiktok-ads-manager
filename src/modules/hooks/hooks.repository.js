@@ -87,21 +87,43 @@ export function createHooksRepository(db) {
     async markFailed(id, { code, message }) {
       await db.query("UPDATE creative_hooks SET status = 'failed', error_code = $2, error_message = $3, updated_at = now() WHERE id = $1", [id, String(code).slice(0, 40), String(message).slice(0, 300)]);
     },
-    /** Depois de uma queda do servidor: o que estava processando volta a "gerando" (a tarefa na Kling continua existindo) e aplicações interrompidas falham. */
+    /**
+     * Depois de uma queda do servidor: o que estava processando volta a "gerando" (a tarefa na Kling continua existindo). As aplicações
+     * (junção ao vídeo) NÃO são mexidas aqui: o serviço as retoma (`runningApplies`).
+     */
     async recoverStuck() {
       await db.query("UPDATE creative_hooks SET status = 'generating', updated_at = now() WHERE status = 'processing' AND kling_task_id IS NOT NULL");
       await db.query("UPDATE creative_hooks SET status = 'failed', error_code = 'interrupted', error_message = 'O processamento foi interrompido. Gere o hook de novo.', updated_at = now() WHERE status = 'processing'");
-      await db.query("UPDATE creative_hooks SET apply_status = 'failed', apply_error = 'A aplicação foi interrompida. Tente de novo.', updated_at = now() WHERE apply_status = 'running'");
     },
 
     // ---------- aplicar a um vídeo ----------
-    /** Marca "aplicando" só se estiver pronto e sem outra aplicação em andamento (evita clique duplo). */
-    async beginApply(userId, id) {
-      const { rowCount } = await db.query("UPDATE creative_hooks SET apply_status = 'running', apply_error = NULL, updated_at = now() WHERE user_id = $1 AND id = $2 AND status = 'ready' AND apply_status IS DISTINCT FROM 'running'", [userId, id]);
+    /**
+     * Marca "aplicando" só se estiver pronto e sem outra aplicação em andamento (evita clique duplo). Guarda o vídeo escolhido e o nome do
+     * resultado: se o servidor reiniciar no meio, a junção é retomada com os mesmos dados.
+     */
+    async beginApply(userId, id, { creativeId = null, name }) {
+      const { rowCount } = await db.query(
+        `UPDATE creative_hooks SET apply_status = 'running', apply_error = NULL, apply_creative_id = $3, apply_with_video = $5, apply_name = $4, apply_attempts = 0, updated_at = now()
+          WHERE user_id = $1 AND id = $2 AND status = 'ready' AND apply_status IS DISTINCT FROM 'running'`,
+        [userId, id, creativeId, name, creativeId !== null],
+      );
       return rowCount > 0;
     },
     async finishApply(id, { creativeId = null, error = null }) {
-      await db.query('UPDATE creative_hooks SET apply_status = $2, apply_error = $3, creative_id = COALESCE($4, creative_id), updated_at = now() WHERE id = $1', [id, error ? 'failed' : null, error ? String(error).slice(0, 300) : null, creativeId]);
+      await db.query(
+        `UPDATE creative_hooks SET apply_status = $2, apply_error = $3, creative_id = COALESCE($4, creative_id), apply_creative_id = NULL, apply_with_video = false, apply_name = NULL, updated_at = now() WHERE id = $1`,
+        [id, error ? 'failed' : null, error ? String(error).slice(0, 300) : null, creativeId],
+      );
+    },
+    /** Aplicações que estavam em andamento (usadas ao subir o servidor para retomá-las). */
+    async runningApplies() {
+      const { rows } = await db.query("SELECT * FROM creative_hooks WHERE apply_status = 'running' AND status = 'ready' ORDER BY id");
+      return rows;
+    },
+    /** Conta mais uma retomada e devolve o total (limita um problema que derruba o servidor sempre no mesmo ponto). */
+    async bumpApplyAttempt(id) {
+      const { rows } = await db.query('UPDATE creative_hooks SET apply_attempts = apply_attempts + 1, updated_at = now() WHERE id = $1 RETURNING apply_attempts', [id]);
+      return rows[0]?.apply_attempts ?? 0;
     },
 
     async remove(userId, id) {

@@ -11,8 +11,11 @@ const seconds = (ms) => `${String(ms / 1000).replace('.', ',')} s`;
  * "Hook com IA": cria um começo de 2 a 3 segundos, fora do padrão, para prender a atenção (gerado pela Kling) e o junta ao início
  * de um vídeo da biblioteca. O vídeo original NUNCA é alterado: o resultado é um criativo novo, marcado como "gerado por IA".
  *  - `onCreated()`: chamado ao fechar, se algum criativo novo foi criado (recarrega a biblioteca).
+ *  - `onClose()`: chamado ao fechar (a tela volta a acompanhar o que ainda estiver em andamento).
+ * O trabalho (gerar e juntar) roda no SERVIDOR: fechar esta janela, o site ou o navegador não o interrompe; a biblioteca mostra uma bolinha
+ * piscando no botão "Hook com IA" enquanto houver algo em andamento.
  */
-export function openHookDialog({ onCreated }) {
+export function openHookDialog({ onCreated, onClose }) {
   const state = { info: null, hooks: [], videos: null, style: HOOK_STYLES[0].id, durationMs: 2500, count: 2 };
   let timer = null;
   let closed = false;
@@ -29,6 +32,7 @@ export function openHookDialog({ onCreated }) {
       closed = true;
       clearInterval(timer);
       if (createdAny) onCreated?.();
+      onClose?.();
     },
   });
 
@@ -154,7 +158,9 @@ export function openHookDialog({ onCreated }) {
   function buildCard(hook) {
     const head = h('div', { class: 'hook-item__head' }, h('strong', null, hookStyleLabel(hook.style)), badge(seconds(hook.durationMs), 'neutral'), badge('Gerado por IA', 'neutral'));
     if (hook.applying) {
-      return { element: h('article', { class: 'hook-item' }, head, h('p', { class: 'hook-item__status' }, 'Juntando o hook ao vídeo…'), h('div', { class: 'progress progress--busy', role: 'progressbar', 'aria-label': 'Aplicando o hook' }, h('div', { class: 'progress__bar progress__bar--indeterminate' }))), bar: null };
+      // Botão com a bolinha piscando enquanto junta; a junção roda no servidor e continua se a janela (ou o navegador) for fechada.
+      const busyButton = h('button', { type: 'button', class: 'btn btn--primary btn--sm is-busy', disabled: true, 'aria-label': 'Juntando o hook ao vídeo' }, h('span', { class: 'pulse-dot', 'aria-hidden': 'true' }), 'Juntando…');
+      return { element: h('article', { class: 'hook-item' }, head, h('p', { class: 'hook-item__status' }, 'Juntando o hook ao vídeo…'), h('div', { class: 'progress progress--busy', role: 'progressbar', 'aria-label': 'Aplicando o hook' }, h('div', { class: 'progress__bar progress__bar--indeterminate' })), h('div', { class: 'hook-item__buttons' }, busyButton), h('p', { class: 'muted hook-item__keep' }, 'Pode fechar esta janela ou o navegador: a junção continua no servidor e o vídeo novo aparece na biblioteca.')), bar: null };
     }
     if (hook.status === 'ready') return { element: h('article', { class: 'hook-item hook-item--ready' }, head, readyCard(hook)), bar: null };
     if (hook.status === 'failed') {
@@ -164,7 +170,7 @@ export function openHookDialog({ onCreated }) {
     bar.style.width = `${percentOf(hook)}%`;
     const label = h('span', { class: 'hook-item__percent' }, `${percentOf(hook)}%`);
     return {
-      element: h('article', { class: 'hook-item' }, head, h('p', { class: 'hook-item__status' }, statusText[hook.status] ?? 'Gerando…', ' ', label, h('span', { class: 'muted' }, ' · estimativa, leva de 1 a 3 minutos')), h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': 'Andamento estimado' }, bar), h('div', { class: 'hook-item__buttons' }, button('Cancelar', { small: true, variant: 'danger-ghost', onClick: () => discard(hook) }))),
+      element: h('article', { class: 'hook-item' }, head, h('p', { class: 'hook-item__status' }, statusText[hook.status] ?? 'Gerando…', ' ', label, h('span', { class: 'muted' }, ' · estimativa, leva de 1 a 3 minutos. Pode fechar esta janela: continua no servidor.')), h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': 'Andamento estimado' }, bar), h('div', { class: 'hook-item__buttons' }, button('Cancelar', { small: true, variant: 'danger-ghost', onClick: () => discard(hook) }))),
       bar,
       label,
     };
