@@ -21,6 +21,14 @@ const MAX_AMOUNT_FIELDS = 40;
 const NUMERIC_TEXT_RE = /^-?\d{1,15}(?:\.\d{1,6})?$/;
 // Campos que são identificação, data, situação ou paginação (não são valores em dinheiro).
 const NOT_AMOUNT_RE = /(^|[_.])(id|ids|time|date|days|status|type|code|count|number|page|size|name|currency)($|[_.])/;
+const AD_PAGE_SIZE = 1000; // /ad/get/ e relatórios: page_size de 1 a 1000 (documentação oficial)
+const AD_MAX_PAGES = 10;
+const AD_STATUS_MAX_IDS = 20; // /ad/status/update/: de 1 a 20 anúncios por pedido
+const AD_FIELDS = ['ad_id', 'ad_name', 'advertiser_id', 'campaign_id', 'campaign_name', 'adgroup_id', 'adgroup_name', 'operation_status', 'secondary_status', 'create_time', 'modify_time'];
+// Métricas do relatório por anúncio (nomes da documentação oficial). "clicks" e "cpc" são os de DESTINO (cliques no link).
+const AD_METRICS_FULL = ['spend', 'impressions', 'clicks', 'ctr', 'cpc', 'result', 'cost_per_result', 'conversion', 'cost_per_conversion'];
+const AD_METRICS_BASIC = ['spend', 'impressions', 'clicks', 'ctr', 'cpc', 'conversion', 'cost_per_conversion'];
+const AD_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 const PIXEL_PAGE_SIZE = 20; // documentação oficial de /pixel/list/: page_size de 1 a 20
 const PIXEL_MAX_PAGES = 10;
 const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id'];
@@ -331,6 +339,94 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         if (!list.length || page >= (totalPages || 1)) break;
       }
       return [...accounts.values()];
+    },
+
+    /**
+     * Todos os anúncios da conta, sem os excluídos (`/ad/get/`, páginas de 1000): [{ adId, name, advertiserId, campaignId, campaignName,
+     * adgroupId, adgroupName, operationStatus ('ENABLE'|'DISABLE'|'FROZEN'|null), status (status secundário, ex.: AD_STATUS_DELIVERY_OK),
+     * createdAt/modifiedAt (ISO, UTC) }]. Devolve também `truncated` se passou do limite de páginas.
+     */
+    async listAds(token, advertiserId) {
+      const ads = new Map();
+      let truncated = false;
+      for (let page = 1; page <= AD_MAX_PAGES; page += 1) {
+        const data = await call('/ad/get/', { token, query: { advertiser_id: advertiserId, fields: AD_FIELDS, filtering: { primary_status: 'STATUS_NOT_DELETE' }, page, page_size: AD_PAGE_SIZE } });
+        const list = Array.isArray(data.list) ? data.list : [];
+        for (const item of list) {
+          const adId = digitsOrNull(item?.ad_id);
+          if (!adId || ads.has(adId)) continue;
+          const time = (value) => (AD_TIME_RE.test(String(value ?? '')) ? `${String(value).replace(' ', 'T')}Z` : null);
+          ads.set(adId, {
+            adId,
+            name: String(item.ad_name ?? '').slice(0, 200),
+            advertiserId,
+            campaignId: digitsOrNull(item.campaign_id),
+            campaignName: String(item.campaign_name ?? '').slice(0, 200),
+            adgroupId: digitsOrNull(item.adgroup_id),
+            adgroupName: String(item.adgroup_name ?? '').slice(0, 200),
+            operationStatus: ['ENABLE', 'DISABLE', 'FROZEN'].includes(item.operation_status) ? item.operation_status : null,
+            status: /^[A-Z_]{3,80}$/.test(String(item.secondary_status ?? '')) ? item.secondary_status : null,
+            createdAt: time(item.create_time),
+            modifiedAt: time(item.modify_time),
+          });
+        }
+        const totalPages = num(data.page_info?.total_page);
+        if (!list.length || list.length < AD_PAGE_SIZE || page >= (totalPages || page)) break;
+        if (page === AD_MAX_PAGES) truncated = true;
+      }
+      return { ads: [...ads.values()], truncated };
+    },
+
+    /**
+     * Desempenho por ANÚNCIO no período (`/report/integrated/get/`, nível anúncio; datas no fuso da conta): Map adId -> métricas em número.
+     * Anúncio sem entrega no período não vem no relatório (quem chama trata como zero). Se o TikTok recusar alguma métrica ("result"), repete
+     * com o conjunto básico e informa `hasResult: false`.
+     */
+    async getAdMetrics(token, advertiserId, { startDate, endDate }) {
+      const run = async (metrics) => {
+        const rows = [];
+        for (let page = 1; page <= AD_MAX_PAGES; page += 1) {
+          const data = await call('/report/integrated/get/', {
+            token,
+            query: { advertiser_id: advertiserId, report_type: 'BASIC', data_level: 'AUCTION_AD', dimensions: ['ad_id'], metrics, start_date: startDate, end_date: endDate, page, page_size: AD_PAGE_SIZE },
+          });
+          const list = Array.isArray(data.list) ? data.list : [];
+          rows.push(...list);
+          if (!list.length || list.length < AD_PAGE_SIZE || page >= (num(data.page_info?.total_page) || page)) break;
+        }
+        return rows;
+      };
+      let rows;
+      let hasResult = true;
+      try {
+        rows = await run(AD_METRICS_FULL);
+      } catch (err) {
+        if (!(err instanceof HttpError && err.code === 'tiktok_error')) throw err;
+        hasResult = false;
+        rows = await run(AD_METRICS_BASIC);
+      }
+      const byAd = new Map();
+      for (const row of rows) {
+        const adId = digitsOrNull(row.dimensions?.ad_id);
+        if (!adId) continue;
+        const m = row.metrics ?? {};
+        byAd.set(adId, {
+          spend: num(m.spend), impressions: num(m.impressions), clicks: num(m.clicks), ctr: num(m.ctr), cpc: num(m.cpc),
+          result: num(m.result), costPerResult: num(m.cost_per_result), conversions: num(m.conversion), costPerConversion: num(m.cost_per_conversion),
+        });
+      }
+      return { metrics: byAd, hasResult };
+    },
+
+    /**
+     * Ativa ou pausa anúncios (`/ad/status/update/`: de 1 a 20 por pedido; só ENABLE e DISABLE: este sistema NUNCA exclui anúncios).
+     * Devolve os IDs que o TikTok confirmou.
+     */
+    async updateAdStatus(token, advertiserId, adIds, status) {
+      if (!['ENABLE', 'DISABLE'].includes(status)) throw new HttpError(400, 'Status inválido.', 'validation_error');
+      if (!adIds.length || adIds.length > AD_STATUS_MAX_IDS || !adIds.every((id) => /^\d{1,24}$/.test(id))) throw new HttpError(400, 'Escolha de 1 a 20 anúncios.', 'validation_error');
+      const data = await call('/ad/status/update/', { token, method: 'POST', body: { advertiser_id: advertiserId, ad_ids: adIds, operation_status: status } });
+      return (Array.isArray(data.ad_ids) ? data.ad_ids : []).map((id) => digitsOrNull(id)).filter(Boolean);
     },
 
     /** Campanhas da conta (paginado: até CAMPAIGN_MAX_PAGES páginas; `total` é o total real no TikTok). */

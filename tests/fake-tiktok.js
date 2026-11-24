@@ -57,6 +57,12 @@ export function createFakeTiktok() {
     hourly: {}, // relatório por hora: conta de anúncio -> { 'YYYY-MM-DD': { 14: { spend: 5.5, impressions: 900, clicks: 30, conversion: 1 } } } (hora no fuso da conta)
     hourlyDelayMs: 0, // latência do relatório por hora (testes de coleta simultânea)
     failHourlyFor: new Set(), // contas cujo relatório por hora responde erro do TikTok
+    ads: {}, // conta -> [{ ad_id, ad_name, campaign_id, campaign_name, adgroup_id, adgroup_name, operation_status, secondary_status, create_time, modify_time }]
+    adMetrics: {}, // conta -> { adId -> { spend, impressions, clicks, ctr, cpc, result, cost_per_result, conversion, cost_per_conversion } } (do período pedido)
+    adMetricsByDate: {}, // conta -> { 'YYYY-MM-DD': { adId -> métricas } }: tem prioridade quando start_date = end_date
+    rejectResultMetric: false, // true: o relatório por anúncio recusa a métrica "result"
+    failAdsFor: new Set(), // contas cuja listagem de anúncios responde erro
+    failAdStatusFor: new Set(), // contas em que ativar/pausar responde erro
     balances: { bc: {}, advertisers: {} }, // BC -> campos de saldo | BC -> [contas com saldo] (formato inferido: o TikTok não documenta a resposta)
     balanceListKey: 'advertiser_account_list', // nome da lista na resposta de /advertiser/balance/get/ (o TikTok não documenta)
     failBalanceBc: new Set(), // BCs cujo /bc/balance/get/ responde "sem permissão"
@@ -188,6 +194,30 @@ export function createFakeTiktok() {
         const per = Number(query.page_size);
         return reply({ [state.balanceListKey]: all.slice((size - 1) * per, size * per), page_info: { page: size, page_size: per, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / per)) } });
       }
+      case '/ad/get/': {
+        if (state.failAdsFor.has(query.advertiser_id)) return reply({}, 40001, 'No permission to get ads');
+        if (Number(query.page_size) > 1000 || Number(query.page_size) < 1) return reply({}, 40002, 'page_size must be between 1 and 1000');
+        const all = (state.ads[query.advertiser_id] ?? []).filter((a) => !(JSON.parse(query.filtering ?? '{}').primary_status === 'STATUS_NOT_DELETE' && a.operation_status === 'DELETE'));
+        const size = Number(query.page);
+        const per = Number(query.page_size);
+        const fields = query.fields ? JSON.parse(query.fields) : null;
+        const pick = (a) => (fields ? Object.fromEntries(fields.filter((f) => f in a).map((f) => [f, a[f]])) : a);
+        return reply({ list: all.slice((size - 1) * per, size * per).map(pick), page_info: { page: size, page_size: per, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / per)) } });
+      }
+      case '/ad/status/update/': {
+        if (state.failAdStatusFor.has(body?.advertiser_id)) return reply({}, 40002, 'No permission to update ad status');
+        if (!['ENABLE', 'DISABLE', 'DELETE'].includes(body?.operation_status)) return reply({}, 40002, 'operation_status is invalid');
+        if (!Array.isArray(body?.ad_ids) || body.ad_ids.length < 1 || body.ad_ids.length > 20) return reply({}, 40002, 'ad_ids: allowed quantity 1-20');
+        const mine = state.ads[body.advertiser_id] ?? [];
+        const done = [];
+        for (const ad of mine) {
+          if (!body.ad_ids.includes(ad.ad_id)) continue;
+          ad.operation_status = body.operation_status;
+          ad.secondary_status = body.operation_status === 'ENABLE' ? 'AD_STATUS_DELIVERY_OK' : 'AD_STATUS_DISABLE';
+          done.push(ad.ad_id);
+        }
+        return reply({ status: body.operation_status, ad_ids: done });
+      }
       case '/pixel/list/': {
         if (Number(query.page_size) > 20) return reply({}, 40002, 'page_size must be between 1 and 20'); // limite da documentação oficial
         if (state.failPixels) return reply(null, 40002, 'No permission to access pixels');
@@ -225,6 +255,18 @@ export function createFakeTiktok() {
             })),
             page_info: { page: 1, total_page: 1 },
           });
+        }
+        if (query.data_level === 'AUCTION_AD') { // relatório por anúncio (documentação oficial: dimensions ["ad_id"], page_size até 1000)
+          if (state.failReportFor.has(query.advertiser_id)) return reply({}, 50001, 'Internal error');
+          if (Number(query.page_size) > 1000) return reply({}, 40002, 'page_size must be between 1 and 1000');
+          const metricsAsked = JSON.parse(query.metrics ?? '[]');
+          if (state.rejectResultMetric && metricsAsked.includes('result')) return reply({}, 40002, 'Invalid metric: result');
+          const byDate = state.adMetricsByDate[query.advertiser_id]?.[query.start_date];
+          const source = query.start_date === query.end_date && byDate ? byDate : (state.adMetrics[query.advertiser_id] ?? {});
+          const rows = Object.entries(source).map(([adId, m]) => ({ dimensions: { ad_id: adId }, metrics: Object.fromEntries(metricsAsked.filter((k) => k in m).map((k) => [k, String(m[k])])) }));
+          const size = Number(query.page);
+          const per = Number(query.page_size);
+          return reply({ list: rows.slice((size - 1) * per, size * per), page_info: { page: size, page_size: per, total_number: rows.length, total_page: Math.max(1, Math.ceil(rows.length / per)) } });
         }
         if (state.failReportFor.has(query.advertiser_id)) return reply({}, 50001, 'Internal error');
         return reply({

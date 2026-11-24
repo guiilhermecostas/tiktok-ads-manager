@@ -7,6 +7,7 @@ import { loginView } from './views/login.js';
 import { registerView } from './views/register.js';
 import { statusView } from './views/status.js';
 import { homeChatView } from './views/home-chat.js';
+import { managerView } from './views/manager.js';
 import { reportsView } from './views/reports.js';
 import { balanceAccountsView, balanceBcView } from './views/balance.js';
 import { reportsHourlyView } from './views/reports-hourly.js';
@@ -30,6 +31,7 @@ const root = document.getElementById('app');
 const PROTECTED_ROUTES = {
   '/': { title: 'Início', view: homeChatView },
   '/campaigns': { title: 'Campanhas', view: campaignsView, areas: ['campaigns'] },
+  '/manager': { title: 'Gerenciador', view: managerView, areas: ['campaigns', 'reports'] },
   '/creatives': { title: 'Criativos', view: creativesView, areas: ['creatives'] },
   '/reports': { title: 'Relatórios', view: reportsView, areas: ['reports'] },
   '/reports/hourly': { title: 'Gasto por hora', view: reportsHourlyView, areas: ['reports'] },

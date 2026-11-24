@@ -8,6 +8,7 @@ import { openProfile } from './profile.js';
 // `areas`: o item aparece para quem tem ao menos uma destas áreas (o dono da conta tem todas); `ownerOnly`: só o dono do espaço.
 const NAV = [
   { path: '/', label: 'Início', icon: 'home' },
+  { path: '/manager', label: 'Gerenciador', icon: 'sliders', areas: ['campaigns', 'reports'] },
   { path: '/creatives', label: 'Criativos', icon: 'image', areas: ['creatives'] },
   { path: '/reports', label: 'Relatórios', icon: 'chart', areas: ['reports'] },
   { path: '/business-centers', label: 'Contas TikTok', icon: 'building', areas: ['accounts'] },

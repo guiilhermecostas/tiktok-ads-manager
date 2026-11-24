@@ -459,6 +459,27 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['creative_folders'], revoke: ['creative_folders'], identity: ['creative_folders'] })}
     `,
   },
+  {
+    version: 15,
+    description: 'Gerenciador de anúncios: visualizações salvas (colunas, ordem, filtros) de cada pessoa',
+    sql: `
+      -- Cada PESSOA guarda as próprias visualizações (colunas na ordem escolhida, ordenação, filtros e período). A configuração é validada
+      -- pela aplicação (só campos conhecidos) e limitada em tamanho; uma visualização por pessoa pode ser a padrão.
+      CREATE TABLE manager_views (
+        id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id    INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name       TEXT        NOT NULL CHECK (char_length(name) BETWEEN 1 AND 40),
+        config     JSONB       NOT NULL CHECK (jsonb_typeof(config) = 'object' AND octet_length(config::text) <= 4000),
+        is_default BOOLEAN     NOT NULL DEFAULT false,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX manager_views_user_name_key ON manager_views (user_id, lower(name));
+      CREATE UNIQUE INDEX manager_views_one_default ON manager_views (user_id) WHERE is_default;
+
+      ${protectTables({ rls: ['manager_views'], revoke: ['manager_views'], identity: ['manager_views'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

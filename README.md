@@ -281,6 +281,29 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
 - Os arquivos ficam em disco no servidor (`CREATIVES_DIR`, padrão `data/creatives`): inclua essa pasta no backup. O armazenamento está
   atrás de uma interface (`src/modules/creatives/creative-storage.js`) para trocar por S3/Supabase Storage no futuro.
 
+## Gerenciador de anúncios
+
+**Gerenciador** (menu lateral; exige a área “Campanhas” ou “Relatórios”) mostra, em uma única tabela, **os anúncios de todas as contas** das Business Centers ativas
+da pessoa, carregados de uma vez (contas consultadas 6 por vez, com cache de 60 s; “Atualizar” ignora o cache). Colunas padrão: **anúncio** (com ID e campanha), **status**,
+**ativo** (interruptor), **publicado em**, **resultado**, **valor gasto**, **CPC (link)**, **cliques (link)** e **CTR**; opcionais: conta, campanha, grupo, impressões,
+custo por resultado, conversões, custo por conversão e editado em. Rodapé com **total por moeda** (moedas diferentes nunca são somadas).
+
+- **Período:** o padrão é **Hoje**; também Ontem, Últimos 7/14/30 dias, Este mês, Mês passado e Personalizado (até 90 dias). **Cada conta usa o próprio fuso** para saber o que é
+  “hoje” (o relatório do TikTok trabalha no fuso da conta). Conta com erro aparece num aviso e as demais seguem normalmente.
+- **Filtros** (instantâneos, no navegador): conta, situação (ativos, pausados, em veiculação, com problema), só com gasto, e busca por nome, ID, campanha, grupo ou conta.
+- **Colunas:** arraste o título para mudar a ordem ou use a janela **Colunas** (marcar/desmarcar, setas ↑↓, restaurar padrão). “Anúncio” é sempre visível.
+- **Visualizações salvas (por pessoa, até 20):** guardam colunas, ordem, ordenação, filtros e período (não a busca nem datas personalizadas). Dá para salvar, atualizar, salvar como nova,
+  excluir e marcar **uma** como padrão (abre sozinha). Tabela `manager_views` (RLS, sem acesso direto pela API do banco; nome único sem diferenciar maiúsculas).
+- **Ativar/pausar:** interruptor por anúncio e ação em massa (seleção + “Ativar”/“Pausar” com confirmação), em lotes de 20 por conta; o interruptor responde na hora e volta se o TikTok recusar.
+  Exige a área “Campanhas”. **Nunca exclui** anúncios (o sistema só envia `ENABLE`/`DISABLE`); anúncio encerrado (`FROZEN`) não pode ser ativado.
+- **Contrato oficial do TikTok (conferido na documentação):** lista em `GET /ad/get/` (campos pedidos em `fields`, `filtering.primary_status = STATUS_NOT_DELETE`, `page_size` até 1000,
+  `secondary_status` traduzido em `shared/ad-status.js`); desempenho em `GET /report/integrated/get/` (`report_type BASIC`, `data_level AUCTION_AD`, `dimensions ["ad_id"]`, métricas
+  `spend, impressions, clicks, ctr, cpc, result, cost_per_result, conversion, cost_per_conversion`; “clicks” e “cpc” são os de **destino**, isto é, cliques no link); mudança de status em
+  `POST /ad/status/update/` (1 a 20 anúncios por chamada). Se o TikTok recusar a métrica `result`, repete sem ela e a coluna Resultado mostra “—”.
+- **Pendente de conferência com o TikTok real:** as respostas de `/ad/get/` e do relatório por anúncio com um token de verdade (os testes usam um TikTok simulado e o teste de contrato
+  `npm run test:live` confirma que os endpoints existem). API: `GET /api/tiktok/manager/ads?preset=&from=&to=&refresh=1`, `POST /api/tiktok/manager/ads/status`,
+  `GET/POST/PATCH/DELETE /api/tiktok/manager/views`. Regras de colunas/períodos em `shared/manager-columns.js` (servidor e tela usam a mesma fonte).
+
 ## Campanhas (assistente passo a passo)
 
 - O botão flutuante **Publicar campanha** (canto inferior direito, em todas as telas) abre o assistente em um **pop-up**, já no passo
@@ -337,6 +360,7 @@ src/
     files/             arquivos anexados da conta (criptografados, só download)
     mail/              envio de e-mail pelo Resend e modelo do convite
     hooks/             Hook com IA: cliente da Kling, geração em segundo plano, FFmpeg (cortar e juntar ao vídeo), rotas
+    manager/           Gerenciador de anúncios: todos os anúncios das contas, ativar/pausar, visualizações salvas (serviço, repositório, rotas)
 scripts/               utilitários: db (check/migrate), import-sqlite, supabase-setup.sql
 shared/                regras compartilhadas (navegador + servidor): campanhas, etiquetas de conta, permissões por área, criação de contas
 public/                SPA em JS puro (sem innerHTML), CSS e views
