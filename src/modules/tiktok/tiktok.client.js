@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { redactUrl } from '../../../shared/catalog.js';
 import { HttpError } from '../../lib/http-error.js';
 import { describeProxyError } from '../proxies/proxy-errors.js';
 
@@ -610,6 +611,73 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
     async createProductSet(token, { bcId, catalogId, name, conditions }) {
       const data = await call('/catalog/set/create/', { token, method: 'POST', body: { bc_id: bcId, catalog_id: catalogId, product_set_name: name, conditions } });
       return { id: requireId(data.product_set_id, 'do conjunto de produtos'), name: String(data.product_set_name ?? name).slice(0, 200), productCount: numOrNull(data.product_count) };
+    },
+
+    // ---------- Sincronização automática do catálogo: feeds de dados ----------
+    /**
+     * Feeds do catálogo (`/catalog/feed/get/`): o feed padrão (envios manuais, sem URL) e os agendados. Nunca devolve credenciais: o TikTok não as
+     * devolve e, se a URL de um feed criado fora daqui trouxer usuário/senha, eles são removidos (`redactUrl`).
+     */
+    async listCatalogFeeds(token, { bcId, catalogId }) {
+      const data = await call('/catalog/feed/get/', { token, query: { bc_id: bcId, catalog_id: catalogId } });
+      return (Array.isArray(data.feed_list) ? data.feed_list : []).map((f) => {
+        const p = f?.last_update_param ?? {};
+        return {
+          id: digitsOrNull(f?.feed_id),
+          name: String(f?.feed_name ?? '').slice(0, 200),
+          type: f?.feed_type === 'COUNTRY_FEED' ? 'COUNTRY_FEED' : 'DATA_FEED',
+          status: f?.status === 'ON' ? 'ON' : 'OFF',
+          url: redactUrl(p.uri),
+          updateMode: ['INCREMENTAL', 'OVERWRITE', 'SUPPLEMENT'].includes(p.update_mode) ? p.update_mode : null,
+          intervalType: ['HOURLY', 'DAILY', 'MONTHLY'].includes(p.interval_type) ? p.interval_type : null,
+          intervalCount: numOrNull(p.interval_count), hour: numOrNull(p.hour), minute: numOrNull(p.minute), dayOfMonth: numOrNull(p.day_of_month),
+          timezone: typeof p.timezone === 'string' ? p.timezone.slice(0, 64) : null,
+          nextUpdateTime: typeof (f?.next_update_time ?? f?.last_update_param?.next_update_time) === 'string' ? String(f.next_update_time ?? p.next_update_time).slice(0, 19) : null,
+          productCount: numOrNull(f?.number_of_products),
+        };
+      }).filter((f) => f.id);
+    },
+
+    /** Cria um feed agendado (`/catalog/feed/create/`): o TikTok busca a URL sozinho e atualiza preço e disponibilidade. Devolve o feed criado. */
+    async createCatalogFeed(token, { bcId, catalogId, name, updateMode, url, username, password, intervalType, intervalCount, timezone, hour = 0, minute = 0, dayOfMonth }) {
+      const data = await call('/catalog/feed/create/', {
+        token, method: 'POST',
+        body: {
+          bc_id: bcId, catalog_id: catalogId, feed_name: name, update_mode: updateMode, feed_type: 'DATA_FEED',
+          schedule_param: {
+            source: { uri: url, ...(username ? { username, password } : {}) },
+            interval_type: intervalType, interval_count: intervalCount, timezone, hour, minute,
+            ...(intervalType === 'MONTHLY' ? { day_of_month: dayOfMonth } : {}),
+          },
+        },
+      });
+      return { id: requireId(data.feed_id, 'do feed'), name: String(data.feed_name ?? name).slice(0, 200), status: data.status === 'ON' ? 'ON' : 'OFF', nextUpdateTime: typeof data.next_update_time === 'string' ? data.next_update_time.slice(0, 19) : null };
+    },
+
+    /** Liga (ON) ou desliga (OFF) a agenda de um feed (`/catalog/feed/switch/`). O TikTok só aceita um status diferente do atual. */
+    async switchCatalogFeed(token, { bcId, catalogId, feedId, status }) {
+      if (!['ON', 'OFF'].includes(status)) throw new HttpError(400, 'Status inválido.', 'validation_error');
+      await call('/catalog/feed/switch/', { token, method: 'POST', retry: true, body: { bc_id: bcId, catalog_id: catalogId, feed_id: feedId, status } });
+    },
+
+    /** Exclui um feed (`/catalog/feed/delete/`). */
+    async deleteCatalogFeed(token, { bcId, catalogId, feedId }) {
+      await call('/catalog/feed/delete/', { token, method: 'POST', body: { bc_id: bcId, catalog_id: catalogId, feed_id: feedId } });
+    },
+
+    /** As últimas execuções do feed (`/catalog/feed/log/`, até 10): quando rodou e quantos produtos entraram, mudaram, saíram ou deram erro. */
+    async getCatalogFeedLog(token, { bcId, catalogId, feedId }) {
+      const data = await call('/catalog/feed/log/', { token, query: { bc_id: bcId, catalog_id: catalogId, feed_id: feedId } });
+      return (Array.isArray(data.feed_logs) ? data.feed_logs : []).slice(0, 10).map((entry) => {
+        const status = entry?.last_update_status ?? entry?.update_status ?? {};
+        const time = entry?.last_update_time ?? entry?.update_time ?? {};
+        return {
+          status: ['WAITING', 'PROCESSING', 'SUCCESS', 'FAILED'].includes(status.process_status) ? status.process_status : 'PROCESSING',
+          addCount: numOrNull(status.add_count) ?? 0, updateCount: numOrNull(status.update_count) ?? 0, removeCount: numOrNull(status.remove_count) ?? 0,
+          errorCount: numOrNull(status.error_count) ?? 0, warnCount: numOrNull(status.warn_count) ?? 0,
+          startTime: typeof time.start_time === 'string' ? time.start_time.slice(0, 19) : null, endTime: typeof time.end_time === 'string' ? time.end_time.slice(0, 19) : null,
+        };
+      });
     },
 
     /** Campanhas da conta (paginado: até CAMPAIGN_MAX_PAGES páginas; `total` é o total real no TikTok). */

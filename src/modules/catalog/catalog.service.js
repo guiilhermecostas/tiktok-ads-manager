@@ -1,4 +1,4 @@
-import { MAX_PRODUCTS_PER_REQUEST, buildSetConditions, isCatalogId, normalizeCatalogInput, normalizeProduct, normalizeProductSetName } from '../../../shared/catalog.js';
+import { MAX_PRODUCTS_PER_REQUEST, buildSetConditions, isCatalogId, normalizeCatalogInput, normalizeFeedInput, normalizeProduct, normalizeProductSetName } from '../../../shared/catalog.js';
 import { HttpError, badRequest, forbidden, notFound } from '../../lib/http-error.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
 import { toTikTokProduct } from './catalog.payloads.js';
@@ -191,6 +191,45 @@ export function createCatalogService({ tiktok, connections, log = console }) {
     async productSets(actor, ref) {
       const connection = await catalogRef(actor, ref);
       return tiktok.withToken(connection.id, (token, api) => api.listProductSets(token, { bcId: ref.bcId, catalogId: ref.catalogId }));
+    },
+
+    // ---------- sincronização automática (feeds de dados) ----------
+    async feeds(actor, ref) {
+      const connection = await catalogRef(actor, ref);
+      return tiktok.withToken(connection.id, (token, api) => api.listCatalogFeeds(token, { bcId: ref.bcId, catalogId: ref.catalogId }));
+    },
+
+    /**
+     * Cria um feed agendado: o TikTok busca a URL sozinho e atualiza preço e disponibilidade. Só dono/admin. O login do feed (se houver) vai direto
+     * ao TikTok: não é guardado, devolvido nem registrado em log.
+     */
+    async createFeed(actor, ref, input) {
+      const connection = await catalogRef(actor, ref, { write: true });
+      const { value, errors } = normalizeFeedInput(input);
+      if (errors.length) throw badRequest(errors[0].message, 'validation_error');
+      const feed = await tiktok.withToken(connection.id, (token, api) => api.createCatalogFeed(token, { bcId: ref.bcId, catalogId: ref.catalogId, ...value }));
+      log.info?.(`[catalogo] feed agendado criado: usuário ${actor.id}, conexão ${connection.id}`); // sem URL, login nem dados
+      return feed;
+    },
+
+    async setFeedStatus(actor, ref, feedId, status) {
+      const connection = await catalogRef(actor, ref, { write: true });
+      if (typeof feedId !== 'string' || !NUMERIC_ID.test(feedId)) throw badRequest('Feed inválido.');
+      if (!['ON', 'OFF'].includes(status)) throw badRequest('Status inválido (use ON ou OFF).');
+      await tiktok.withToken(connection.id, (token, api) => api.switchCatalogFeed(token, { bcId: ref.bcId, catalogId: ref.catalogId, feedId, status }));
+      return { feedId, status };
+    },
+
+    async deleteFeed(actor, ref, feedId) {
+      const connection = await catalogRef(actor, ref, { write: true });
+      if (typeof feedId !== 'string' || !NUMERIC_ID.test(feedId)) throw badRequest('Feed inválido.');
+      await tiktok.withToken(connection.id, (token, api) => api.deleteCatalogFeed(token, { bcId: ref.bcId, catalogId: ref.catalogId, feedId }));
+    },
+
+    async feedLog(actor, ref, feedId) {
+      const connection = await catalogRef(actor, ref);
+      if (typeof feedId !== 'string' || !NUMERIC_ID.test(feedId)) throw badRequest('Feed inválido.');
+      return tiktok.withToken(connection.id, (token, api) => api.getCatalogFeedLog(token, { bcId: ref.bcId, catalogId: ref.catalogId, feedId }));
     },
 
     async createProductSet(actor, ref, { name, filters }) {

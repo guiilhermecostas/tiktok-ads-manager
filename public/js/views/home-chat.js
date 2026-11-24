@@ -8,6 +8,7 @@ import { answerFor } from './chat/answers.js';
 import { renderBlocks } from './chat/rich.js';
 
 const MAX_LENGTH = 4000;
+const TYPING_MS = 600;
 const SUGGESTIONS = TOPICS;
 
 // A conversa vale só nesta sessão do navegador (nada vai ao servidor) e é descartada se outra pessoa entrar.
@@ -72,10 +73,11 @@ export function homeChatView(ctx) {
     draw();
     const owner = conversation;
     const topic = topicId ?? detectTopic(value);
+    const pause = new Promise((resolve) => { setTimeout(resolve, TYPING_MS); }); // o "digitando…" aparece por um instante: a resposta não "bate" de uma vez
     answerFor(topic).then(
       (blocks) => ({ blocks, text: blocksToText(blocks) }),
       (err) => ({ blocks: null, text: `Não consegui buscar isso agora: ${err.message || 'erro desconhecido'}. Tente de novo em instantes.` }),
-    ).then((reply) => {
+    ).then((reply) => pause.then(() => reply)).then((reply) => {
       waiting = false;
       if (conversation !== owner) return; // trocou de conversa ou de usuária no meio
       conversation.messages = conversation.messages.filter((m) => !m.typing);

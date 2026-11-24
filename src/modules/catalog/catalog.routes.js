@@ -20,6 +20,7 @@ const intIn = (value, fallback, min, max) => {
  *  - POST   /:catalogId/products       { connectionId, bcId, products: [...] }   envia um lote (até 500)
  *  - GET    /:catalogId/logs/:feedLogId?connectionId=&bcId=         resultado do processamento de um envio
  *  - GET/POST /:catalogId/sets         conjuntos de produtos
+ *  - GET/POST /:catalogId/feeds, POST .../feeds/:feedId/status, DELETE .../feeds/:feedId, GET .../feeds/:feedId/log   sincronização automática (feed de dados)
  * A conexão e a Business Center vêm em TODO pedido: o serviço confere que a conexão é do usuário e que a BC é uma das dela.
  */
 export function createCatalogRouter({ service, limits = {} }) {
@@ -73,6 +74,30 @@ export function createCatalogRouter({ service, limits = {} }) {
 
   router.get('/:catalogId/logs/:feedLogId', canUse, throttle(readLimiter), async (req, res) => {
     res.json(await service.productLog(req.actor, refOf(req.query, req.params), req.params.feedLogId));
+  });
+
+  // ---------- sincronização automática (feeds) ----------
+  router.get('/:catalogId/feeds', canUse, throttle(readLimiter), async (req, res) => {
+    res.json({ feeds: await service.feeds(req.actor, refOf(req.query, req.params)) });
+  });
+
+  router.post('/:catalogId/feeds', canUse, throttle(writeLimiter), async (req, res) => {
+    const body = asObject(req.body);
+    res.status(201).json({ feed: await service.createFeed(req.actor, refOf(body, req.params), body) });
+  });
+
+  router.post('/:catalogId/feeds/:feedId/status', canUse, throttle(writeLimiter), async (req, res) => {
+    const body = asObject(req.body);
+    res.json(await service.setFeedStatus(req.actor, refOf(body, req.params), req.params.feedId, body.status));
+  });
+
+  router.delete('/:catalogId/feeds/:feedId', canUse, throttle(writeLimiter), async (req, res) => {
+    await service.deleteFeed(req.actor, refOf(req.query, req.params), req.params.feedId);
+    res.status(204).end();
+  });
+
+  router.get('/:catalogId/feeds/:feedId/log', canUse, throttle(readLimiter), async (req, res) => {
+    res.json({ runs: await service.feedLog(req.actor, refOf(req.query, req.params), req.params.feedId) });
   });
 
   router.get('/:catalogId/sets', canUse, throttle(readLimiter), async (req, res) => {

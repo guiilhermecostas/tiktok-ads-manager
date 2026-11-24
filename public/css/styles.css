@@ -1139,3 +1139,8 @@ body.modal-open { overflow: hidden; }
 .rich__table tr:last-child td { border-bottom: 0; }
 .rich__table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rich__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+.catalog-sync { display: flex; flex-direction: column; gap: 18px; }
+.catalog-sync__every { display: flex; align-items: center; gap: 8px; }
+.catalog-sync__every .input { min-width: 0; }
+.catalog-sync__warn { color: #9d1033; font-weight: 600; }

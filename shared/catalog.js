@@ -1,3 +1,5 @@
+import { isTikTokTimezone } from './tiktok-timezones.js';
+
 /**
  * Catálogo de produtos (TikTok Catalog API v1.3): regras compartilhadas entre o servidor e a tela.
  * Todos os limites e valores vêm da documentação OFICIAL (`/catalog/create/`, `/catalog/product/upload/`, `/catalog/set/create/`).
@@ -61,7 +63,10 @@ export const PRODUCT_FIELDS = Object.freeze([
   { key: 'skuId', label: 'SKU (ID do produto)', required: true, max: 100, noEmoji: true, path: 'sku_id', help: 'Identificador único do produto no catálogo (ex.: CAMISETA-AZUL-M). Até 100 caracteres, sem emoji.' },
   { key: 'title', label: 'Título', required: true, max: 500, noEmoji: true, path: 'title', help: 'Sem texto promocional como "frete grátis" ou "alta qualidade". Até 500 caracteres.' },
   { key: 'description', label: 'Descrição', required: true, max: 10_000, path: 'description', multiline: true },
-  { key: 'availability', label: 'Disponibilidade', required: true, options: AVAILABILITY, path: 'availability' },
+  // O TikTok NÃO guarda número de estoque, só a disponibilidade. Informar a quantidade serve para o sistema calcular a disponibilidade
+  // (quantidade maior que zero = em estoque; zero = sem estoque) quando ela não for escolhida. Não é enviada ao TikTok.
+  { key: 'availability', label: 'Disponibilidade', required: true, options: AVAILABILITY, path: 'availability', help: 'Ou informe a quantidade em estoque e a disponibilidade é calculada.' },
+  { key: 'quantity', label: 'Quantidade em estoque', quantity: true, path: null, help: 'O TikTok guarda só a disponibilidade: maior que zero = em estoque; zero = sem estoque.' },
   { key: 'brand', label: 'Marca', required: true, max: 150, path: 'brand' },
   { key: 'imageUrl', label: 'Imagem principal (URL)', required: true, url: true, path: 'image_url', help: 'JPG ou PNG de pelo menos 500 × 500 px, acessível publicamente. Imagens menores reprovam o produto.' },
   { key: 'condition', label: 'Condição', required: true, options: CONDITIONS, path: 'product_detail.condition' },
@@ -83,7 +88,7 @@ export const PRODUCT_FIELDS = Object.freeze([
   { key: 'productCategory', label: 'Tipo de produto', max: 250, path: 'product_detail.product_category' },
 ]);
 
-export const REQUIRED_PRODUCT_KEYS = PRODUCT_FIELDS.filter((f) => f.required).map((f) => f.key);
+export const REQUIRED_PRODUCT_KEYS = PRODUCT_FIELDS.filter((f) => f.required).map((f) => f.key); // 'availability' pode vir da quantidade
 
 function parseHttpUrl(text, max = 2000) {
   if (text.length > max || CONTROL_CHARS.test(text) || /\s/.test(text)) return null;
@@ -111,6 +116,14 @@ export function parsePrice(raw) {
   return Number.isFinite(value) && value > 0 && value < 1e9 ? Math.round(value * 100) / 100 : null;
 }
 
+/** Quantidade em estoque: inteiro de 0 a 1.000.000.000 (aceita "12", 12 e "12,0"); senão null. */
+export function parseQuantity(raw) {
+  if (typeof raw === 'number') return Number.isInteger(raw) && raw >= 0 && raw <= 1e9 ? raw : null;
+  if (typeof raw !== 'string' || !/^\s*\d{1,10}([.,]0+)?\s*$/.test(raw)) return null;
+  const n = Number(raw.replace(',', '.'));
+  return Number.isInteger(n) && n <= 1e9 ? n : null;
+}
+
 const isBlank = (value) => value === undefined || value === null || (typeof value === 'string' && value.trim() === '') || (Array.isArray(value) && value.length === 0);
 
 /**
@@ -125,10 +138,15 @@ export function normalizeProduct(raw) {
     const given = input[field.key];
     const fail = (message) => errors.push({ path: field.key, message });
     if (isBlank(given)) {
-      if (field.required) fail('Campo obrigatório.');
+      // A disponibilidade pode ser calculada pela quantidade em estoque (se vier válida).
+      if (field.required && !(field.key === 'availability' && !isBlank(input.quantity))) fail('Campo obrigatório.'); // com quantidade, o erro (se houver) é o dela
       continue;
     }
-    if (field.options) {
+    if (field.quantity) {
+      const n = parseQuantity(given);
+      if (n === null) fail('Informe um número inteiro de 0 em diante.');
+      else value[field.key] = n;
+    } else if (field.options) {
       const text = typeof given === 'string' ? given.trim().toUpperCase() : '';
       if (!SETS[field.key]?.has(text)) fail('Valor inválido.');
       else value[field.key] = text;
@@ -157,6 +175,7 @@ export function normalizeProduct(raw) {
       else value[field.key] = text;
     }
   }
+  if (value.availability === undefined && value.quantity !== undefined) value.availability = value.quantity > 0 ? 'IN_STOCK' : 'OUT_OF_STOCK';
   if (value.price !== undefined && value.salePrice !== undefined && value.salePrice >= value.price) errors.push({ path: 'salePrice', message: 'O preço promocional deve ser menor que o preço.' });
   return { value, errors };
 }
@@ -170,6 +189,7 @@ const COLUMN_ALIASES = {
   title: ['title', 'titulo', 'name', 'nome'],
   description: ['description', 'descricao'],
   availability: ['availability', 'disponibilidade', 'stock_status'],
+  quantity: ['quantity', 'qty', 'quantidade', 'stock', 'estoque', 'inventory', 'stock_quantity'],
   brand: ['brand', 'marca'],
   imageUrl: ['image_url', 'image_link', 'image', 'imagem', 'main_image'],
   condition: ['condition', 'condicao'],
@@ -244,7 +264,8 @@ export function csvToProducts(text, { maxRows = MAX_IMPORT_PRODUCTS } = {}) {
   const header = table[0].map(normalizeHeader);
   const keys = header.map((name) => ALIAS_TO_KEY.get(name) ?? null);
   const unknownColumns = table[0].filter((_, i) => keys[i] === null && header[i] !== '');
-  const missingColumns = REQUIRED_PRODUCT_KEYS.filter((key) => !keys.includes(key)).map((key) => PRODUCT_FIELDS.find((f) => f.key === key).label);
+  // "Disponibilidade" pode faltar se houver uma coluna de quantidade em estoque (a disponibilidade é calculada).
+  const missingColumns = REQUIRED_PRODUCT_KEYS.filter((key) => !keys.includes(key) && !(key === 'availability' && keys.includes('quantity'))).map((key) => PRODUCT_FIELDS.find((f) => f.key === key).label);
   if (missingColumns.length) return { products: [], rows: [], unknownColumns, missingColumns, fatal: `Faltam colunas obrigatórias: ${missingColumns.join(', ')}.` };
   if (table.length - 1 > maxRows) return { products: [], rows: [], unknownColumns, missingColumns, fatal: `O arquivo tem produtos demais (máximo ${maxRows} por importação).` };
 
@@ -275,8 +296,8 @@ export function csvToProducts(text, { maxRows = MAX_IMPORT_PRODUCTS } = {}) {
 
 /** Modelo de CSV (cabeçalho + uma linha de exemplo) para a pessoa baixar. */
 export function csvTemplate() {
-  const header = ['sku_id', 'title', 'description', 'availability', 'condition', 'price', 'sale_price', 'brand', 'image_link', 'link', 'additional_image_link', 'item_group_id', 'color', 'size'];
-  const example = ['CAMISETA-AZUL-M', 'Camiseta básica azul', 'Camiseta de algodão, corte reto.', 'in stock', 'new', '79.90', '59.90', 'Minha Marca', 'https://exemplo.com/img/camiseta-azul.jpg', 'https://exemplo.com/camiseta-azul', 'https://exemplo.com/img/camiseta-azul-2.jpg', 'CAMISETA-AZUL', 'Azul', 'M'];
+  const header = ['sku_id', 'title', 'description', 'availability', 'quantity', 'condition', 'price', 'sale_price', 'brand', 'image_link', 'link', 'additional_image_link', 'video_link', 'item_group_id', 'color', 'size'];
+  const example = ['CAMISETA-AZUL-M', 'Camiseta básica azul', 'Camiseta de algodão, corte reto.', 'in stock', '25', 'new', '79.90', '59.90', 'Minha Marca', 'https://exemplo.com/img/camiseta-azul.jpg', 'https://exemplo.com/camiseta-azul', 'https://exemplo.com/img/camiseta-azul-2.jpg', 'https://exemplo.com/video/camiseta-azul.mp4', 'CAMISETA-AZUL', 'Azul', 'M'];
   return `${header.join(',')}\n${example.map((c) => (/[,"\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(',')}\n`;
 }
 
@@ -347,3 +368,121 @@ export function toBatches(products, { maxCount = MAX_PRODUCTS_PER_REQUEST, maxBy
   if (current.length) batches.push(current);
   return batches;
 }
+
+// ---------------------------------------------------------------------------
+// Sincronização automática (feed de dados): `/catalog/feed/create/`
+// ---------------------------------------------------------------------------
+export const FEED_NAME_MAX = 100;
+export const FEED_UPDATE_MODES = Object.freeze([
+  ['INCREMENTAL', 'Atualizar (recomendado)', 'Produtos novos entram e os existentes são atualizados (preço, estoque…). Quem sair do feed continua no catálogo.'],
+  ['OVERWRITE', 'Substituir tudo', 'O catálogo passa a ser exatamente o feed: produtos que não estiverem nele são REMOVIDOS do catálogo.'],
+]);
+export const FEED_INTERVALS = Object.freeze({
+  HOURLY: { label: 'horas', min: 1, max: 23 },
+  DAILY: { label: 'dias', min: 1, max: 30 },
+  MONTHLY: { label: 'meses', min: 1, max: 12 },
+});
+export const FEED_SCHEMES = Object.freeze(['http:', 'https:', 'ftp:', 'sftp:']); // documentação: "should start with http, https, ftp or sftp"
+const FEED_URL_MAX = 2000;
+const PRIVATE_HOST = /^(localhost|.*\.(local|localhost|internal|lan|home|corp))$/i;
+
+/** Endereço que o TikTok não consegue abrir de fora (loopback, rede privada, link-local): recusamos para a pessoa não perder tempo. */
+export function isPrivateHost(hostname) {
+  const host = String(hostname ?? '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host || PRIVATE_HOST.test(host) || !host.includes('.') && !host.includes(':')) return true;
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  if (host.includes(':')) return host === '::1' || host === '::' || /^f[cd]/.test(host) || /^fe[89ab]/.test(host); // IPv6: loopback, local único, link-local
+  return false;
+}
+
+/** URL do feed: http, https, ftp ou sftp; sem usuário/senha embutidos (o login vai em campos próprios) e sem endereço de rede privada. */
+export function parseFeedUrl(raw) {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (!text || text.length > FEED_URL_MAX || CONTROL_CHARS.test(text) || /\s/.test(text)) return { error: 'Informe a URL do feed (até 2.000 caracteres, sem espaços).' };
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    return { error: 'Informe uma URL válida, incluindo https://.' };
+  }
+  if (!FEED_SCHEMES.includes(url.protocol)) return { error: 'A URL do feed deve começar com http, https, ftp ou sftp.' };
+  if (url.username || url.password) return { error: 'Não coloque usuário e senha na URL: use os campos "Usuário" e "Senha".' };
+  if (isPrivateHost(url.hostname)) return { error: 'Este endereço não é público: o TikTok precisa conseguir abrir a URL pela internet.' };
+  return { value: text };
+}
+
+/**
+ * Valida os dados de um feed novo. Entrada: { name, url, username, password, updateMode, intervalType, intervalCount, hour, minute, dayOfMonth, timezone }.
+ * Devolve { value, errors } (value no formato do cliente; a senha só existe aqui e no envio ao TikTok: nunca é guardada, devolvida nem registrada).
+ */
+export function normalizeFeedInput(raw) {
+  const errors = [];
+  const fail = (path, message) => errors.push({ path, message });
+  const input = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const value = {};
+  const name = typeof input.name === 'string' ? input.name.trim().replace(/\s+/g, ' ') : '';
+  if (name.length < 2 || name.length > FEED_NAME_MAX || CONTROL_CHARS.test(name)) fail('name', `O nome do feed deve ter de 2 a ${FEED_NAME_MAX} caracteres.`);
+  else value.name = name;
+  const url = parseFeedUrl(input.url);
+  if (url.error) fail('url', url.error);
+  else value.url = url.value;
+  const hasUser = typeof input.username === 'string' && input.username.trim() !== '';
+  const hasPass = typeof input.password === 'string' && input.password !== '';
+  if (hasUser !== hasPass) fail(hasUser ? 'password' : 'username', 'Informe usuário e senha juntos (ou deixe os dois em branco se o feed é público).');
+  else if (hasUser) {
+    const user = input.username.trim();
+    if (user.length > 200 || input.password.length > 200 || CONTROL_CHARS.test(user) || CONTROL_CHARS.test(input.password)) fail('username', 'Usuário e senha: até 200 caracteres, sem caracteres de controle.');
+    else { value.username = user; value.password = input.password; }
+  }
+  if (!FEED_UPDATE_MODES.some(([id]) => id === input.updateMode)) fail('updateMode', 'Escolha como atualizar o catálogo.');
+  else value.updateMode = input.updateMode;
+  const interval = FEED_INTERVALS[input.intervalType];
+  if (!interval) fail('intervalType', 'Escolha a frequência (horas, dias ou meses).');
+  else {
+    const count = Number(input.intervalCount);
+    if (!Number.isInteger(count) || count < interval.min || count > interval.max) fail('intervalCount', `A cada quantos ${interval.label}: de ${interval.min} a ${interval.max}.`);
+    else { value.intervalType = input.intervalType; value.intervalCount = count; }
+  }
+  const hour = Number(input.hour ?? 0);
+  const minute = Number(input.minute ?? 0);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) fail('hour', 'A hora vai de 0 a 23.');
+  else value.hour = hour;
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) fail('minute', 'Os minutos vão de 0 a 59.');
+  else value.minute = minute;
+  if (input.intervalType === 'MONTHLY') {
+    const day = Number(input.dayOfMonth);
+    if (!Number.isInteger(day) || day < 1 || day > 28) fail('dayOfMonth', 'O dia do mês vai de 1 a 28 (vale em todos os meses).');
+    else value.dayOfMonth = day;
+  }
+  if (!isTikTokTimezone(input.timezone)) fail('timezone', 'Escolha o fuso horário da lista.');
+  else value.timezone = input.timezone;
+  return { value, errors };
+}
+
+/** Texto da agenda de um feed ("A cada 1 hora, no minuto 22"). */
+export function describeSchedule(feed) {
+  if (!feed?.intervalType || !FEED_INTERVALS[feed.intervalType]) return 'Sem agenda (envio manual)';
+  const n = feed.intervalCount ?? 1;
+  const two = (v) => String(v ?? 0).padStart(2, '0');
+  if (feed.intervalType === 'HOURLY') return `A cada ${n === 1 ? 'hora' : `${n} horas`}, a partir do minuto ${two(feed.minute)}`;
+  if (feed.intervalType === 'DAILY') return `${n === 1 ? 'Todo dia' : `A cada ${n} dias`}, às ${two(feed.hour)}:${two(feed.minute)}`;
+  return `${n === 1 ? 'Todo mês' : `A cada ${n} meses`}${feed.dayOfMonth ? `, no dia ${feed.dayOfMonth}` : ''}, às ${two(feed.hour)}:${two(feed.minute)}`;
+}
+
+/** Tira usuário e senha embutidos numa URL (um feed criado em outro lugar pode ter): nunca devolvemos credenciais para a tela. */
+export function redactUrl(raw) {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const url = new URL(raw);
+    url.username = '';
+    url.password = '';
+    return url.toString().slice(0, FEED_URL_MAX);
+  } catch {
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw.replace(/\/\/[^/@]*@/, '//').slice(0, FEED_URL_MAX) : null;
+  }
+}
+

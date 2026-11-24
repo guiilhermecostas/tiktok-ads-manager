@@ -73,7 +73,7 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
     if (f.options) control = h('select', common, h('option', { value: '' }, 'Escolha…'), f.options.map(([value, label]) => h('option', { value }, label)));
     else if (f.urlList) control = h('textarea', { ...common, class: 'input input--area', rows: 2, placeholder: 'Uma URL por linha (até 10)' });
     else if (f.multiline) control = h('textarea', { ...common, class: 'input input--area', rows: 3, maxlength: f.max });
-    else control = h('input', { ...common, type: 'text', maxlength: f.url ? 2000 : f.max, inputmode: f.money ? 'decimal' : null, placeholder: f.url ? 'https://' : f.money ? '0,00' : null });
+    else control = h('input', { ...common, type: 'text', maxlength: f.url ? 2000 : f.max, inputmode: f.money ? 'decimal' : f.quantity ? 'numeric' : null, placeholder: f.url ? 'https://' : f.money ? '0,00' : null });
     controls.set(f.key, control);
     const err = h('p', { class: 'field__error', role: 'alert', hidden: true });
     formErrors.set(f.key, err);
@@ -81,8 +81,9 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
       h('label', { for: id, class: 'field__label' }, f.label, f.required ? ' *' : ''), control,
       f.help ? h('p', { class: 'field__hint' }, f.help) : null, err);
   }
-  const requiredFields = PRODUCT_FIELDS.filter((f) => f.required).map(buildField);
-  const optionalFields = PRODUCT_FIELDS.filter((f) => !f.required).map(buildField);
+  const MAIN_KEYS = new Set(['quantity']); // a quantidade fica junto dos obrigatórios (calcula a disponibilidade)
+  const requiredFields = PRODUCT_FIELDS.filter((f) => f.required || MAIN_KEYS.has(f.key)).map(buildField);
+  const optionalFields = PRODUCT_FIELDS.filter((f) => !f.required && !MAIN_KEYS.has(f.key)).map(buildField);
 
   function readForm() {
     const raw = {};
@@ -195,7 +196,8 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
   const fileInput = h('input', { type: 'file', accept: '.csv,text/csv,text/plain', class: 'catalog-add__file', 'aria-label': 'Escolher planilha CSV', disabled: !canWrite, onChange: (e) => onFile(e.target.files[0], e.target) });
   setChildren(root,
     h('div', { class: 'card card--pad catalog-add__intro' },
-      h('p', null, 'Cada produto precisa de SKU, título, descrição, estoque, marca, imagem, condição, preço e página do produto.'),
+      h('p', null, 'Cada produto precisa de SKU, título, descrição, disponibilidade (ou a quantidade em estoque), marca, imagem, condição, preço e página do produto.'),
+      h('p', { class: 'muted' }, 'Quer preço e estoque sempre atualizados sem enviar nada? Use a aba "Sincronização": o TikTok busca o feed da sua loja sozinho. O TikTok guarda só a disponibilidade, não o número do estoque.'),
       h('p', { class: 'muted' }, 'As imagens devem ser JPG ou PNG com pelo menos 500 × 500 px e abrir sem login (o TikTok as baixa). O mesmo SKU enviado de novo atualiza o produto.')),
     h('section', { class: 'form-section' },
       h('h3', { class: 'form-section__title' }, 'Importar planilha (CSV)'),

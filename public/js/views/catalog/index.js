@@ -14,7 +14,7 @@ const normalize = (text) => String(text ?? '').toLowerCase().normalize('NFD').re
  * catálogo (produtos, envio de produtos por formulário ou CSV, conjuntos de produtos). Um catálogo é obrigatório para campanhas de
  * "Vendas de produtos". Todo texto vindo do TikTok entra como nó de texto (nunca como HTML).
  */
-export async function catalogView() {
+export async function catalogView(ctx) {
   const st = { data: null, loading: false, error: null, bc: '', search: '', detail: null };
   const root = h('div', { class: 'catalog' });
   const toolbar = h('div', { class: 'catalog__toolbar' });
@@ -62,7 +62,7 @@ export async function catalogView() {
     st.detail = catalog;
     draw();
     setChildren(body, catalogDetail({
-      catalog, tab, canWrite: canWrite() && catalog.canManage,
+      ctx, catalog, tab, canWrite: canWrite() && catalog.canManage,
       onBack: () => { st.detail = null; draw(); load({ fresh: true }); },
     }));
   }

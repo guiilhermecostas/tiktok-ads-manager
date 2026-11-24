@@ -75,6 +75,9 @@ export function createFakeTiktok() {
     catalogProducts: {}, // catálogo -> [produtos aceitos, no formato do upload + audit]
     catalogFeedLogs: {}, // feed_log_id -> product_feed_log
     catalogSets: {}, // catálogo -> [{ product_set_id, product_set_name, product_count, conditions }]
+    catalogFeeds: {}, // catálogo -> [{ feed_id, feed_name, feed_type, status, last_update_param, next_update_time, number_of_products }]
+    catalogFeedLogs2: {}, // feed -> entradas de /catalog/feed/log/
+    feedCredentials: [], // { feed_id, username, password } recebidos (para provar que nunca voltam)
     failCatalogFor: new Set(), // BCs cujas chamadas de catálogo respondem "sem permissão"
     rejectProductSkus: new Set(), // SKUs que o processamento marca como erro
     strictCatalog: true, // true: campanha/grupo/anúncio de catálogo são conferidos contra o contrato oficial e recusados se fugirem dele
@@ -469,6 +472,52 @@ export function createFakeTiktok() {
         const toListItem = (p) => ({ sku_id: p.sku_id, title: p.title, brand: p.brand, availability: p.availability, image_url: p.image_url, audit: p.audit, active_status: p.active_status, image_status: p.image_status, price: { price: p.price_info.price, sale_price: p.price_info.sale_price, currency: 'USD' }, ad_creation_eligible: p.audit.audit_status === 'approved' && ['IN_STOCK', 'AVAILABLE_FOR_ORDER', 'PREORDER'].includes(p.availability) ? 'AVAILABLE' : 'NOT_AVAILABLE' });
         if (query.product_available_type === 'AVAILABLE') all = all.filter((p) => toListItem(p).ad_creation_eligible === 'AVAILABLE');
         return reply({ list: all.slice((page - 1) * size, page * size).map(toListItem), page_info: { page, page_size: size, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / size)) } });
+      }
+      case '/catalog/feed/get/': {
+        if (state.failCatalogFor.has(query.bc_id)) return reply({}, 40002, 'No permission to access catalog assets');
+        if (!catalogOf(query.bc_id, query.catalog_id)) return reply({}, 40002, 'Catalog not found');
+        const manual = { feed_id: `m${query.catalog_id}`.replace(/^m/, '1'), feed_name: 'default', feed_type: 'DATA_FEED', status: 'OFF', last_update_param: { uri: null, update_mode: 'INCREMENTAL', interval_type: null, interval_count: null, timezone: null, hour: null, minute: null, day_of_month: null }, next_update_time: null, number_of_products: (state.catalogProducts[query.catalog_id] ?? []).length };
+        return reply({ feed_list: [manual, ...(state.catalogFeeds[query.catalog_id] ?? [])] });
+      }
+      case '/catalog/feed/create/': {
+        if (state.failCatalogFor.has(body?.bc_id)) return reply({}, 40002, 'No permission to create feeds');
+        if (!catalogOf(body?.bc_id, body?.catalog_id)) return reply({}, 40002, 'Catalog not found');
+        if (!body.feed_name) return reply({}, 40002, 'feed_name is required');
+        if (!['INCREMENTAL', 'OVERWRITE'].includes(body.update_mode)) return reply({}, 40002, 'update_mode is invalid');
+        const sp = body.schedule_param;
+        if (!sp?.source?.uri || !/^(https?|s?ftp):\/\//.test(sp.source.uri)) return reply({}, 40002, 'schedule_param.source.uri must start with http, https, ftp or sftp');
+        if (!['HOURLY', 'DAILY', 'MONTHLY'].includes(sp.interval_type)) return reply({}, 40002, 'interval_type is invalid');
+        const limits = { HOURLY: [1, 23], DAILY: [1, 30], MONTHLY: [1, 12] }[sp.interval_type];
+        if (!(sp.interval_count >= limits[0] && sp.interval_count <= limits[1])) return reply({}, 40002, `interval_count must be ${limits[0]}-${limits[1]} for ${sp.interval_type}`);
+        if (!sp.timezone) return reply({}, 40002, 'timezone is required');
+        if (!(sp.hour >= 0 && sp.hour <= 23) || !(sp.minute >= 0 && sp.minute <= 59)) return reply({}, 40002, 'hour/minute out of range');
+        if (sp.interval_type === 'MONTHLY' && !(sp.day_of_month >= 1)) return reply({}, 40002, 'day_of_month is required for MONTHLY');
+        if (!!sp.source.username !== !!sp.source.password) return reply({}, 40002, 'username and password must be passed together');
+        const id = String(++state.nextId);
+        if (sp.source.username) state.feedCredentials.push({ feed_id: id, username: sp.source.username, password: sp.source.password });
+        const feed = { feed_id: id, feed_name: body.feed_name, feed_type: 'DATA_FEED', status: 'ON', last_update_param: { uri: sp.source.uri, update_mode: body.update_mode, interval_type: sp.interval_type, interval_count: sp.interval_count, timezone: sp.timezone, hour: sp.hour, minute: sp.minute, day_of_month: sp.day_of_month ?? null }, next_update_time: '2026-11-25 10:22:00', number_of_products: 0 };
+        (state.catalogFeeds[body.catalog_id] ??= []).push(feed);
+        state.catalogFeedLogs2[id] = [{ last_update_status: { add_count: 3, update_count: 1, remove_count: 0, error_count: 0, warn_count: 1, process_status: 'SUCCESS' }, last_update_time: { start_time: '2026-11-24 10:22:00', end_time: '2026-11-24 10:22:09' } }];
+        return reply({ feed_id: id, feed_name: feed.feed_name, status: 'ON', next_update_time: feed.next_update_time, last_update_param: feed.last_update_param });
+      }
+      case '/catalog/feed/switch/': {
+        const feed = (state.catalogFeeds[body?.catalog_id] ?? []).find((f) => f.feed_id === body?.feed_id);
+        if (!feed) return reply({}, 40002, 'Feed not found');
+        if (!['ON', 'OFF'].includes(body.status)) return reply({}, 40002, 'status is invalid');
+        if (feed.status === body.status) return reply({}, 40002, `The feed schedule status is already ${body.status}`);
+        feed.status = body.status;
+        return reply({});
+      }
+      case '/catalog/feed/delete/': {
+        const list = state.catalogFeeds[body?.catalog_id] ?? [];
+        const at = list.findIndex((f) => f.feed_id === body?.feed_id);
+        if (at < 0) return reply({}, 40002, 'Feed not found');
+        list.splice(at, 1);
+        return reply({ feed_id: body.feed_id });
+      }
+      case '/catalog/feed/log/': {
+        if (!query.feed_id) return reply({}, 40002, 'feed_id is required');
+        return reply({ feed_logs: state.catalogFeedLogs2[query.feed_id] ?? [] });
       }
       case '/catalog/set/get/': {
         if (!catalogOf(query.bc_id, query.catalog_id)) return reply({}, 40002, 'Catalog not found');

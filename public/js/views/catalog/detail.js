@@ -2,8 +2,11 @@ import { AVAILABILITY } from '/shared/catalog.js';
 import { get } from '../../api.js';
 import { h, setChildren } from '../../dom.js';
 import { formatCurrency, formatNumber } from '../../format.js';
+import { can } from '../../state.js';
 import { alertBox, badge, button, emptyState, spinner } from '../../ui.js';
+import { openCampaignWizard } from '../campaign-wizard/index.js';
 import { addProductsTab } from './add-products.js';
+import { feedsTab } from './feeds.js';
 import { productSetsTab } from './product-sets.js';
 
 const AVAILABILITY_LABEL = Object.fromEntries(AVAILABILITY);
@@ -18,7 +21,7 @@ export const catalogUrl = (catalog, path = '') => `/tiktok/catalogs/${encodeURIC
  * Detalhe de um catálogo: situação dos produtos (aprovados / reprovados / em análise) e três abas:
  * Produtos (lista com aprovação e elegibilidade para anúncios), Adicionar produtos (formulário ou CSV) e Conjuntos de produtos.
  */
-export function catalogDetail({ catalog, tab = 'products', canWrite, onBack }) {
+export function catalogDetail({ ctx, catalog, tab = 'products', canWrite, onBack }) {
   const root = h('div', { class: 'catalog-detail' });
   const summary = h('div', { class: 'catalog-detail__summary' });
   const content = h('div', { class: 'catalog-detail__content' });
@@ -41,7 +44,7 @@ export function catalogDetail({ catalog, tab = 'products', canWrite, onBack }) {
   }
 
   function drawTabs() {
-    const items = [['products', 'Produtos'], ['add', 'Adicionar produtos'], ['sets', 'Conjuntos de produtos']];
+    const items = [['products', 'Produtos'], ['add', 'Adicionar produtos'], ['sync', 'Sincronização'], ['sets', 'Conjuntos de produtos']];
     setChildren(tabs, items.map(([id, label]) => h('button', {
       type: 'button', role: 'tab', class: `tab${active === id ? ' is-active' : ''}`, 'aria-selected': String(active === id),
       onClick: () => { active = id; drawTabs(); drawContent(); },
@@ -55,6 +58,8 @@ export function catalogDetail({ catalog, tab = 'products', canWrite, onBack }) {
       setChildren(content, view.element);
     } else if (active === 'add') {
       setChildren(content, addProductsTab({ catalog, canWrite, onUploaded: () => { loadSummary(); productsRefresh?.(); } }));
+    } else if (active === 'sync') {
+      setChildren(content, feedsTab({ catalog, canWrite }));
     } else {
       setChildren(content, productSetsTab({ catalog, canWrite }));
     }
@@ -66,7 +71,8 @@ export function catalogDetail({ catalog, tab = 'products', canWrite, onBack }) {
       h('div', { class: 'catalog-detail__title' },
         h('h1', { class: 'page-title' }, catalog.name || catalog.id),
         h('p', { class: 'muted' }, `ID ${catalog.id} · BC ${catalog.bcId} · ${catalog.regionCode ?? '—'} · ${catalog.currency ?? '—'}`)),
-      catalog.adCreationEligible ? badge('Pronto para anúncios', 'success') : badge('Sem produtos disponíveis', 'warning')),
+      catalog.adCreationEligible ? badge('Pronto para anúncios', 'success') : badge('Sem produtos disponíveis', 'warning'),
+      can('campaigns') ? button('Criar campanha com este catálogo', { variant: 'primary', small: true, onClick: () => openCampaignWizard(ctx, { catalog }) }) : null),
     !canWrite ? alertBox('Você pode ver este catálogo, mas só o dono da conexão altera produtos e conjuntos.', 'warning') : null,
     summary, tabs, content);
   drawTabs();
