@@ -493,6 +493,28 @@ export const MIGRATIONS = [
         ADD COLUMN apply_attempts    INTEGER NOT NULL DEFAULT 0 CHECK (apply_attempts >= 0);
     `,
   },
+  {
+    version: 17,
+    description: 'Catálogo: anúncio padrão por catálogo (criativos da biblioteca, produtos, texto, botão, URL…) que a campanha já puxa pronto',
+    sql: `
+      -- Um "anúncio padrão" por pessoa e catálogo. A configuração (campos permitidos da campanha de catálogo, validados pela aplicação com as mesmas
+      -- regras do assistente) fica em JSONB; os dois criativos da biblioteca ficam em colunas com chave estrangeira: apagar o criativo só limpa o vínculo.
+      CREATE TABLE catalog_defaults (
+        id                INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id           INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        bc_id             TEXT        NOT NULL CHECK (bc_id ~ '^[0-9]{1,24}$'),
+        catalog_id        TEXT        NOT NULL CHECK (catalog_id ~ '^[0-9]{1,24}$'),
+        config            JSONB       NOT NULL CHECK (jsonb_typeof(config) = 'object' AND octet_length(config::text) <= 8000),
+        video_creative_id INTEGER     REFERENCES creatives(id) ON DELETE SET NULL,
+        cover_creative_id INTEGER     REFERENCES creatives(id) ON DELETE SET NULL,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (user_id, bc_id, catalog_id)
+      );
+
+      ${protectTables({ rls: ['catalog_defaults'], revoke: ['catalog_defaults'], identity: ['catalog_defaults'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

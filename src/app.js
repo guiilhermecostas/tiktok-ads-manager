@@ -41,6 +41,7 @@ import { createManagerService } from './modules/manager/manager.service.js';
 import { createManagerViewsRepository } from './modules/manager/manager-views.repository.js';
 import { createBalanceRouter } from './modules/tiktok/balance.routes.js';
 import { createBalanceService } from './modules/tiktok/balance.service.js';
+import { createCatalogDefaultsRepository } from './modules/catalog/catalog-defaults.repository.js';
 import { createCatalogRouter } from './modules/catalog/catalog.routes.js';
 import { createCatalogService } from './modules/catalog/catalog.service.js';
 import { createHourlyRepository } from './modules/tiktok/hourly.repository.js';
@@ -74,7 +75,6 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Saldo (BCs e contas de anúncio) direto da API do TikTok, em cache curto.
   const balanceService = createBalanceService({ tiktok: tiktokService, connections: businessCenters, log, now: clock });
   // Gerenciador de anúncios: todos os anúncios de todas as contas, com desempenho, ativar/pausar e visualizações salvas por pessoa.
-  const catalogService = createCatalogService({ tiktok: tiktokService, connections: businessCenters, log });
   const managerService = createManagerService({ tiktok: tiktokService, connections: businessCenters, views: createManagerViewsRepository(db), log, now: clock });
   // Gasto por hora: coleta a cada 30 min (ligada só pelo servidor, em server.js) e leitura para a aba Relatórios → Por hora.
   const hourlyService = createHourlyService({ tiktok: tiktokService, connections: businessCenters, repo: createHourlyRepository(db), log, now: clock, pauseMs: hourlyPauseMs });
@@ -83,6 +83,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const cleaning = config.creatives.cleaning ?? {};
   const creativeCleaner = cleaner ?? createCreativeCleaner({ ffmpegPath: cleaning.ffmpegPath ?? null, tmpDir: creativeStorage.tmpDir, concurrency: cleaning.concurrency, timeoutMs: cleaning.timeoutMs, threads: cleaning.threads, log });
   const creativesService = createCreativesService({ repo: createCreativesRepository(db), storage: creativeStorage, cleaner: creativeCleaner, tiktok: tiktokService, config, log });
+  const catalogService = createCatalogService({ tiktok: tiktokService, connections: businessCenters, defaults: createCatalogDefaultsRepository(db), creatives: creativesService, log }); // o de criativos só confere o dono dos criativos do anúncio padrão
   // Hook com IA (Kling): gera um começo de 2 a 3 s e o aplica a um vídeo da biblioteca. Sem KLING_API_KEY fica desligado.
   const hooksService = createHooksService({
     repo: createHooksRepository(db),

@@ -1,5 +1,6 @@
 import { ACCOUNT_FIELDS, OBJECTIVES, fieldsOfStep, findField, getOptions, getPath, isRequired, isVisible } from '/shared/campaign-spec.js';
 import { h } from '../../dom.js';
+import { toast } from '../../ui.js';
 import { centsToInput, parseMoneyToCents } from '../../format.js';
 import { creativeThumb } from '../creatives/thumb.js';
 import { createMultiChoice } from './choice-controls.js';
@@ -54,6 +55,18 @@ export function renderAccountFields(ctx) {
   return h('div', { class: 'form-grid' }, entries.map((entry) => renderField(entry, ctx)));
 }
 
+/**
+ * Só os campos dos caminhos informados (ex.: 'ad.text'), na ordem dada e só os visíveis para a configuração atual. Usado pelo anúncio padrão do
+ * catálogo: reaproveita os MESMOS campos, listas e validações do assistente.
+ */
+export function renderFields(paths, ctx) {
+  const entries = paths.map((path) => {
+    const [section, key] = path.split('.');
+    return { section, field: findField(section, key) };
+  }).filter(({ field }) => field && isVisible(field, ctx.config));
+  return h('div', { class: 'form-grid' }, entries.map((entry) => renderField(entry, ctx)));
+}
+
 function renderField({ section, field }, ctx) {
   const path = `${section}.${field.key}`;
   const value = getPath(ctx.config, path);
@@ -76,6 +89,13 @@ function renderField({ section, field }, ctx) {
   if (field.key === 'catalogId' && ctx.pixelAccounts?.length) {
     const picker = createCatalogPicker({
       id, value, disabled, error: Boolean(error), describedBy, accounts: ctx.pixelAccounts,
+      onApplyDefaults: ctx.applyCatalogDefaults
+        ? async (chosen) => {
+          const applied = await ctx.applyCatalogDefaults(chosen); // redesenha o formulário: o aviso de sucesso vai num toast (não se perde com o redesenho)
+          if (applied) toast('Anúncio padrão aplicado: criativos, produtos, texto e destino vieram do catálogo. Confira e ajuste o que precisar.');
+          return applied;
+        }
+        : null,
       onPick: (catalogId, bcId) => {
         ctx.set(path, catalogId);
         if (bcId) ctx.set('adGroup.catalogBcId', bcId, { rerender: true });

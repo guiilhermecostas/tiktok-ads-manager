@@ -1,3 +1,4 @@
+import { defaultCreativeRefs, validateCatalogDefaults } from '../../../shared/catalog-defaults.js';
 import { MAX_PRODUCTS_PER_REQUEST, buildSetConditions, isCatalogId, normalizeCatalogInput, normalizeFeedInput, normalizeProduct, normalizeProductSetName } from '../../../shared/catalog.js';
 import { HttpError, badRequest, forbidden, notFound } from '../../lib/http-error.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
@@ -29,7 +30,7 @@ function friendly(err) {
  *  - Cada pedido informa a conexão e a BC do TikTok; a BC precisa ser uma das da conexão (nunca aceitamos BC solta) e o ID do catálogo só numérico.
  *  - Falha em uma BC aparece naquela BC; as outras seguem. Lista em cache por 60 s (muda ao criar um catálogo).
  */
-export function createCatalogService({ tiktok, connections, log = console }) {
+export function createCatalogService({ tiktok, connections, defaults, creatives, log = console }) {
   const listCache = new TtlCache({ ttlMs: LIST_TTL_MS, maxEntries: 100 });
   const metaCache = new TtlCache({ ttlMs: META_TTL_MS, maxEntries: 100 });
   const inflight = new Map();
@@ -95,7 +96,7 @@ export function createCatalogService({ tiktok, connections, log = console }) {
     return { fetchedAt: new Date().toISOString(), totalConnections: visible.length, businessCenters, catalogs };
   }
 
-  return {
+  const service = {
     /** Catálogos de todas as BCs do usuário. `fresh` ignora o cache de 60 s. */
     async list(actor, { fresh = false } = {}) {
       // As conexões entram na chave do cache: conectar (ou remover, ou renovar) uma Business Center muda a lista na hora.
@@ -193,6 +194,41 @@ export function createCatalogService({ tiktok, connections, log = console }) {
       return tiktok.withToken(connection.id, (token, api) => api.listProductSets(token, { bcId: ref.bcId, catalogId: ref.catalogId }));
     },
 
+    // ---------- anúncio padrão do catálogo (criativos, produtos, texto… que a campanha já puxa pronto) ----------
+    /** O anúncio padrão da pessoa para este catálogo: `{ defaults: { adGroup, ad } | null, updatedAt }`. Criativo apagado da biblioteca some sozinho. */
+    async getDefaults(actor, ref) {
+      await catalogRef(actor, ref);
+      const row = await defaults.get(actor.id, ref.bcId, ref.catalogId);
+      if (!row) return { defaults: null, updatedAt: null };
+      const merged = { adGroup: { ...(row.config.adGroup ?? {}) }, ad: { ...(row.config.ad ?? {}) } };
+      if (row.videoCreativeId !== null) merged.ad.videoCreativeId = row.videoCreativeId;
+      if (row.coverCreativeId !== null) merged.ad.coverCreativeId = row.coverCreativeId;
+      return { defaults: merged, updatedAt: row.updatedAt };
+    },
+
+    /**
+     * Guarda o anúncio padrão. Valida TUDO no servidor com as regras da campanha de catálogo (só campos permitidos) e confere que cada criativo
+     * é da própria pessoa e do tipo certo (vídeo/imagem). Vale para qualquer catálogo que a pessoa enxerga (é preferência dela, não altera nada no TikTok).
+     */
+    async saveDefaults(actor, ref, raw) {
+      await catalogRef(actor, ref);
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw badRequest('Anúncio padrão inválido.');
+      const { defaults: clean, errors } = validateCatalogDefaults(raw);
+      if (errors.length) throw badRequest(errors[0].message, 'validation_error');
+      for (const { id, kind, path } of defaultCreativeRefs(clean)) {
+        const creative = await creatives.get(actor, id); // 404 se não for da pessoa
+        if (creative.kind !== kind) throw badRequest(`${path === 'ad.videoCreativeId' ? 'O vídeo' : 'A capa'} precisa ser ${kind === 'video' ? 'um vídeo' : 'uma imagem'} da biblioteca.`, 'validation_error');
+      }
+      const { videoCreativeId = null, coverCreativeId = null, ...ad } = clean.ad;
+      await defaults.save(actor.id, ref.bcId, ref.catalogId, { config: { adGroup: clean.adGroup, ad }, videoCreativeId, coverCreativeId });
+      return service.getDefaults(actor, ref);
+    },
+
+    async removeDefaults(actor, ref) {
+      await catalogRef(actor, ref);
+      await defaults.remove(actor.id, ref.bcId, ref.catalogId);
+    },
+
     // ---------- sincronização automática (feeds de dados) ----------
     async feeds(actor, ref) {
       const connection = await catalogRef(actor, ref);
@@ -241,4 +277,5 @@ export function createCatalogService({ tiktok, connections, log = console }) {
       return tiktok.withToken(connection.id, (token, api) => api.createProductSet(token, { bcId: ref.bcId, catalogId: ref.catalogId, name: named.name, conditions }));
     },
   };
+  return service;
 }

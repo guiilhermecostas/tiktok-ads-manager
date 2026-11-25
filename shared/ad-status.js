@@ -46,6 +46,21 @@ export const AD_STATUSES = Object.freeze({
   AD_STATUS_CAMPAIGN_DELETE: S('Campanha excluída', 'neutral'),
   AD_STATUS_ADGROUP_DELETE: S('Grupo excluído', 'neutral'),
   AD_STATUS_DELETE: S('Excluído', 'neutral'),
+  // Status da documentação que NÃO têm o prefixo AD_STATUS_ (antes apareciam "crus", ex.: "Advertiser account punish").
+  ADVERTISER_ACCOUNT_PUNISH: S('Conta penalizada pelo TikTok', 'danger', true),
+  ADVERTISER_ACCOUNT_INVALID: S('Conta inválida', 'danger', true),
+  ADVERTISER_ACCOUNT_BALANCE_EXCEED: S('Saldo da conta insuficiente', 'danger', true),
+  ADVERTISER_CONTRACT_PENDING: S('Contrato da conta ainda não vigora', 'warning'),
+  ADVERTISER_REAUDIT: S('Conta em reanálise', 'warning'),
+  // Estados que só aparecem no nível de grupo/campanha, mas o TikTok pode repetir no anúncio.
+  ADGROUP_STATUS_DELETE: S('Grupo excluído', 'neutral'),
+  ADGROUP_STATUS_CAMPAIGN_DELETE: S('Campanha excluída', 'neutral'),
+  CAMPAIGN_STATUS_DELETE: S('Campanha excluída', 'neutral'),
+  ADGROUP_STATUS_FROZEN: S('Grupo congelado', 'danger', true),
+  AD_STATUS_CREATIVE_ANCHOR_UNAVAILABLE: S('Link do criativo indisponível', 'danger', true),
+  AD_STATUS_CREATIVE_PRODUCT_ALL_REJECTED: S('Todos os produtos do criativo reprovados', 'danger', true),
+  AD_STATUS_CREATOR_AUTHORIZATION_REVOKED: S('Autorização do criador revogada', 'danger', true),
+  AD_STATUS_SHOWCASE_AUTHORIZATION_LOST: S('Autorização do Showcase perdida', 'danger', true),
 });
 
 /** Informações de exibição de um status (conhecido ou não). */
@@ -53,7 +68,7 @@ export function adStatusInfo(status) {
   if (!status) return S('Sem status', 'neutral');
   const known = AD_STATUSES[status];
   if (known) return known;
-  const text = String(status).replace(/^AD_STA?US_/, '').replace(/_/g, ' ').toLowerCase();
+  const text = String(status).replace(/^(AD_STAT?US_|ADGROUP_STATUS_|CAMPAIGN_STATUS_|ADVERTISER_)/, '').replace(/_/g, ' ').toLowerCase();
   return S(text.charAt(0).toUpperCase() + text.slice(1), 'neutral');
 }
 

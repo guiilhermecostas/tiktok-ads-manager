@@ -1154,3 +1154,17 @@ body.modal-open { overflow: hidden; }
 .hook-item__keep { margin: 8px 0 0; font-size: 12px; }
 @keyframes pulse-dot { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(254, 44, 85, 0.5); } 50% { opacity: 0.35; box-shadow: 0 0 0 6px rgba(254, 44, 85, 0); } }
 @media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; } }
+
+/* Anúncio padrão do catálogo (aba "Campanha") */
+.catalog-campaign { display: flex; flex-direction: column; gap: 16px; }
+.catalog-campaign__status { display: flex; flex-direction: column; gap: 8px; border-left: 4px solid #ffe08a; }
+.catalog-campaign__status.is-ready { border-left-color: var(--tt-cyan-dark); }
+.catalog-campaign__status p { margin: 0; }
+.catalog-campaign__groups { display: flex; flex-wrap: wrap; gap: 8px; }
+.catalog-campaign__group { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; background: #fafafa; }
+.catalog-campaign__group-title { font-weight: 600; }
+.catalog-campaign__ok { color: var(--tt-cyan-dark); font-weight: 600; }
+.catalog-campaign__todo { color: #9d6a00; font-weight: 600; }
+.catalog-campaign__actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+.catalog-campaign__footer { display: flex; gap: 10px; flex-wrap: wrap; position: sticky; bottom: 0; padding: 12px 0; background: linear-gradient(to top, var(--bg) 70%, transparent); z-index: 2; }
+.catalog-picker__defaults { margin-top: 6px; align-self: flex-start; }

@@ -116,7 +116,8 @@ function catalogTutorial() {
     { type: 'p', text: 'Aba "Conjuntos de produtos": filtre por marca, preço, estoque etc. para anunciar só parte do catálogo.' },
     { type: 'h', text: '4. Crie a campanha' },
     { type: 'ol', items: [
-      'Atalho: no catálogo, botão "Criar campanha com este catálogo" (já abre o assistente com o catálogo e o país escolhidos). Ou use o botão "Publicar campanha" → objetivo "Vendas de produtos".',
+      'Aba "Campanha" do catálogo: escolha UMA vez os criativos da biblioteca (vídeo e capa), quais produtos mostrar, o texto, o botão, a URL e a identidade, e salve. Um painel mostra o que ainda falta.',
+      'Depois, o botão "Criar campanha com este catálogo" abre o assistente já preenchido com tudo isso (só falta escolher as contas de anúncio). No assistente normal, use "Usar o anúncio padrão deste catálogo" sob o seletor de catálogo.',
       'No grupo de anúncios, escolha o catálogo na lista e a meta (Cliques, Conversões com pixel, ou Valor/ROAS). O orçamento fica no grupo.',
       'No anúncio, escolha "Vídeo do catálogo" (gerado com os seus produtos) ou o seu próprio vídeo, quais produtos mostrar (todos, um conjunto ou até 20 SKUs), o texto, o botão e a URL da sua loja.',
       'Publique (tudo nasce pausado) e ative no Gerenciador.',

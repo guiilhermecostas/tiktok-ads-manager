@@ -19,6 +19,7 @@ const intIn = (value, fallback, min, max) => {
  *  - GET    /:catalogId/products?connectionId=&bcId=&page=&pageSize=&sku=&productSetId=&available=1
  *  - POST   /:catalogId/products       { connectionId, bcId, products: [...] }   envia um lote (até 500)
  *  - GET    /:catalogId/logs/:feedLogId?connectionId=&bcId=         resultado do processamento de um envio
+ *  - GET/PUT/DELETE /:catalogId/defaults   anúncio padrão do catálogo (criativos, produtos, texto… que a campanha já puxa pronto)
  *  - GET/POST /:catalogId/sets         conjuntos de produtos
  *  - GET/POST /:catalogId/feeds, POST .../feeds/:feedId/status, DELETE .../feeds/:feedId, GET .../feeds/:feedId/log   sincronização automática (feed de dados)
  * A conexão e a Business Center vêm em TODO pedido: o serviço confere que a conexão é do usuário e que a BC é uma das dela.
@@ -98,6 +99,21 @@ export function createCatalogRouter({ service, limits = {} }) {
 
   router.get('/:catalogId/feeds/:feedId/log', canUse, throttle(readLimiter), async (req, res) => {
     res.json({ runs: await service.feedLog(req.actor, refOf(req.query, req.params), req.params.feedId) });
+  });
+
+  // ---------- anúncio padrão do catálogo ----------
+  router.get('/:catalogId/defaults', canUse, throttle(readLimiter), async (req, res) => {
+    res.json(await service.getDefaults(req.actor, refOf(req.query, req.params)));
+  });
+
+  router.put('/:catalogId/defaults', canUse, throttle(writeLimiter), async (req, res) => {
+    const body = asObject(req.body);
+    res.json(await service.saveDefaults(req.actor, refOf(body, req.params), { adGroup: body.adGroup, ad: body.ad }));
+  });
+
+  router.delete('/:catalogId/defaults', canUse, throttle(writeLimiter), async (req, res) => {
+    await service.removeDefaults(req.actor, refOf(req.query, req.params));
+    res.status(204).end();
   });
 
   router.get('/:catalogId/sets', canUse, throttle(readLimiter), async (req, res) => {

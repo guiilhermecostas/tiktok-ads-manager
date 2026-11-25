@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { AD_STATUSES, adStatusInfo, isAdProblem } from '../shared/ad-status.js';
 import { MANAGER_COLUMNS, MAX_VIEWS_PER_USER, defaultViewConfig, normalizeViewConfig } from '../shared/manager-columns.js';
 import { parseDate, rangeDays, resolveRange } from '../src/lib/date-range.js';
 import { MAIL_CONFIG, createFakeMailer } from './fake-mailer.js';
@@ -66,6 +67,34 @@ describe('Gerenciador: visualizações e períodos (regras compartilhadas)', () 
     assert.equal(parseDate('2026-02-29'), null);
     assert.equal(rangeDays('2026-11-01', '2026-11-01'), 1);
     assert.equal(rangeDays('2026-11-01', '2026-11-30'), 30);
+  });
+});
+
+describe('Gerenciador: rótulos de status do anúncio', () => {
+  it('status sem o prefixo AD_STATUS_ (ex.: conta penalizada) saem em português, nunca crus', () => {
+    assert.equal(adStatusInfo('ADVERTISER_ACCOUNT_PUNISH').label, 'Conta penalizada pelo TikTok');
+    assert.equal(adStatusInfo('ADVERTISER_ACCOUNT_PUNISH').tone, 'danger');
+    assert.equal(isAdProblem('ADVERTISER_ACCOUNT_PUNISH'), true);
+    assert.equal(adStatusInfo('ADVERTISER_CONTRACT_PENDING').tone, 'warning');
+    assert.equal(adStatusInfo('ADGROUP_STATUS_FROZEN').label, 'Grupo congelado');
+  });
+
+  it('estados de exclusão aparecem como excluído e não contam como problema', () => {
+    for (const key of ['AD_STATUS_DELETE', 'AD_STATUS_CAMPAIGN_DELETE', 'AD_STATUS_ADGROUP_DELETE', 'ADGROUP_STATUS_DELETE', 'CAMPAIGN_STATUS_DELETE']) {
+      assert.match(adStatusInfo(key).label, /exclu[ií]d/i, key);
+      assert.equal(adStatusInfo(key).tone, 'neutral', key);
+      assert.equal(isAdProblem(key), false, key);
+    }
+  });
+
+  it('valor desconhecido é humanizado sem o prefixo e todo rótulo tem tom válido', () => {
+    assert.equal(adStatusInfo('ADVERTISER_SOMETHING_NEW').label, 'Something new');
+    assert.equal(adStatusInfo('AD_STATUS_BRAND_NEW').label, 'Brand new');
+    assert.equal(adStatusInfo(null).label, 'Sem status');
+    for (const [key, info] of Object.entries(AD_STATUSES)) {
+      assert.ok(info.label.length > 0 && !/^[A-Z_]+$/.test(info.label), key);
+      assert.ok(['success', 'neutral', 'warning', 'danger'].includes(info.tone), key);
+    }
   });
 });
 

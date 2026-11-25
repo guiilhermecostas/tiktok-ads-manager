@@ -20,8 +20,9 @@ const label = (c) => `${c.name || c.id} · BC ${c.bcId} · ${c.regionCode ?? '�
  * TikTok entra como texto (nunca HTML).
  *  - accounts: contas usáveis [{ id, name, businessCenterId, ownerBcId }]
  *  - onPick(catalogId | undefined, bcId | undefined)
+ *  - onApplyDefaults(catalog): preenche o anúncio com o padrão salvo do catálogo escolhido (botão sob o seletor)
  */
-export function createCatalogPicker({ id, value, disabled = false, error = false, describedBy = null, accounts, onPick }) {
+export function createCatalogPicker({ id, value, disabled = false, error = false, describedBy = null, accounts, onPick, onApplyDefaults = null }) {
   let catalogs = [];
   let loadId = 0;
   const input = h('input', {
@@ -80,9 +81,24 @@ export function createCatalogPicker({ id, value, disabled = false, error = false
     onPick(input.value || undefined, known?.bcId);
   });
   refresh.addEventListener('click', () => load({ force: true }));
+  const apply = onApplyDefaults && h('button', {
+    type: 'button', class: 'btn btn--secondary btn--sm catalog-picker__defaults', disabled,
+    onClick: async () => {
+      const chosen = catalogs.find((c) => c.id === input.value);
+      if (!chosen) { status.textContent = 'Escolha um catálogo da lista para usar o anúncio padrão dele.'; return; }
+      apply.disabled = true;
+      try {
+        if (!(await onApplyDefaults(chosen))) status.textContent = 'Este catálogo ainda não tem anúncio padrão. Crie em Catálogo → Campanha.';
+      } catch (err) {
+        status.textContent = `Não foi possível aplicar o anúncio padrão (${err.message}).`;
+      } finally {
+        apply.disabled = disabled;
+      }
+    },
+  }, 'Usar o anúncio padrão deste catálogo');
 
   load();
-  return h('div', { class: 'pixel-picker' }, h('div', { class: 'pixel-picker__row' }, select, refresh), input, status);
+  return h('div', { class: 'pixel-picker' }, h('div', { class: 'pixel-picker__row' }, select, refresh), input, apply, status);
 }
 
 /**

@@ -1,6 +1,7 @@
 import { countByKind } from '/shared/account-labels.js';
 import { distinctCurrencies, isMainCurrency, moneyPrefix } from '/shared/currency.js';
-import { COUNTRIES, STEPS, collectCreativeRefs, defaultConfig, findField, reconcileConfig, stepOfPath, validateConfig } from '/shared/campaign-spec.js';
+import { catalogPresetConfig, defaultCreativeRefs, mergeCatalogDefaults } from '/shared/catalog-defaults.js';
+import { STEPS, collectCreativeRefs, defaultConfig, findField, reconcileConfig, stepOfPath, validateConfig } from '/shared/campaign-spec.js';
 import { get, post, put } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
 import { parseMoneyToCents } from '../../format.js';
@@ -29,30 +30,12 @@ function failureMessage(err) {
 }
 
 /**
- * Campanha de catálogo já encaminhada (atalho "Criar campanha com este catálogo"): objetivo Vendas de produtos, o catálogo e a BC dona dele,
- * vídeo do catálogo, o país do catálogo como destino e nomes sugeridos. A pessoa só completa o resto.
- */
-export function catalogPresetConfig(catalog) {
-  const config = defaultConfig();
-  const label = (catalog.name || catalog.id).slice(0, 80);
-  config.campaign.objective = 'PRODUCT_SALES';
-  config.campaign.name = `Vendas | ${label}`;
-  config.adGroup.name = `Grupo | ${label}`;
-  config.adGroup.catalogId = catalog.id;
-  config.adGroup.catalogBcId = catalog.bcId;
-  if (COUNTRIES.some((c) => c.value === catalog.regionCode)) config.adGroup.locations = [catalog.regionCode];
-  config.ad.name = `Anúncio | ${label}`;
-  config.ad.format = 'CATALOG_VIDEO';
-  return config;
-}
-
-/**
  * Assistente de campanha em POP-UP (aberto pelo botão flutuante "Publicar campanha" ou por "Editar" na lista).
  * Passos: Objetivo → Campanha → Grupo de anúncios → Anúncio → Revisão e publicação (escolha das contas de anúncio).
  * A UI é gerada pela especificação compartilhada (/shared/campaign-spec.js); o servidor valida de novo.
  * `ctx.reload()` atualiza a página de trás quando algo foi salvo/publicado.
  */
-export function openCampaignWizard(ctx, { campaignId = null, catalog = null } = {}) {
+export function openCampaignWizard(ctx, { campaignId = null, catalog = null, defaults = null } = {}) {
   if (active) return active;
 
   const body = h('div', { class: 'wizard-modal' }, spinner());
@@ -111,8 +94,10 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null } = 
     } catch {
       /* a biblioteca vazia/indisponível não impede abrir o assistente */
     }
-    if (existing?.config) {
-      const missing = [...new Set(collectCreativeRefs(reconcileConfig(existing.config)).map((r) => r.id))].filter((id) => !creativeMap.has(id));
+    // Campanha existente ou anúncio padrão do catálogo: os criativos que ela usa e que ficaram fora dos 100 mais recentes são buscados um a um.
+    const seed = existing?.config ?? (catalog ? catalogPresetConfig(catalog, defaults) : null);
+    if (seed) {
+      const missing = [...new Set(collectCreativeRefs(reconcileConfig(seed)).map((r) => r.id))].filter((id) => !creativeMap.has(id));
       await Promise.allSettled(missing.map(async (id) => creativeMap.set(id, (await get(`/creatives/${id}`)).creative)));
     }
     return { existing, creativeMap, advertisers: advertiserResult.advertisers };
@@ -121,7 +106,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null } = 
   function start({ existing, creativeMap, advertisers }) {
     st = {
       id: existing?.id ?? null,
-      config: reconcileConfig(existing?.config ?? (catalog ? catalogPresetConfig(catalog) : defaultConfig())),
+      config: reconcileConfig(existing?.config ?? (catalog ? catalogPresetConfig(catalog, defaults) : defaultConfig())),
       publish: existing?.publish ?? NO_PUBLISH,
       publications: existing?.publications ?? [],
       step: catalog && !existing ? 1 : 0, // com o catálogo escolhido, o objetivo já está definido: começa em "Campanha"
@@ -194,6 +179,23 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null } = 
       get currencyNote() {
         const codes = usableCurrencies();
         return codes.some((c) => !isMainCurrency(c)) ? `Você tem contas em ${codes.join(' e ')}. O valor é usado como está, na moeda de cada conta onde publicar (não é convertido). As contas são escolhidas no último passo.` : null;
+      },
+      /**
+       * Preenche o anúncio com o PADRÃO salvo do catálogo escolhido (criativos da biblioteca, produtos, texto, botão, URL, identidade…).
+       * Devolve false se o catálogo ainda não tem anúncio padrão. Só mexe nos campos do padrão; o resto da campanha continua como está.
+       */
+      async applyCatalogDefaults(chosen) {
+        const { defaults: saved } = await get(`/tiktok/catalogs/${encodeURIComponent(chosen.id)}/defaults?connectionId=${chosen.connectionId}&bcId=${encodeURIComponent(chosen.bcId)}`);
+        if (!saved) return false;
+        const missing = defaultCreativeRefs(saved).map((r) => r.id).filter((id) => !creativeMap.has(id));
+        await Promise.allSettled(missing.map(async (id) => creativeMap.set(id, (await get(`/creatives/${id}`)).creative)));
+        st.config = mergeCatalogDefaults(st.config, saved);
+        const label = (chosen.name || chosen.id).slice(0, 80);
+        st.config.adGroup.name ||= `Grupo | ${label}`; // nomes em branco ganham uma sugestão (o padrão não guarda nomes)
+        st.config.ad.name ||= `Anúncio | ${label}`;
+        st.dirty = true;
+        draw();
+        return true;
       },
       // Contas usáveis: o campo de pixel lista os pixels que já existem nelas.
       get pixelAccounts() { return st.advertisers.filter((a) => a.businessCenterStatus === 'active'); },

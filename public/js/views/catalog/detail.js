@@ -4,9 +4,10 @@ import { h, setChildren } from '../../dom.js';
 import { formatCurrency, formatNumber } from '../../format.js';
 import { can } from '../../state.js';
 import { alertBox, badge, button, emptyState, spinner } from '../../ui.js';
-import { openCampaignWizard } from '../campaign-wizard/index.js';
 import { addProductsTab } from './add-products.js';
+import { catalogCampaignTab } from './campaign-tab.js';
 import { feedsTab } from './feeds.js';
+import { openCatalogCampaign } from './open-campaign.js';
 import { productSetsTab } from './product-sets.js';
 
 const AVAILABILITY_LABEL = Object.fromEntries(AVAILABILITY);
@@ -44,7 +45,7 @@ export function catalogDetail({ ctx, catalog, tab = 'products', canWrite, onBack
   }
 
   function drawTabs() {
-    const items = [['products', 'Produtos'], ['add', 'Adicionar produtos'], ['sync', 'Sincronização'], ['sets', 'Conjuntos de produtos']];
+    const items = [['products', 'Produtos'], ['add', 'Adicionar produtos'], ['sync', 'Sincronização'], ['sets', 'Conjuntos de produtos'], ['campaign', 'Campanha']];
     setChildren(tabs, items.map(([id, label]) => h('button', {
       type: 'button', role: 'tab', class: `tab${active === id ? ' is-active' : ''}`, 'aria-selected': String(active === id),
       onClick: () => { active = id; drawTabs(); drawContent(); },
@@ -58,6 +59,8 @@ export function catalogDetail({ ctx, catalog, tab = 'products', canWrite, onBack
       setChildren(content, view.element);
     } else if (active === 'add') {
       setChildren(content, addProductsTab({ catalog, canWrite, onUploaded: () => { loadSummary(); productsRefresh?.(); } }));
+    } else if (active === 'campaign') {
+      setChildren(content, catalogCampaignTab({ ctx, catalog }));
     } else if (active === 'sync') {
       setChildren(content, feedsTab({ catalog, canWrite }));
     } else {
@@ -72,7 +75,7 @@ export function catalogDetail({ ctx, catalog, tab = 'products', canWrite, onBack
         h('h1', { class: 'page-title' }, catalog.name || catalog.id),
         h('p', { class: 'muted' }, `ID ${catalog.id} · BC ${catalog.bcId} · ${catalog.regionCode ?? '—'} · ${catalog.currency ?? '—'}`)),
       catalog.adCreationEligible ? badge('Pronto para anúncios', 'success') : badge('Sem produtos disponíveis', 'warning'),
-      can('campaigns') ? button('Criar campanha com este catálogo', { variant: 'primary', small: true, onClick: () => openCampaignWizard(ctx, { catalog }) }) : null),
+      can('campaigns') ? button('Criar campanha com este catálogo', { variant: 'primary', small: true, onClick: () => openCatalogCampaign(ctx, catalog) }) : null),
     !canWrite ? alertBox('Você pode ver este catálogo, mas só o dono da conexão altera produtos e conjuntos.', 'warning') : null,
     summary, tabs, content);
   drawTabs();
