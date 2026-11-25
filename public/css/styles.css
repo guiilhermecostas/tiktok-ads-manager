@@ -285,6 +285,7 @@ a { color: var(--tt-red-dark); }
 .cell-note { font-weight: 400; font-size: 12px; margin-top: 2px; max-width: 320px; }
 
 /* ============ Assistente de campanhas ============ */
+.alert--info { background: #eef6ff; border-color: #bcd9ff; color: #0b3b78; }
 .alert--warning { background: #fff8e1; border-color: #ffe08a; color: #6b4a00; }
 .wizard { display: flex; flex-direction: column; gap: 16px; }
 /* Etapas: círculos ligados por uma linha que se preenche conforme o avanço */
@@ -1006,6 +1007,8 @@ body.modal-open { overflow: hidden; }
 .balance__amount dt { font-size: 11px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); }
 .balance__amount dd { margin: 0; font-weight: 700; font-size: 15px; }
 .balance__meta { margin: 0; font-size: 12px; }
+.balance__source { display: block; max-width: 280px; margin-left: auto; white-space: normal; text-align: right; font-family: inherit; font-size: 12px; line-height: 1.35; }
+.balance__sub { margin: 14px 0 6px; font-size: 13px; }
 .balance .num { white-space: nowrap; }
 @media (max-width: 720px) { .balance__details-row > td { padding: 8px 0; } .balance__cell-toggle { text-align: left; } }
 .input--locked { background: #f1f1f2; color: var(--muted); cursor: not-allowed; }
@@ -1044,6 +1047,13 @@ body.modal-open { overflow: hidden; }
 .manager__name { max-width: 250px; }
 .manager__name .acc-id { overflow: hidden; text-overflow: ellipsis; max-width: 250px; }
 .manager__ad { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.manager__tabs { margin: 0 0 14px; max-width: 100%; overflow-x: auto; }
+.manager__drill { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.manager__drill { text-decoration: underline dotted; text-decoration-color: #9a9aa3; text-underline-offset: 3px; }
+.manager__drill:hover { text-decoration-style: solid; text-decoration-color: currentColor; }
+.manager__drill:focus-visible { outline: 2px solid var(--tt-cyan, #25f4ee); outline-offset: 2px; border-radius: 4px; }
+.manager__parent { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 10px; padding: 10px 14px; border-radius: 12px; background: #f1f9f9; border: 1px solid #cfeaea; font-size: 14px; }
+.manager__parent span { min-width: 0; overflow-wrap: anywhere; }
 .manager .table tr.is-selected { background: #f4fbfb; }
 .manager .table th.num, .manager .table td.num { text-align: right; }
 .manager__total td { font-weight: 700; background: #fafafa; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }

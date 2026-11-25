@@ -1,5 +1,6 @@
-import { DATE_PRESETS, MAX_CUSTOM_DAYS, MAX_VIEW_NAME, STATUS_FILTERS, columnOf, defaultViewConfig, normalizeViewConfig } from '/shared/manager-columns.js';
-import { adStatusInfo, isAdProblem } from '/shared/ad-status.js';
+import { isProblem, statusInfo } from '/shared/ad-status.js';
+import { DATE_PRESETS, MAX_CUSTOM_DAYS, MAX_VIEW_NAME, STATUS_FILTERS, appliesTo, columnLabel, columnOf, defaultViewConfig, normalizeViewConfig } from '/shared/manager-columns.js';
+import { DEFAULT_LEVEL, LEVEL_IDS, MANAGER_LEVELS, budgetLabel, goalLabel, objectiveLabel } from '/shared/manager-levels.js';
 import { del, get, patch, post } from '../api.js';
 import { h, setChildren } from '../dom.js';
 import { formatCurrency, formatDate, formatNumber, formatPercent } from '../format.js';
@@ -8,9 +9,10 @@ import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, s
 import { pageHeader } from './layout.js';
 
 /**
- * Gerenciador de anúncios: TODOS os anúncios de TODAS as contas em uma tabela, com status, data de publicação, resultado, gasto, CPC e
- * cliques no link, CTR, ativar/pausar, colunas que se movem (arrastando ou pelos botões), filtros (o período começa em HOJE) e
- * visualizações salvas por pessoa. O período vai ao servidor; busca, situação, conta e ordenação são feitos aqui (instantâneo).
+ * Gerenciador: campanhas, grupos de anúncios e anúncios de TODAS as contas, cada nível na sua aba (clicar numa campanha abre os grupos dela; num
+ * grupo, os anúncios dele), com status, data de publicação, resultado, gasto, CPC e cliques no link, CTR, ativar/pausar, colunas que se movem
+ * (arrastando ou pelos botões), filtros (o período começa em HOJE) e visualizações salvas por pessoa. O período vai ao servidor (uma consulta por
+ * nível, guardada enquanto a pessoa troca de aba); busca, situação, conta e ordenação são feitos aqui (instantâneo).
  * Todo texto (nomes de anúncio, campanhas, mensagens do TikTok) entra como nó de texto, nunca como HTML.
  */
 
@@ -19,7 +21,7 @@ const money = (value, currency) => (value === null || value === undefined ? '—
 const num = (value) => (value === null || value === undefined ? '—' : formatNumber(Math.round(value * 100) / 100));
 const normalize = (text) => String(text ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const canChange = () => can('campaigns');
-const isNumeric = (col) => ['money', 'number', 'percent'].includes(col.type);
+const isNumeric = (col) => ['money', 'number', 'percent', 'budget'].includes(col.type);
 
 export async function managerView() {
   const defaults = defaultViewConfig();
@@ -27,27 +29,40 @@ export async function managerView() {
     config: structuredClone(defaults), // visualização em uso (colunas, ordem, ordenação, filtros, período, tamanho da página)
     views: [], currentViewId: null, baseConfig: JSON.stringify(defaults), // a visualização salva escolhida e como ela estava ao ser carregada
     custom: { from: '', to: '' }, search: '', page: 1, selected: new Set(),
+    level: DEFAULT_LEVEL, parent: null, // aba aberta e filtro vindo de um clique em campanha/grupo: { level, id, name }
+    cache: {}, // nível -> última resposta do servidor (ao trocar de aba, não consulta de novo o que já carregou no mesmo período)
     data: null, loading: false, error: null,
   };
   const root = h('div', { class: 'manager' });
   let loadId = 0;
+  const levelDef = () => MANAGER_LEVELS[st.level];
+  const rowsOf = (data = st.data) => data?.[st.level] ?? [];
+  const periodParams = () => {
+    const params = new URLSearchParams({ preset: st.config.datePreset });
+    if (st.config.datePreset === 'custom') {
+      params.set('from', st.custom.from);
+      params.set('to', st.custom.to);
+    }
+    return params;
+  };
 
   // ---------- dados ----------
-  async function load({ fresh = false } = {}) {
+  async function load({ fresh = false, reset = false } = {}) {
     const current = ++loadId;
+    const level = st.level;
+    if (fresh || reset) st.cache = {}; // "Atualizar" e a troca de período descartam o que estava guardado; cada aba busca de novo ao abrir
     st.loading = true;
     st.error = null;
+    if (fresh || reset) drawTabs(); // as contagens das abas saem junto com o cache
     drawBody();
     try {
-      const params = new URLSearchParams({ preset: st.config.datePreset });
-      if (st.config.datePreset === 'custom') {
-        params.set('from', st.custom.from);
-        params.set('to', st.custom.to);
-      }
+      const params = periodParams();
       if (fresh) params.set('refresh', '1');
-      const data = await get(`/tiktok/manager/ads?${params}`);
+      const data = await get(`/tiktok/manager/${level}?${params}`);
       if (current !== loadId) return false;
       st.data = data;
+      st.cache[level] = data;
+      drawTabs();
       st.selected.clear();
       st.page = 1;
       return true;
@@ -64,19 +79,25 @@ export async function managerView() {
   }
 
   // ---------- derivados ----------
-  const statusOf = (ad) => adStatusInfo(ad.status);
-  function visibleAds() {
+  const statusOf = (row) => statusInfo(st.level, row.status);
+  const columnsHere = () => st.config.columns.filter((c) => appliesTo(columnOf(c.key), st.level));
+  /** Ordenação válida neste nível (uma coluna que só existe em outro nível volta para "Valor gasto"). */
+  const sortKeyHere = () => (appliesTo(columnOf(st.config.sort.key), st.level) ? st.config.sort.key : 'spend');
+  function visibleRows() {
     if (!st.data) return [];
     const { status, accountId, onlySpent } = st.config.filters;
     const q = normalize(st.search);
-    return st.data.ads.filter((a) => {
+    const parent = st.parent;
+    return rowsOf().filter((a) => {
+      if (parent?.level === 'campaigns' && a.campaignId !== parent.id) return false;
+      if (parent?.level === 'adgroups' && a.adgroupId !== parent.id) return false;
       if (accountId && a.advertiserId !== accountId) return false;
       if (onlySpent && !(a.spend > 0)) return false;
       if (status === 'active' && a.operationStatus !== 'ENABLE') return false;
       if (status === 'paused' && a.operationStatus !== 'DISABLE') return false;
-      if (status === 'delivering' && a.status !== 'AD_STATUS_DELIVERY_OK') return false;
-      if (status === 'problem' && !isAdProblem(a.status)) return false;
-      if (q && !normalize(`${a.name} ${a.adId} ${a.campaignName} ${a.adgroupName} ${a.accountName}`).includes(q)) return false;
+      if (status === 'delivering' && a.status !== levelDef().enabledStatus) return false;
+      if (status === 'problem' && !isProblem(st.level, a.status)) return false;
+      if (q && !normalize(`${a.name} ${a.id} ${a.campaignName ?? ''} ${a.adgroupName ?? ''} ${a.accountName}`).includes(q)) return false;
       return true;
     });
   }
@@ -89,11 +110,15 @@ export async function managerView() {
       case 'account': return normalize(ad.accountName);
       case 'campaign': return normalize(ad.campaignName);
       case 'adgroup': return normalize(ad.adgroupName);
+      case 'objective': return normalize(objectiveLabel(ad.objectiveType));
+      case 'goal': return normalize(goalLabel(ad.optimizationGoal));
+      case 'budget': return ad.budgetMode === 'BUDGET_MODE_INFINITE' ? 0 : (ad.budget ?? null);
       default: return ad[key] ?? null;
     }
   };
   function sorted(list) {
-    const { key, dir } = st.config.sort;
+    const { dir } = st.config.sort;
+    const key = sortKeyHere();
     const sign = dir === 'asc' ? 1 : -1;
     return [...list].sort((a, b) => {
       const x = sortValue(a, key);
@@ -101,56 +126,61 @@ export async function managerView() {
       if (x === null && y === null) return 0;
       if (x === null) return 1; // vazios sempre no fim
       if (y === null) return -1;
-      return (x < y ? -1 : x > y ? 1 : 0) * sign || a.adId.localeCompare(b.adId);
+      return (x < y ? -1 : x > y ? 1 : 0) * sign || a.id.localeCompare(b.id);
     });
   }
 
   // ---------- ativar / pausar ----------
-  function announce(results, status) {
+  function announce(results, status, levelId) {
+    const level = MANAGER_LEVELS[levelId];
     const updated = results.reduce((n, r) => n + r.updated.length, 0);
     const failed = results.reduce((n, r) => n + r.failed.length, 0);
     const failure = results.find((r) => r.failure)?.failure;
     if (failed) return toast(`${updated} alterado(s); ${failed} não mudaram${failure ? `: ${failure}` : '.'}`, 'danger');
     const on = status === 'ENABLE';
-    if (updated === 1) return toast(on ? 'Anúncio ativado.' : 'Anúncio pausado.');
-    return toast(`${updated} anúncios ${on ? 'ativados' : 'pausados'}.`);
+    const fem = level.article === 'a';
+    if (updated === 1) return toast(`${level.singular.charAt(0).toUpperCase()}${level.singular.slice(1)} ${on ? 'ativ' : 'paus'}${fem ? 'ada' : 'ado'}.`);
+    return toast(`${updated} ${level.plural} ${on ? 'ativ' : 'paus'}${fem ? 'adas' : 'ados'}.`);
   }
 
-  /** Ativa/pausa anúncios de UMA conta. `silent`: quem chama junta os avisos (ação em massa). Sempre devolve { updated, failed, failure }. */
-  async function changeStatus(advertiserId, ads, status, { silent = false } = {}) {
-    const ids = ads.map((a) => a.adId);
-    const before = new Map(ads.map((a) => [a.adId, { op: a.operationStatus, status: a.status }]));
-    const restore = (list) => { for (const a of list) Object.assign(a, { operationStatus: before.get(a.adId).op, status: before.get(a.adId).status }); };
-    for (const a of ads) { // otimista: o interruptor responde na hora; volta se der erro
-      a.operationStatus = status === 'ENABLE' ? 'ENABLE' : 'DISABLE';
-      a.status = status === 'ENABLE' ? 'AD_STATUS_DELIVERY_OK' : 'AD_STATUS_DISABLE';
+  /** Ativa/pausa itens do nível aberto, de UMA conta. `silent`: quem chama junta os avisos (ação em massa). Sempre devolve { updated, failed, failure }. */
+  async function changeStatus(advertiserId, rows, status, { silent = false } = {}) {
+    const levelId = st.level;
+    const level = MANAGER_LEVELS[levelId];
+    const ids = rows.map((r) => r.id);
+    const before = new Map(rows.map((r) => [r.id, { op: r.operationStatus, status: r.status }]));
+    const restore = (list) => { for (const r of list) Object.assign(r, { operationStatus: before.get(r.id).op, status: before.get(r.id).status }); };
+    for (const r of rows) { // otimista: o interruptor responde na hora; volta se der erro
+      r.operationStatus = status === 'ENABLE' ? 'ENABLE' : 'DISABLE';
+      r.status = status === 'ENABLE' ? level.enabledStatus : level.disabledStatus;
     }
     drawBody();
     let result;
     try {
-      result = await post('/tiktok/manager/ads/status', { advertiserId, adIds: ids, status });
+      result = await post(`/tiktok/manager/${levelId}/status`, { advertiserId, [level.idsField]: ids, status });
       const done = new Set(result.updated);
-      restore(ads.filter((a) => !done.has(a.adId)));
+      restore(rows.filter((r) => !done.has(r.id)));
     } catch (err) {
-      restore(ads);
+      restore(rows);
       result = { updated: [], failed: ids, failure: err.message };
     }
+    if (result.updated.length) st.cache = { [levelId]: st.data }; // pausar uma campanha muda o status dos grupos e anúncios dela: as outras abas buscam de novo
     drawBody();
     if (!silent) {
-      announce([result], status);
+      announce([result], status, levelId);
       refreshQuietly(); // o status exato (ex.: "em análise") vem do TikTok: busca de novo sem perder o que a pessoa está vendo
     }
     return result;
   }
   async function refreshQuietly() {
+    const levelId = st.level;
     try {
-      const params = new URLSearchParams({ preset: st.config.datePreset, refresh: '1' });
-      if (st.config.datePreset === 'custom') {
-        params.set('from', st.custom.from);
-        params.set('to', st.custom.to);
-      }
-      const data = await get(`/tiktok/manager/ads?${params}`);
+      const params = periodParams();
+      params.set('refresh', '1');
+      const data = await get(`/tiktok/manager/${levelId}?${params}`);
+      if (st.level !== levelId) return; // a pessoa já trocou de aba: essa aba busca de novo ao abrir
       st.data = data;
+      st.cache[levelId] = data;
       drawBody();
     } catch {
       /* mantém o que está na tela */
@@ -158,20 +188,26 @@ export async function managerView() {
   }
 
   async function bulk(status) {
-    const ads = st.data.ads.filter((a) => st.selected.has(a.key) && a.operationStatus !== 'FROZEN');
-    if (!ads.length) return toast('Nenhum anúncio selecionável (anúncios encerrados não podem ser ativados).', 'danger');
+    const levelId = st.level;
+    const level = MANAGER_LEVELS[levelId];
+    const rows = rowsOf().filter((r) => st.selected.has(r.key) && r.operationStatus !== 'FROZEN');
+    if (!rows.length) return toast(`Nenhum${level.article === 'a' ? 'a' : ''} ${level.singular} selecionável (itens encerrados não podem ser ativados).`, 'danger');
     const ok = await confirmDialog({
-      title: status === 'ENABLE' ? `Ativar ${ads.length} anúncio(s)?` : `Pausar ${ads.length} anúncio(s)?`,
-      message: status === 'ENABLE' ? 'Os anúncios selecionados voltam a veicular e a gastar.' : 'Os anúncios selecionados deixam de veicular.',
+      title: status === 'ENABLE' ? `Ativar ${rows.length} ${rows.length === 1 ? level.singular : level.plural}?` : `Pausar ${rows.length} ${rows.length === 1 ? level.singular : level.plural}?`,
+      message: ((fem) => {
+        const subject = `${level.article === 'a' ? 'As' : 'Os'} ${level.plural} selecionad${fem ? 'as' : 'os'}`;
+        if (levelId === 'ads') return status === 'ENABLE' ? 'Os anúncios selecionados voltam a veicular e a gastar.' : 'Os anúncios selecionados deixam de veicular.';
+        return status === 'ENABLE' ? `${subject} voltam a veicular (só gastam os anúncios que estiverem ativos dentro ${fem ? 'delas' : 'deles'}).` : `${subject} e tudo o que está dentro ${fem ? 'delas' : 'deles'} deixam de veicular.`;
+      })(level.article === 'a'),
       confirmLabel: status === 'ENABLE' ? 'Ativar' : 'Pausar',
       danger: status !== 'ENABLE',
     });
     if (!ok) return undefined;
     const byAccount = new Map();
-    for (const a of ads) byAccount.set(a.advertiserId, [...(byAccount.get(a.advertiserId) ?? []), a]);
+    for (const r of rows) byAccount.set(r.advertiserId, [...(byAccount.get(r.advertiserId) ?? []), r]);
     st.selected.clear();
     const results = await Promise.all([...byAccount.entries()].map(([advertiserId, list]) => changeStatus(advertiserId, list, status, { silent: true })));
-    announce(results, status);
+    announce(results, status, levelId);
     refreshQuietly();
     return undefined;
   }
@@ -283,7 +319,7 @@ export async function managerView() {
       await loadViews();
       applyConfig(defaults, null);
       toast('Visualização excluída.');
-      await load();
+      await load({ reset: true });
     } catch (err) {
       toast(err.message, 'danger');
     }
@@ -294,7 +330,7 @@ export async function managerView() {
     applyConfig(view ? view.config : defaults, view ? view.id : null);
     st.page = 1;
     drawToolbar();
-    if (st.config.datePreset !== presetBefore) load();
+    if (st.config.datePreset !== presetBefore) load({ reset: true });
     else drawBody();
   }
 
@@ -313,18 +349,19 @@ export async function managerView() {
   function columnsDialog() {
     const list = h('ul', { class: 'manager-cols' });
     function paint() {
+      const here = columnsHere(); // só as colunas que existem neste nível (as outras ficam como estão)
       setChildren(
         list,
-        st.config.columns.map((c, i) => {
+        here.map((c, i) => {
           const def = columnOf(c.key);
           const locked = c.key === 'name';
           return h(
             'li',
             { class: 'manager-cols__item' },
-            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: c.visible, disabled: locked, onChange: (e) => { c.visible = e.target.checked; drawToolbar(); drawBody(); } }), h('span', null, def.label, locked ? ' (sempre visível)' : '')),
+            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: c.visible, disabled: locked, onChange: (e) => { c.visible = e.target.checked; drawToolbar(); drawBody(); } }), h('span', null, columnLabel(def, st.level), locked ? ' (sempre visível)' : '')),
             h('span', { class: 'manager-cols__move' },
-              h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Mover ${def.label} para cima`, disabled: i === 0, onClick: () => { moveColumn(c.key, st.config.columns[i - 1].key); paint(); } }, '↑'),
-              h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Mover ${def.label} para baixo`, disabled: i === st.config.columns.length - 1, onClick: () => { moveColumn(c.key, st.config.columns[i + 1].key); paint(); } }, '↓')),
+              h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Mover ${columnLabel(def, st.level)} para cima`, disabled: i === 0, onClick: () => { moveColumn(c.key, here[i - 1].key); paint(); } }, '↑'),
+              h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Mover ${columnLabel(def, st.level)} para baixo`, disabled: i === here.length - 1, onClick: () => { moveColumn(c.key, here[i + 1].key); paint(); } }, '↓')),
           );
         }),
       );
@@ -337,6 +374,35 @@ export async function managerView() {
     });
   }
 
+  // ---------- abas (campanhas > grupos de anúncios > anúncios) ----------
+  const tabs = h('div', { class: 'tabs tabs--hub manager__tabs', role: 'tablist', 'aria-label': 'Nível do Gerenciador' });
+  function drawTabs() {
+    setChildren(tabs, LEVEL_IDS.map((id) => {
+      const count = st.cache[id]?.[id]?.length;
+      return h('button', { type: 'button', role: 'tab', class: `tab${st.level === id ? ' is-active' : ''}`, 'aria-selected': String(st.level === id), onClick: () => openLevel(id) },
+        MANAGER_LEVELS[id].tab, count === undefined ? null : h('span', { class: 'tab__count' }, formatNumber(count)));
+    }));
+  }
+
+  /** Abre uma aba. Já carregada neste período = aparece na hora; senão consulta o TikTok. `parent`: veio de um clique em campanha/grupo. */
+  function openLevel(id, { parent = null } = {}) {
+    if (id === st.level && !parent && !st.parent) return;
+    loadId += 1; // descarta a resposta de uma consulta ainda em andamento (de outra aba)
+    st.level = id;
+    st.parent = parent;
+    st.selected.clear();
+    st.search = '';
+    st.page = 1;
+    st.error = null;
+    const cached = st.cache[id];
+    st.data = cached ?? null;
+    st.loading = !cached;
+    drawTabs();
+    drawToolbar();
+    if (cached) drawBody();
+    else load();
+  }
+
   // ---------- desenho: barra de ferramentas ----------
   const toolbar = h('div', { class: 'manager__toolbar' });
   function drawToolbar() {
@@ -347,7 +413,7 @@ export async function managerView() {
     viewSelect.value = st.currentViewId === null ? '' : String(st.currentViewId);
     const dirty = isDirty();
 
-    const preset = h('select', { class: 'input input--filter', 'aria-label': 'Período', onChange: (e) => { st.config.datePreset = e.target.value; drawToolbar(); if (e.target.value !== 'custom') load(); } },
+    const preset = h('select', { class: 'input input--filter', 'aria-label': 'Período', onChange: (e) => { st.config.datePreset = e.target.value; drawToolbar(); if (e.target.value !== 'custom') load({ reset: true }); } },
       DATE_PRESETS.map((p) => h('option', { value: p.id }, p.label)), h('option', { value: 'custom' }, 'Personalizado…'));
     preset.value = st.config.datePreset;
     const customBox = st.config.datePreset === 'custom'
@@ -357,7 +423,7 @@ export async function managerView() {
         h('input', { class: 'input', type: 'date', 'aria-label': 'Data final', value: st.custom.to, onChange: (e) => { st.custom.to = e.target.value; } }),
         button('Aplicar', { small: true, variant: 'primary', onClick: () => {
           if (!st.custom.from || !st.custom.to || st.custom.from > st.custom.to) return toast('Informe as duas datas (a inicial não pode ser depois da final).', 'danger');
-          return load();
+          return load({ reset: true });
         } }),
         h('span', { class: 'muted manager__hint' }, `até ${MAX_CUSTOM_DAYS} dias`))
       : null;
@@ -370,7 +436,7 @@ export async function managerView() {
     const statusSelect = h('select', { class: 'input input--filter', 'aria-label': 'Situação', onChange: (e) => { st.config.filters.status = e.target.value; st.page = 1; drawToolbar(); drawBody(); } },
       STATUS_FILTERS.map((v) => h('option', { value: v }, STATUS_LABELS[v])));
     statusSelect.value = st.config.filters.status;
-    const search = h('input', { class: 'input toolbar__search', type: 'search', maxlength: 100, placeholder: 'Buscar anúncio, campanha, grupo, conta ou ID…', 'aria-label': 'Buscar anúncios', value: st.search,
+    const search = h('input', { class: 'input toolbar__search', type: 'search', maxlength: 100, placeholder: levelDef().searchHint, 'aria-label': `Buscar ${levelDef().plural}`, value: st.search,
       onInput: (e) => { st.search = e.target.value; st.page = 1; drawBody(); } });
 
     setChildren(
@@ -392,30 +458,48 @@ export async function managerView() {
   // ---------- desenho: tabela ----------
   const body = h('div', { class: 'manager__body' });
 
-  function cell(col, ad) {
+  /** Clicar numa campanha abre os grupos dela; num grupo, os anúncios dele. */
+  function drill(row) {
+    if (st.level === 'campaigns') openLevel('adgroups', { parent: { level: 'campaigns', id: row.id, name: row.name } });
+    else if (st.level === 'adgroups') openLevel('ads', { parent: { level: 'adgroups', id: row.id, name: row.name } });
+  }
+  const DRILL_HINT = { campaigns: 'Ver os grupos de anúncios desta campanha', adgroups: 'Ver os anúncios deste grupo' };
+
+  function cell(col, row) {
+    const label = columnLabel(col, st.level);
     switch (col.key) {
-      case 'name': return h('td', { class: 'manager__name', 'data-label': col.label }, h('span', { class: 'cell-strong manager__ad', title: ad.name }, ad.name || ad.adId), h('span', { class: 'acc-id' }, `ID ${ad.adId} · ${ad.campaignName || 'sem campanha'}`));
-      case 'status': { const info = statusOf(ad); return h('td', { 'data-label': col.label }, badge(info.label, info.tone)); }
+      case 'name': {
+        const title = row.name || row.id;
+        const sub = st.level === 'campaigns' ? `ID ${row.id}` : `ID ${row.id} · ${row.campaignName || 'sem campanha'}`;
+        const name = st.level === 'ads'
+          ? h('span', { class: 'cell-strong manager__ad', title }, title)
+          : h('button', { type: 'button', class: 'manager__drill cell-strong manager__ad', title: DRILL_HINT[st.level], onClick: () => drill(row) }, title);
+        return h('td', { class: 'manager__name', 'data-label': label }, name, h('span', { class: 'acc-id' }, sub));
+      }
+      case 'status': { const info = statusOf(row); return h('td', { 'data-label': label }, badge(info.label, info.tone)); }
       case 'toggle': {
-        const on = ad.operationStatus === 'ENABLE';
-        const locked = ad.operationStatus === 'FROZEN' || !canChange();
+        const on = row.operationStatus === 'ENABLE';
+        const locked = row.operationStatus === 'FROZEN' || !canChange();
         const sw = h('button', {
           type: 'button', class: `switch-ad${on ? ' is-on' : ''}`, role: 'switch', 'aria-checked': String(on), disabled: locked,
-          'aria-label': `${on ? 'Pausar' : 'Ativar'} ${ad.name}`,
-          title: ad.operationStatus === 'FROZEN' ? 'Anúncio encerrado: não pode ser ativado' : !canChange() ? 'Sem permissão para ativar/pausar' : on ? 'Clique para pausar' : 'Clique para ativar',
-          onClick: () => changeStatus(ad.advertiserId, [ad], on ? 'DISABLE' : 'ENABLE'),
+          'aria-label': `${on ? 'Pausar' : 'Ativar'} ${row.name}`,
+          title: row.operationStatus === 'FROZEN' ? 'Encerrado: não pode ser ativado' : !canChange() ? 'Sem permissão para ativar/pausar' : on ? 'Clique para pausar' : 'Clique para ativar',
+          onClick: () => changeStatus(row.advertiserId, [row], on ? 'DISABLE' : 'ENABLE'),
         }, h('span', { class: 'switch-ad__thumb' }));
-        return h('td', { 'data-label': col.label }, sw);
+        return h('td', { 'data-label': label }, sw);
       }
-      case 'createdAt': return h('td', { class: 'muted manager__date', 'data-label': col.label }, ad.createdAt ? formatDate(ad.createdAt) : '—');
-      case 'modifiedAt': return h('td', { class: 'muted manager__date', 'data-label': col.label }, ad.modifiedAt ? formatDate(ad.modifiedAt) : '—');
-      case 'account': return h('td', { 'data-label': col.label }, ad.accountName);
-      case 'campaign': return h('td', { 'data-label': col.label }, ad.campaignName || '—');
-      case 'adgroup': return h('td', { 'data-label': col.label }, ad.adgroupName || '—');
-      case 'spend': return h('td', { class: 'num', 'data-label': col.label }, money(ad.hasMetrics ? ad.spend : null, ad.currency));
-      case 'cpc': case 'costPerResult': case 'costPerConversion': return h('td', { class: 'num', 'data-label': col.label }, money(ad.hasMetrics ? ad[col.key] : null, ad.currency));
-      case 'ctr': return h('td', { class: 'num', 'data-label': col.label }, ad.hasMetrics ? formatPercent(ad.ctr) : '—');
-      default: return h('td', { class: 'num', 'data-label': col.label }, ad.hasMetrics ? num(ad[col.key]) : '—'); // result, clicks, impressions, conversions
+      case 'objective': return h('td', { 'data-label': label }, objectiveLabel(row.objectiveType));
+      case 'goal': return h('td', { 'data-label': label }, goalLabel(row.optimizationGoal));
+      case 'budget': return h('td', { class: 'num', 'data-label': label }, budgetLabel(row, st.level, money));
+      case 'createdAt': return h('td', { class: 'muted manager__date', 'data-label': label }, row.createdAt ? formatDate(row.createdAt) : '—');
+      case 'modifiedAt': return h('td', { class: 'muted manager__date', 'data-label': label }, row.modifiedAt ? formatDate(row.modifiedAt) : '—');
+      case 'account': return h('td', { 'data-label': label }, row.accountName);
+      case 'campaign': return h('td', { 'data-label': label }, row.campaignName || '—');
+      case 'adgroup': return h('td', { 'data-label': label }, row.adgroupName || '—');
+      case 'spend': return h('td', { class: 'num', 'data-label': label }, money(row.hasMetrics ? row.spend : null, row.currency));
+      case 'cpc': case 'costPerResult': case 'costPerConversion': return h('td', { class: 'num', 'data-label': label }, money(row.hasMetrics ? row[col.key] : null, row.currency));
+      case 'ctr': return h('td', { class: 'num', 'data-label': label }, row.hasMetrics ? formatPercent(row.ctr) : '—');
+      default: return h('td', { class: 'num', 'data-label': label }, row.hasMetrics ? num(row[col.key]) : '—'); // result, clicks, impressions, conversions
     }
   }
 
@@ -431,22 +515,22 @@ export async function managerView() {
     }
     return [...byCurrency.values()].map((t) => {
       const values = { spend: money(t.spend, t.currency), impressions: num(t.impressions), clicks: num(t.clicks), ctr: t.impressions ? formatPercent((t.clicks / t.impressions) * 100) : '—', cpc: t.clicks ? money(t.spend / t.clicks, t.currency) : '—', result: t.hasResult ? num(t.result) : '—', conversions: num(t.conversions), costPerResult: t.hasResult && t.result ? money(t.spend / t.result, t.currency) : '—', costPerConversion: t.conversions ? money(t.spend / t.conversions, t.currency) : '—' };
-      return h('tr', { class: 'manager__total' }, h('td', null), columns.map((c) => h('td', { class: isNumeric(c) ? 'num' : '', 'data-label': c.label }, c.key === 'name' ? `Total${byCurrency.size > 1 ? ` (${t.currency ?? '—'})` : ''}` : (values[c.key] ?? ''))));
+      return h('tr', { class: 'manager__total' }, h('td', null), columns.map((c) => h('td', { class: isNumeric(c) ? 'num' : '', 'data-label': columnLabel(c, st.level) }, c.key === 'name' ? `Total${byCurrency.size > 1 ? ` (${t.currency ?? '—'})` : ''}` : (values[c.key] ?? ''))));
     });
   }
 
   function drawBody() {
     if (st.loading) {
       const n = st.data?.totalAccounts;
-      return setChildren(body, h('div', { class: 'card manager__loading' }, spinner(), h('p', { class: 'muted' }, `Buscando os anúncios${n ? ` de ${n} contas` : ' de todas as contas'} no TikTok… isso pode levar alguns segundos.`)));
+      return setChildren(body, h('div', { class: 'card manager__loading' }, spinner(), h('p', { class: 'muted' }, `Buscando ${levelDef().plural}${n ? ` de ${n} contas` : ' de todas as contas'} no TikTok… isso pode levar alguns segundos.`)));
     }
     if (st.error) return setChildren(body, alertBox(st.error), h('p', null, button('Tentar de novo', { onClick: () => load() })));
     if (!st.data) return setChildren(body, spinner());
     if (!st.data.totalAccounts) {
-      return setChildren(body, h('div', { class: 'card' }, emptyState({ title: 'Conecte sua Business Center', text: 'Conecte uma Business Center para ver e gerenciar os anúncios de todas as suas contas aqui.', action: h('a', { href: '/business-centers', 'data-link': true, class: 'btn btn--primary' }, 'Conectar Business Center') })));
+      return setChildren(body, h('div', { class: 'card' }, emptyState({ title: 'Conecte sua Business Center', text: 'Conecte uma Business Center para ver e gerenciar as campanhas, os grupos e os anúncios de todas as suas contas aqui.', action: h('a', { href: '/business-centers', 'data-link': true, class: 'btn btn--primary' }, 'Conectar Business Center') })));
     }
-    const list = sorted(visibleAds());
-    const columns = st.config.columns.filter((c) => c.visible).map((c) => columnOf(c.key));
+    const list = sorted(visibleRows());
+    const columns = columnsHere().filter((c) => c.visible).map((c) => columnOf(c.key));
     const pageSize = st.config.pageSize;
     const pages = Math.max(1, Math.ceil(list.length / pageSize));
     st.page = Math.min(st.page, pages);
@@ -455,9 +539,9 @@ export async function managerView() {
     const failed = st.data.accounts.filter((a) => a.status === 'error');
     const noMetrics = st.data.accounts.filter((a) => a.status === 'ok' && a.metricsError);
     const notices = [
-      failed.length ? alertBox(`${failed.length} conta(s) não carregaram os anúncios: ${failed.slice(0, 3).map((a) => `${a.name} (${a.error})`).join(' · ')}${failed.length > 3 ? '…' : ''}`, 'warning') : null,
-      noMetrics.length ? alertBox(`Sem o desempenho de ${noMetrics.length} conta(s) (os anúncios aparecem sem números): ${noMetrics[0].metricsError}`, 'warning') : null,
-      st.data.truncated ? alertBox('Há mais anúncios do que o limite exibido. Use os filtros ou o período para refinar.', 'warning') : null,
+      failed.length ? alertBox(`${failed.length} conta(s) não carregaram ${levelDef().plural}: ${failed.slice(0, 3).map((a) => `${a.name} (${a.error})`).join(' · ')}${failed.length > 3 ? '…' : ''}`, 'warning') : null,
+      noMetrics.length ? alertBox(`Sem o desempenho de ${noMetrics.length} conta(s) (${levelDef().plural} aparecem sem números): ${noMetrics[0].metricsError}`, 'warning') : null,
+      st.data.truncated ? alertBox(`Há mais ${levelDef().plural} do que o limite exibido. Use os filtros ou o período para refinar.`, 'warning') : null,
     ];
 
     const selectedHere = pageRows.filter((a) => st.selected.has(a.key));
@@ -465,9 +549,9 @@ export async function managerView() {
 
     const dragState = { key: null };
     const heads = columns.map((c) => {
-      const sortedBy = st.config.sort.key === c.key;
+      const sortedBy = sortKeyHere() === c.key;
       const th = h('th', { scope: 'col', class: `manager__th${isNumeric(c) ? ' num' : ''}`, draggable: 'true', 'aria-sort': sortedBy ? (st.config.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none', title: 'Arraste para mover a coluna' },
-        h('button', { type: 'button', class: 'th-sort', disabled: !c.sortable, onClick: () => { st.config.sort = { key: c.key, dir: sortedBy && st.config.sort.dir === 'desc' ? 'asc' : 'desc' }; st.page = 1; drawToolbar(); drawBody(); } }, c.label, sortedBy ? (st.config.sort.dir === 'asc' ? ' ↑' : ' ↓') : ''));
+        h('button', { type: 'button', class: 'th-sort', disabled: !c.sortable, onClick: () => { st.config.sort = { key: c.key, dir: sortedBy && st.config.sort.dir === 'desc' ? 'asc' : 'desc' }; st.page = 1; drawToolbar(); drawBody(); } }, columnLabel(c, st.level), sortedBy ? (st.config.sort.dir === 'asc' ? ' ↑' : ' ↓') : ''));
       th.addEventListener('dragstart', (e) => { dragState.key = c.key; e.dataTransfer.setData('application/x-manager-col', c.key); e.dataTransfer.effectAllowed = 'move'; th.classList.add('is-dragging'); });
       th.addEventListener('dragend', () => th.classList.remove('is-dragging'));
       th.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('application/x-manager-col')) { e.preventDefault(); th.classList.add('is-drop'); } });
@@ -477,7 +561,7 @@ export async function managerView() {
     });
 
     const bulkBar = st.selected.size
-      ? h('div', { class: 'selection-bar', role: 'region', 'aria-label': 'Anúncios selecionados' },
+      ? h('div', { class: 'selection-bar', role: 'region', 'aria-label': `${levelDef().tab} selecionados` },
         h('strong', null, `${st.selected.size} ${st.selected.size === 1 ? 'selecionado' : 'selecionados'}`),
         canChange() ? button('Ativar', { small: true, variant: 'primary', onClick: () => bulk('ENABLE') }) : null,
         canChange() ? button('Pausar', { small: true, onClick: () => bulk('DISABLE') }) : null,
@@ -486,7 +570,7 @@ export async function managerView() {
 
     const range = st.data.accounts.find((a) => a.status === 'ok');
     const rangeText = range ? (range.from === range.to ? `Dados de ${range.from.split('-').reverse().join('/')}` : `Dados de ${range.from.split('-').reverse().join('/')} a ${range.to.split('-').reverse().join('/')}`) : '';
-    const summary = h('p', { class: 'muted manager__summary', 'aria-live': 'polite' }, `${list.length} ${list.length === 1 ? 'anúncio' : 'anúncios'}${list.length !== st.data.ads.length ? ` de ${st.data.ads.length}` : ''} · ${st.data.accounts.length} contas · ${rangeText}${st.config.datePreset === 'today' ? ' (hoje, no fuso de cada conta)' : ''} · atualizado às ${new Date(st.data.fetchedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`);
+    const summary = h('p', { class: 'muted manager__summary', 'aria-live': 'polite' }, `${list.length} ${list.length === 1 ? levelDef().singular : levelDef().plural}${list.length !== rowsOf().length ? ` de ${rowsOf().length}` : ''} · ${st.data.accounts.length} contas · ${rangeText}${st.config.datePreset === 'today' ? ' (hoje, no fuso de cada conta)' : ''} · atualizado às ${new Date(st.data.fetchedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`);
 
     const pager = pages > 1
       ? h('div', { class: 'manager__pager' },
@@ -494,12 +578,15 @@ export async function managerView() {
         h('span', { class: 'muted' }, `Página ${st.page} de ${pages}`),
         button('Próxima ›', { small: true, disabled: st.page >= pages, onClick: () => { st.page += 1; drawBody(); } }))
       : null;
-    const sizeSelect = h('select', { class: 'input input--filter manager__size', 'aria-label': 'Anúncios por página', onChange: (e) => { st.config.pageSize = Number(e.target.value); st.page = 1; drawToolbar(); drawBody(); } }, [50, 100, 200].map((n) => h('option', { value: String(n) }, `${n} por página`)));
+    const sizeSelect = h('select', { class: 'input input--filter manager__size', 'aria-label': 'Itens por página', onChange: (e) => { st.config.pageSize = Number(e.target.value); st.page = 1; drawToolbar(); drawBody(); } }, [50, 100, 200].map((n) => h('option', { value: String(n) }, `${n} por página`)));
     sizeSelect.value = String(pageSize);
 
     setChildren(
       body,
       ...notices,
+      st.parent ? h('div', { class: 'manager__parent', role: 'status' },
+        h('span', null, `Mostrando só ${levelDef().plural} ${st.parent.level === 'campaigns' ? 'da campanha' : 'do grupo'} `, h('strong', null, st.parent.name || st.parent.id)),
+        button(`Ver todos ${levelDef().article === 'a' ? 'as' : 'os'} ${levelDef().plural}`, { small: true, onClick: () => { st.parent = null; st.page = 1; drawBody(); } })) : null,
       summary,
       bulkBar,
       list.length
@@ -510,13 +597,14 @@ export async function managerView() {
               h('td', { class: 'manager__check', 'data-label': 'Selecionar' }, h('input', { type: 'checkbox', 'aria-label': `Selecionar ${ad.name}`, checked: st.selected.has(ad.key), onChange: (e) => { if (e.target.checked) st.selected.add(ad.key); else st.selected.delete(ad.key); drawBody(); } })),
               columns.map((c) => cell(c, ad))))),
             h('tfoot', null, totalsRows(list, columns))))
-        : h('div', { class: 'card' }, emptyState({ title: st.data.ads.length ? 'Nenhum anúncio com esses filtros' : 'Nenhum anúncio nas suas contas', text: st.data.ads.length ? 'Mude o período, a situação ou a busca.' : 'Quando você publicar campanhas, os anúncios aparecem aqui.' })),
+        : h('div', { class: 'card' }, emptyState({ title: rowsOf().length ? `Nenhum${levelDef().article === 'a' ? 'a' : ''} ${levelDef().singular} com esses filtros` : `Nenhum${levelDef().article === 'a' ? 'a' : ''} ${levelDef().singular} nas suas contas`, text: rowsOf().length ? 'Mude o período, a situação, a busca ou o filtro.' : levelDef().emptyHint })),
       h('div', { class: 'manager__footer' }, sizeSelect, pager),
     );
     return undefined;
   }
 
-  setChildren(root, pageHeader('Gerenciador', 'Todos os anúncios de todas as suas contas em uma tabela: veja o desempenho, ative ou pause e salve o seu formato de visualização.'), toolbar, body);
+  setChildren(root, pageHeader('Gerenciador', 'Campanhas, grupos de anúncios e anúncios de todas as suas contas, cada um na sua aba: veja o desempenho, ative ou pause e salve o seu formato de visualização.'), tabs, toolbar, body);
+  drawTabs();
   drawBody();
   await loadViews();
   drawToolbar();

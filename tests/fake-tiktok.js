@@ -64,10 +64,17 @@ export function createFakeTiktok() {
     failAdsFor: new Set(), // contas cuja listagem de anúncios responde erro
     rateLimitFor: new Set(), // contas cuja listagem de anúncios responde 40100 (limite de frequência do TikTok)
     failAdStatusFor: new Set(), // contas em que ativar/pausar responde erro
+    campaigns: {}, // conta -> campanhas ({ campaign_id, campaign_name, objective_type, budget_mode, budget, operation_status, secondary_status, create_time, modify_time }); sem isto, saem dos anúncios
+    adgroups: {}, // conta -> grupos ({ adgroup_id, adgroup_name, campaign_id, campaign_name, optimization_goal, budget_mode, budget, ... }); sem isto, saem dos anúncios
+    failCampaignsFor: new Set(), // contas cuja listagem de campanhas responde erro
+    failAdgroupsFor: new Set(), // contas cuja listagem de grupos responde erro
+    failCampaignStatusFor: new Set(), // contas em que ativar/pausar campanha responde erro
+    failAdgroupStatusFor: new Set(), // contas em que ativar/pausar grupo responde erro
     balances: { bc: {}, advertisers: {} }, // BC -> campos de saldo | BC -> [contas com saldo] (formato inferido: o TikTok não documenta a resposta)
     balanceListKey: 'advertiser_account_list', // nome da lista na resposta de /advertiser/balance/get/ (o TikTok não documenta)
     failBalanceBc: new Set(), // BCs cujo /bc/balance/get/ responde "sem permissão"
     failBalanceAdvertisers: new Set(), // BCs cujo /advertiser/balance/get/ responde "sem permissão"
+    rejectBalanceFields: false, // true: /advertiser/balance/get/ recusa o parâmetro `fields`
     // Catálogo (Catalog API v1.3)
     catalogs: {}, // BC -> [{ catalog_id, catalog_name, catalog_type, ad_creation_eligible, create_time, update_time, bc_info, catalog_conf }]
     catalogRegions: ['US', 'BR', 'GB'], // /catalog/available_country/get/
@@ -97,6 +104,70 @@ export function createFakeTiktok() {
 
   const reply = (data, code = 0, message = 'OK') =>
     new Response(JSON.stringify({ code, message, request_id: 'x', data }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  // ---------- Gerenciador: campanhas, grupos e anúncios (contrato v1.3 lido na documentação oficial) ----------
+  const uniqueBy = (list, key) => [...new Map(list.map((item) => [item[key], item])).values()];
+  const hasOp = (list, op) => list.some((a) => a.operation_status === op);
+  /** Sem `state.campaigns`, as campanhas saem dos anúncios da conta (mesmo ID e nome). Guarda no estado para ativar/pausar valer depois. */
+  const campaignsOf = (adv) => {
+    if (!state.campaigns[adv] && state.ads[adv]?.length) {
+      state.campaigns[adv] = uniqueBy(state.ads[adv], 'campaign_id').map((a) => {
+        const own = state.ads[adv].filter((x) => x.campaign_id === a.campaign_id);
+        const on = hasOp(own, 'ENABLE');
+        return { campaign_id: a.campaign_id, campaign_name: a.campaign_name, advertiser_id: adv, objective_type: 'TRAFFIC', budget_mode: 'BUDGET_MODE_DAY', budget: 50, operation_status: on ? 'ENABLE' : 'DISABLE', secondary_status: on ? 'CAMPAIGN_STATUS_ENABLE' : 'CAMPAIGN_STATUS_DISABLE', create_time: a.create_time, modify_time: a.modify_time };
+      });
+    }
+    return state.campaigns[adv] ?? null;
+  };
+  const adgroupsOf = (adv) => {
+    if (!state.adgroups[adv] && state.ads[adv]?.length) {
+      state.adgroups[adv] = uniqueBy(state.ads[adv], 'adgroup_id').map((a) => {
+        const own = state.ads[adv].filter((x) => x.adgroup_id === a.adgroup_id);
+        const on = hasOp(own, 'ENABLE');
+        return { adgroup_id: a.adgroup_id, adgroup_name: a.adgroup_name, advertiser_id: adv, campaign_id: a.campaign_id, campaign_name: a.campaign_name, optimization_goal: 'CLICK', budget_mode: 'BUDGET_MODE_DAY', budget: 20, operation_status: on ? 'ENABLE' : 'DISABLE', secondary_status: on ? 'ADGROUP_STATUS_DELIVERY_OK' : 'ADGROUP_STATUS_DISABLE', create_time: a.create_time, modify_time: a.modify_time };
+      });
+    }
+    return state.adgroups[adv] ?? null;
+  };
+  const pagedList = (all, query, fields) => {
+    const size = Number(query.page);
+    const per = Number(query.page_size);
+    const pick = (a) => (fields ? Object.fromEntries(fields.filter((f) => f in a).map((f) => [f, a[f]])) : a);
+    return reply({ list: all.slice((size - 1) * per, size * per).map(pick), page_info: { page: size, page_size: per, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / per)) } });
+  };
+  const notDeleted = (all, query) => all.filter((a) => !(JSON.parse(query.filtering ?? '{}').primary_status === 'STATUS_NOT_DELETE' && a.operation_status === 'DELETE'));
+  /** Ativar/pausar (`/campaign/status/update/`, `/adgroup/status/update/`): de 1 a 20 IDs; só dessas contas; o TikTok aceita também DELETE. */
+  const updateStatus = (body, { list, idField, idsField, enabled, disabled, failFor }) => {
+    if (failFor.has(body?.advertiser_id)) return reply({}, 40002, 'No permission to update status');
+    if (!['ENABLE', 'DISABLE', 'DELETE'].includes(body?.operation_status)) return reply({}, 40002, 'operation_status is invalid');
+    if (!Array.isArray(body?.[idsField]) || body[idsField].length < 1 || body[idsField].length > 20) return reply({}, 40002, `${idsField}: allowed quantity 1-20`);
+    const done = [];
+    for (const item of list ?? []) {
+      if (!body[idsField].includes(item[idField])) continue;
+      item.operation_status = body.operation_status;
+      item.secondary_status = body.operation_status === 'ENABLE' ? enabled : disabled;
+      done.push(item[idField]);
+    }
+    return reply({ status: body.operation_status, [idsField]: done });
+  };
+  /** Desempenho de campanha/grupo = soma dos anúncios dele (como o relatório do TikTok agrega). */
+  const SUM_KEYS = ['spend', 'impressions', 'clicks', 'result', 'conversion'];
+  const aggregateMetrics = (adv, groupField, source) => {
+    const groups = {};
+    for (const ad of state.ads[adv] ?? []) {
+      const m = source[ad.ad_id];
+      if (!m) continue;
+      const g = (groups[ad[groupField]] ??= Object.fromEntries(SUM_KEYS.map((k) => [k, 0])));
+      for (const k of SUM_KEYS) g[k] += Number(m[k] ?? 0);
+    }
+    for (const g of Object.values(groups)) {
+      g.ctr = g.impressions ? (g.clicks / g.impressions) * 100 : 0;
+      g.cpc = g.clicks ? g.spend / g.clicks : 0;
+      g.cost_per_result = g.result ? g.spend / g.result : 0;
+      g.cost_per_conversion = g.conversion ? g.spend / g.conversion : 0;
+    }
+    return groups;
+  };
 
   const jsonReply = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
 
@@ -286,6 +357,11 @@ export function createFakeTiktok() {
       }
       case '/advertiser/balance/get/': {
         if (Number(query.page_size) > 50) return reply({}, 40002, 'page_size must be less than or equal to 50');
+        if (query.fields !== undefined) { // `fields`: lista de campos EXTRAS (valores da documentação oficial de /advertiser/balance/get/)
+          const asked = JSON.parse(query.fields);
+          const allowed = ['budget_remaining', 'budget_frequency_restriction', 'budget_amount_restriction', 'min_transferable_amount', 'max_transferable_amount'];
+          if (state.rejectBalanceFields || !Array.isArray(asked) || asked.some((f) => !allowed.includes(f))) return reply({}, 40002, 'Invalid fields');
+        }
         if (state.failBalanceAdvertisers.has(query.bc_id) || !state.balances.advertisers[query.bc_id]) return reply({}, 40001, 'No permission to get balances in this business center');
         const all = state.balances.advertisers[query.bc_id];
         const size = Number(query.page);
@@ -326,6 +402,10 @@ export function createFakeTiktok() {
         return reply({ pixels: all.slice((page - 1) * size, page * size), page_info: { page, page_size: size, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / size)) } });
       }
       case '/campaign/get/': {
+        if (state.failCampaignsFor.has(query.advertiser_id)) return reply({}, 40001, 'No permission to get campaigns');
+        if (state.rateLimitFor.has(query.advertiser_id)) return reply({}, 40100, 'Too many requests');
+        if (Number(query.page_size) > 1000 || Number(query.page_size) < 1) return reply({}, 40002, 'page_size must be between 1 and 1000');
+        if (!state.manyCampaigns && campaignsOf(query.advertiser_id)) return pagedList(notDeleted(campaignsOf(query.advertiser_id), query), query, query.fields ? JSON.parse(query.fields) : null);
         if (state.manyCampaigns) {
           const size = Number(query.page_size);
           const page = Number(query.page);
@@ -341,6 +421,18 @@ export function createFakeTiktok() {
           page_info: { total_number: 2 },
         });
       }
+      case '/adgroup/get/': {
+        if (state.failAdgroupsFor.has(query.advertiser_id)) return reply({}, 40001, 'No permission to get ad groups');
+        if (state.rateLimitFor.has(query.advertiser_id)) return reply({}, 40100, 'Too many requests');
+        if (Number(query.page_size) > 1000 || Number(query.page_size) < 1) return reply({}, 40002, 'page_size must be between 1 and 1000');
+        return pagedList(notDeleted(adgroupsOf(query.advertiser_id) ?? [], query), query, query.fields ? JSON.parse(query.fields) : null);
+      }
+      case '/campaign/status/update/':
+        campaignsOf(body?.advertiser_id);
+        return updateStatus(body, { list: state.campaigns[body?.advertiser_id], idField: 'campaign_id', idsField: 'campaign_ids', enabled: 'CAMPAIGN_STATUS_ENABLE', disabled: 'CAMPAIGN_STATUS_DISABLE', failFor: state.failCampaignStatusFor });
+      case '/adgroup/status/update/':
+        adgroupsOf(body?.advertiser_id);
+        return updateStatus(body, { list: state.adgroups[body?.advertiser_id], idField: 'adgroup_id', idsField: 'adgroup_ids', enabled: 'ADGROUP_STATUS_DELIVERY_OK', disabled: 'ADGROUP_STATUS_DISABLE', failFor: state.failAdgroupStatusFor });
       case '/report/integrated/get/': {
         if (query.dimensions?.includes('stat_time_hour')) {
           if (state.hourlyDelayMs) await new Promise((r) => setTimeout(r, state.hourlyDelayMs));
@@ -355,14 +447,18 @@ export function createFakeTiktok() {
             page_info: { page: 1, total_page: 1 },
           });
         }
-        if (query.data_level === 'AUCTION_AD') { // relatório por anúncio (documentação oficial: dimensions ["ad_id"], page_size até 1000)
+        const LEVEL_DIMENSION = { AUCTION_AD: 'ad_id', AUCTION_ADGROUP: 'adgroup_id', AUCTION_CAMPAIGN: 'campaign_id' };
+        if (LEVEL_DIMENSION[query.data_level]) { // relatório por campanha / grupo / anúncio (documentação oficial: UMA dimensão de ID, page_size até 1000)
+          const dimension = LEVEL_DIMENSION[query.data_level];
+          if (JSON.stringify(JSON.parse(query.dimensions ?? '[]')) !== JSON.stringify([dimension])) return reply({}, 40002, `Invalid dimensions for ${query.data_level}: use ["${dimension}"]`);
           if (state.failReportFor.has(query.advertiser_id)) return reply({}, 50001, 'Internal error');
           if (Number(query.page_size) > 1000) return reply({}, 40002, 'page_size must be between 1 and 1000');
           const metricsAsked = JSON.parse(query.metrics ?? '[]');
           if (state.rejectResultMetric && metricsAsked.includes('result')) return reply({}, 40002, 'Invalid metric: result');
           const byDate = state.adMetricsByDate[query.advertiser_id]?.[query.start_date];
           const source = query.start_date === query.end_date && byDate ? byDate : (state.adMetrics[query.advertiser_id] ?? {});
-          const rows = Object.entries(source).map(([adId, m]) => ({ dimensions: { ad_id: adId }, metrics: Object.fromEntries(metricsAsked.filter((k) => k in m).map((k) => [k, String(m[k])])) }));
+          const grouped = dimension === 'ad_id' ? source : aggregateMetrics(query.advertiser_id, dimension, source);
+          const rows = Object.entries(grouped).map(([id, m]) => ({ dimensions: { [dimension]: id }, metrics: Object.fromEntries(metricsAsked.filter((k) => k in m).map((k) => [k, String(m[k])])) }));
           const size = Number(query.page);
           const per = Number(query.page_size);
           return reply({ list: rows.slice((size - 1) * per, size * per), page_info: { page: size, page_size: per, total_number: rows.length, total_page: Math.max(1, Math.ceil(rows.length / per)) } });

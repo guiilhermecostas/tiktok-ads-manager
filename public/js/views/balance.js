@@ -1,3 +1,4 @@
+import { BUDGET_MODE_LABELS, PORTFOLIO_TYPE_LABELS } from '/shared/balance-fields.js';
 import { get } from '../api.js';
 import { h, icon, setChildren } from '../dom.js';
 import { formatCurrency } from '../format.js';
@@ -68,15 +69,30 @@ function table({ columns, rows, renderCells, renderDetails, emptyText }) {
   return h('div', { class: 'card table-wrap' }, h('table', { class: 'table table--stack' }, h('thead', null, h('tr', null, columns.map((c) => h('th', { scope: 'col' }, c)), h('th', { scope: 'col' }, ''))), body));
 }
 
+/** De onde vem o "saldo disponível" mostrado (só quando não é o saldo da própria conta). */
+const SOURCE_NOTE = {
+  portfolio: (row) => `Saldo compartilhado${row.portfolio?.name ? ` · portfólio ${row.portfolio.name}` : ''}: todas as contas ligadas ao portfólio gastam dele`,
+  budget: () => 'Orçamento restante (gasta do saldo da BC)',
+};
+const sourceCaption = (row) => (SOURCE_NOTE[row.mainSource] ? h('span', { class: 'acc-id balance__source' }, SOURCE_NOTE[row.mainSource](row)) : null);
+
 /** Painel "Detalhes": todos os valores do TikTok, mais avisos. */
 function details(row, extra = []) {
   return h(
     'div',
     { class: 'balance__details' },
     row.error ? alertBox(row.error, 'warning') : null,
+    row.mainSource === 'portfolio' ? alertBox('Esta conta usa um portfólio de pagamento COMPARTILHADO: o saldo disponível é o do portfólio (o mesmo para todas as contas ligadas a ele) e é somado uma única vez.', 'info') : null,
+    row.mainSource === 'budget' ? alertBox(`Esta conta gasta do saldo da Business Center, dentro de um orçamento (${BUDGET_MODE_LABELS[row.budgetMode] ?? row.budgetMode}). O saldo próprio dela fica zerado de propósito; o que ela pode gastar é o orçamento restante, limitado pelo saldo da BC.`, 'info') : null,
+    row.portfolioType ? alertBox(`${PORTFOLIO_TYPE_LABELS[row.portfolioType] ?? row.portfolioType}: o TikTok informa aqui o saldo do portfólio de pagamento, não só desta Business Center.`, 'info') : null,
+    row.portfolio?.amounts?.length ? h('h4', { class: 'balance__sub' }, 'Valores da própria conta') : null,
     row.amounts.length
       ? h('dl', { class: 'balance__grid' }, row.amounts.map((a) => h('div', { class: 'balance__amount' }, h('dt', null, a.label), h('dd', null, money(a.value, row.currency)))))
       : h('p', { class: 'muted' }, 'O TikTok não informou valores para este item.'),
+    row.portfolio?.amounts?.length
+      ? [h('h4', { class: 'balance__sub' }, `Portfólio de pagamento${row.portfolio.name ? `: ${row.portfolio.name}` : ''}${row.portfolio.type ? ` (${PORTFOLIO_TYPE_LABELS[row.portfolio.type] ?? row.portfolio.type})` : ''}`),
+        h('dl', { class: 'balance__grid' }, row.portfolio.amounts.map((a) => h('div', { class: 'balance__amount' }, h('dt', null, a.label), h('dd', null, money(a.value, row.currency)))))]
+      : null,
     ...extra,
   );
 }
@@ -184,7 +200,7 @@ async function balanceScreen(tabName) {
       renderCells: (r) => [
         h('td', { 'data-label': 'Business Center' }, h('span', { class: 'cell-strong' }, r.bcId ?? 'BC não identificada'), h('span', { class: 'acc-id' }, `Conexão: ${r.connectionName}`)),
         h('td', { 'data-label': 'Moeda' }, currencyBadge(r.currency) ?? h('span', { class: 'muted' }, '—')),
-        h('td', { 'data-label': 'Saldo disponível', class: 'num' }, h('strong', null, money(r.main, r.currency))),
+        h('td', { 'data-label': 'Saldo disponível', class: 'num' }, h('strong', null, money(r.main, r.currency)), r.portfolioType ? h('span', { class: 'acc-id balance__source' }, PORTFOLIO_TYPE_LABELS[r.portfolioType]) : null),
         h('td', { 'data-label': 'Situação' }, situationBadge(r)),
         h('td', { 'data-label': 'Contas' }, r.accountsError ? h('span', { class: 'muted', title: r.accountsError }, `${r.accountsTotal} · sem informação`) : `${r.accountsWithBalance} com saldo de ${r.accountsTotal}`),
       ],
@@ -198,12 +214,19 @@ async function balanceScreen(tabName) {
         h('td', { 'data-label': 'Conta' }, h('div', { class: 'acc-name' }, h('span', { class: 'cell-strong' }, r.name), h('span', { class: 'acc-id' }, `ID ${r.advertiserId}`))),
         h('td', { 'data-label': 'Business Center' }, h('span', { class: 'cell-strong' }, r.bcId ?? '—'), h('span', { class: 'acc-id' }, r.bcHasBalance === null ? 'Saldo da BC desconhecido' : r.bcHasBalance ? 'BC com saldo' : 'BC sem saldo')),
         h('td', { 'data-label': 'Moeda' }, currencyBadge(r.currency) ?? h('span', { class: 'muted' }, '—')),
-        h('td', { 'data-label': 'Saldo disponível', class: 'num' }, h('strong', null, money(r.main, r.currency))),
+        h('td', { 'data-label': 'Saldo disponível', class: 'num' }, h('strong', null, money(r.main, r.currency)), sourceCaption(r)),
         h('td', { 'data-label': 'Situação' }, situationBadge(r)),
       ],
       renderDetails: (r) => details(r, [h('p', { class: 'muted balance__meta' }, `Conexão: ${r.connectionName}${r.advertiserStatus ? ` · Situação da conta no TikTok: ${accountStatus(r.advertiserStatus)}` : ''}`)]),
     });
-    setChildren(content, summaryCards(), tabName === 'bc' ? bcTable() : accountsTable(), note);
+    const s = data.summary;
+    const accountNotes = tabName === 'accounts' && (s.accountsOnBudget || s.accountsSharedPortfolio)
+      ? h('p', { class: 'hub__note' }, [
+        s.accountsSharedPortfolio ? `${s.accountsSharedPortfolio} conta(s) dividem o saldo de um portfólio de pagamento: o valor entra UMA vez na soma. ` : '',
+        s.accountsOnBudget ? `${s.accountsOnBudget} conta(s) gastam do saldo da BC dentro de um orçamento: o valor mostrado é o orçamento restante e não entra na soma (já está no saldo da BC).` : '',
+      ].join(''))
+      : null;
+    setChildren(content, summaryCards(), tabName === 'bc' ? bcTable() : accountsTable(), accountNotes, note);
   }
 
   shell = balanceLayout({ active: tabName === 'bc' ? '/balance' : '/balance/accounts', counts: null, children: [filtersBar, content] });

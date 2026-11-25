@@ -17,7 +17,7 @@ describe('Saldo: regras e leitura tolerante dos campos', () => {
       valid_account_balance: '120.50', account_balance: 150.5, tax: '0', frozen_balance: '30', empty: '', text: 'abc', big: '1e9', nan: 'NaN', neg: '-4.25', nested_list: [1, 2],
       info: { cash_balance: '100', page: 1, total_number: 4, grant_balance: '50.5' }, balance_info: { frozen_cash_balance: '2', account_balance: '999' }, max_transferable_amount: { cash_amount: '70', grant_amount: '0' }, account_open_days: 400, recharge_amount: '5000', nulo: null, 'chave inválida': 5, UPPER_KEY: '7',
     });
-    assert.deepEqual(Object.fromEntries(fields.map((f) => [f.key, f.value])), { valid_account_balance: 120.5, account_balance: 150.5, tax: 0, frozen_balance: 30, neg: -4.25, 'info.cash_balance': 100, 'info.grant_balance': 50.5, frozen_cash_balance: 2, 'max_transferable_amount.cash_amount': 70, 'max_transferable_amount.grant_amount': 0, recharge_amount: 5000, upper_key: 7 });
+    assert.deepEqual(Object.fromEntries(fields.map((f) => [f.key, f.value])), { valid_account_balance: 120.5, account_balance: 999, tax: 0, frozen_balance: 30, neg: -4.25, 'info.cash_balance': 100, 'info.grant_balance': 50.5, frozen_cash_balance: 2, 'max_transferable_amount.cash_amount': 70, 'max_transferable_amount.grant_amount': 0, recharge_amount: 5000, upper_key: 7 });
     assert.deepEqual(numericFields(null), []);
     assert.equal(numericFields(Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`campo_${i}`, i]))).length, 40, 'no máximo 40 campos');
   });
@@ -38,6 +38,10 @@ describe('Saldo: regras e leitura tolerante dos campos', () => {
     assert.equal(balanceLabel('max_transferable_amount.cash_amount'), 'Máx. transferível (dinheiro)');
     assert.equal(balanceLabel('valid_credit_balance'), 'Crédito disponível');
     assert.equal(hasBalance([{ key: 'valid_account_balance', value: 0 }]), false);
+    assert.equal(hasBalance([{ key: 'valid_account_balance', value: 0 }, { key: 'account_balance', value: 50 }, { key: 'cash_balance', value: 50 }, { key: 'frozen_balance', value: 50 }]), false, 'o total inclui o bloqueado: só o DISPONÍVEL conta');
+    assert.equal(hasBalance([{ key: 'valid_account_balance', value: 3 }, { key: 'account_balance', value: 0 }]), true);
+    assert.equal(hasBalance([{ key: 'valid_cash_balance', value: 0 }, { key: 'cash_balance', value: 9 }]), false, 'sem o disponível geral, os demais "valid_*" decidem');
+    assert.equal(hasBalance([{ key: 'valid_cash_balance', value: 4 }]), true);
     for (const key of ['valid_cash_balance', 'coupon_balance', 'credit_balance']) assert.equal(isBalanceKey(key), true, key);
     for (const key of ['frozen_balance', 'tax', 'budget', 'budget_cost', 'credit_limit']) assert.equal(isBalanceKey(key), false, key);
   });
@@ -101,7 +105,7 @@ describe('Saldo das Business Centers e das contas de anúncio', () => {
     assert.equal(byId['9001'].amounts.find((a) => a.key === 'budget').label, 'Orçamento', 'o orçamento também é mostrado, sem contar como saldo');
     assert.equal(byId['9002'].name, 'Conta 9002');
     assert.equal(byId['9101'].currency, 'BRL');
-    assert.deepEqual(summary, { bcs: 2, bcsWithBalance: 1, bcsWithoutBalance: 1, bcsWithError: 0, accounts: 3, accountsWithBalance: 2, accountsWithoutBalance: 1, accountsUnknown: 0 });
+    assert.deepEqual(summary, { bcs: 2, bcsWithBalance: 1, bcsWithoutBalance: 1, bcsWithError: 0, accounts: 3, accountsWithBalance: 2, accountsWithoutBalance: 1, accountsUnknown: 0, accountsOnBudget: 0, accountsSharedPortfolio: 0 });
     assert.deepEqual(res.json.totals, [{ currency: 'USD', bc: 120.5, accounts: 25 }, { currency: 'BRL', bc: 0, accounts: 10 }], 'moedas nunca se somam');
     assert.ok(!res.text.includes(GOOD_TOKEN) && !res.text.includes('access_token'), 'o token nunca volta');
     assert.ok(res.json.fetchedAt);
@@ -263,6 +267,112 @@ describe('Saldo das Business Centers e das contas de anúncio', () => {
     const nobody = await createUser(ctx, { approve: true, email: emailOf() });
     const empty = await overview(nobody);
     assert.deepEqual([empty.bcs, empty.accounts, empty.totals], [[], [], []]);
+  });
+
+  describe('conforme a documentação oficial: portfólio de pagamento, saldo da conta (balance_info) e orçamento', () => {
+    const portfolioAccount = (id, own, extra = {}) => account(id, {
+      payment_portfolio_id: '7000000000000000001', payment_portfolio_name: 'Portfólio Principal', payment_portfolio_type: 'SHARED',
+      account_balance: '500', valid_account_balance: '480', frozen_balance: '20', tax: '0', cash_balance: '500', valid_cash_balance: '480', // topo = do PORTFÓLIO
+      balance_info: { account_balance: own, valid_account_balance: own, frozen_balance: '0', tax: '0', cash_balance: own, valid_cash_balance: own }, // da CONTA
+      budget_mode: 'UNLIMITED', ...extra,
+    });
+
+    it('o saldo da CONTA vem de balance_info, não dos campos do topo (que com portfólio são do portfólio)', async () => {
+      const user = await setup();
+      await connect(user, '111');
+      fake.state.balances.advertisers[111] = [account('9001', {
+        payment_portfolio_id: '7000000000000000001', payment_portfolio_type: 'NON_SHARED',
+        valid_account_balance: '900', account_balance: '900', balance_info: { valid_account_balance: '35.25', account_balance: '40', frozen_balance: '4.75' }, budget_mode: 'UNLIMITED',
+      })];
+      const { accounts } = await overview(user);
+      const a = accounts.find((x) => x.advertiserId === '9001');
+      assert.equal(a.main, 35.25, 'o disponível da conta, não o 900 do topo');
+      assert.equal(a.amounts.find((x) => x.key === 'account_balance').value, 40);
+      assert.deepEqual([a.mainSource, a.portfolio.type, a.portfolio.id, a.hasBalance], ['account', 'NON_SHARED', '7000000000000000001', true]);
+    });
+
+    it('portfólio COMPARTILHADO: o disponível é o do portfólio, igual nas contas ligadas, e a soma conta UMA vez', async () => {
+      const user = await setup();
+      await connect(user, '111');
+      fake.state.balances.advertisers[111] = [portfolioAccount('9001', '0'), portfolioAccount('9002', '0')];
+      const { accounts, totals, summary } = await overview(user);
+      assert.deepEqual(accounts.map((a) => [a.advertiserId, a.main, a.mainSource, a.hasBalance]).sort(), [['9001', 480, 'portfolio', true], ['9002', 480, 'portfolio', true]]);
+      assert.equal(accounts[0].portfolio.name, 'Portfólio Principal');
+      assert.deepEqual(accounts[0].portfolio.amounts.find((x) => x.key === 'valid_account_balance'), { key: 'valid_account_balance', label: 'Saldo disponível', value: 480 });
+      assert.deepEqual(totals, [{ currency: 'USD', bc: 120.5, accounts: 480 }], 'os 480 do portfólio entram uma vez (não 960)');
+      assert.deepEqual([summary.accountsSharedPortfolio, summary.accountsOnBudget], [2, 0]);
+    });
+
+    it('portfólios diferentes somam cada um uma vez; contas normais somam o que têm', async () => {
+      const user = await setup();
+      await connect(user, '111');
+      fake.state.balances.advertisers[111] = [
+        portfolioAccount('9001', '0'), portfolioAccount('9002', '0'),
+        portfolioAccount('9003', '0', { payment_portfolio_id: '7000000000000000002', valid_account_balance: '100' }),
+        account('9004', { valid_account_balance: '25', account_balance: '25' }),
+      ];
+      const { totals } = await overview(user);
+      assert.equal(totals[0].accounts, 480 + 100 + 25);
+    });
+
+    it('conta com dinheiro só BLOQUEADO (total > 0, disponível 0) aparece SEM saldo', async () => {
+      const user = await setup();
+      await connect(user, '111');
+      fake.state.balances.advertisers[111] = [account('9001', { account_balance: '50', valid_account_balance: '0', frozen_balance: '50', cash_balance: '50', valid_cash_balance: '0' })];
+      const { accounts, summary } = await overview(user);
+      assert.deepEqual([accounts[0].main, accounts[0].hasBalance], [0, false]);
+      assert.deepEqual([summary.accountsWithBalance, summary.accountsWithoutBalance], [0, 1]);
+    });
+
+    it('pede o orçamento restante (fields=["budget_remaining"], página de 50) e, sem o parâmetro aceito, repete sem ele', async () => {
+      const user = await setup();
+      await connect(user, '111');
+      fake.state.calls.length = 0;
+      await overview(user);
+      const first = fake.state.calls.find((c) => c.path === '/advertiser/balance/get/');
+      assert.deepEqual([first.query.bc_id, first.query.page_size, first.query.fields], ['111', '50', '["budget_remaining"]']);
+      fake.state.rejectBalanceFields = true;
+      try {
+        fake.state.calls.length = 0;
+        const { accounts } = await overview(user, '?refresh=1');
+        const calls = fake.state.calls.filter((c) => c.path === '/advertiser/balance/get/');
+        assert.deepEqual(calls.map((c) => c.query.fields), ['["budget_remaining"]', undefined], 'tentou com fields e repetiu sem');
+        assert.equal(accounts.length, 2, 'as contas aparecem do mesmo jeito');
+      } finally {
+        fake.state.rejectBalanceFields = false;
+      }
+    });
+
+    it('BC em alocação automática: a conta gasta do saldo da BC, dentro do orçamento (restante, limitado pelo saldo da BC) e NÃO entra na soma', async () => {
+      const user = await setup();
+      await connect(user, '111');
+      fake.state.balances.advertisers[111] = [
+        account('9001', { budget_mode: 'DAILY_BUDGET', budget: '100', budget_cost: '60', budget_remaining: '40' }),
+        account('9002', { budget_mode: 'MONTHLY_BUDGET', budget: '9000', budget_cost: '0', budget_remaining: '9000' }),
+        account('9003', { budget_mode: 'CUSTOM_BUDGET', budget: '50', budget_cost: '50', budget_remaining: '0' }),
+        account('9004', { valid_account_balance: '25', account_balance: '25', budget_mode: 'UNLIMITED' }),
+      ];
+      const { accounts, totals, summary } = await overview(user);
+      const by = Object.fromEntries(accounts.map((a) => [a.advertiserId, a]));
+      assert.deepEqual([by['9001'].main, by['9001'].hasBalance, by['9001'].mainSource], [40, true, 'budget']);
+      assert.deepEqual([by['9002'].main, by['9002'].mainSource], [120.5, 'budget'], 'limitado pelo saldo da BC (120,50)');
+      assert.deepEqual([by['9003'].main, by['9003'].hasBalance], [0, false], 'orçamento esgotado = sem saldo');
+      assert.deepEqual([by['9004'].main, by['9004'].mainSource], [25, 'account']);
+      assert.deepEqual(totals, [{ currency: 'USD', bc: 120.5, accounts: 25 }], 'só a conta com saldo próprio soma');
+      assert.equal(summary.accountsOnBudget, 3);
+      assert.equal(by['9001'].amounts.find((a) => a.key === 'budget_remaining').label, 'Orçamento restante');
+    });
+
+    it('a BC informa se o saldo é de um portfólio (payment_portfolio_type)', async () => {
+      const user = await setup();
+      await connect(user, '111');
+      fake.state.balances.bc[111] = bcBalance({ payment_portfolio_type: 'SHARED' });
+      const { bcs } = await overview(user);
+      assert.equal(bcs[0].portfolioType, 'SHARED');
+      assert.equal(bcs[1] ?? null, null);
+      fake.state.balances.bc[111] = bcBalance({ payment_portfolio_type: 'QUALQUER' });
+      assert.equal((await overview(user, '?refresh=1')).bcs[0].portfolioType, null, 'valor desconhecido é ignorado');
+    });
   });
 
   it('exige login e a área "Contas TikTok" (colaborador de Relatórios não vê o dinheiro; o de Contas vê o do dono)', async () => {

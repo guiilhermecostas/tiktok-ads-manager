@@ -8,24 +8,34 @@
  * As métricas vêm do relatório do TikTok (nível anúncio): "Cliques" e "CPC" são os de destino (cliques no link), como no Ads Manager.
  */
 export const MANAGER_COLUMNS = Object.freeze([
-  { key: 'name', label: 'Anúncio', type: 'ad', sortable: true, defaultVisible: true },
-  { key: 'status', label: 'Status', type: 'status', sortable: true, defaultVisible: true },
-  { key: 'toggle', label: 'Ativo', type: 'toggle', sortable: true, defaultVisible: true },
-  { key: 'createdAt', label: 'Publicado em', type: 'datetime', sortable: true, defaultVisible: true },
-  { key: 'result', label: 'Resultado', type: 'number', sortable: true, defaultVisible: true },
-  { key: 'spend', label: 'Valor gasto', type: 'money', sortable: true, defaultVisible: true },
-  { key: 'cpc', label: 'CPC (link)', type: 'money', sortable: true, defaultVisible: true },
-  { key: 'clicks', label: 'Cliques (link)', type: 'number', sortable: true, defaultVisible: true },
-  { key: 'ctr', label: 'CTR', type: 'percent', sortable: true, defaultVisible: true },
-  { key: 'account', label: 'Conta', type: 'text', sortable: true, defaultVisible: false },
-  { key: 'campaign', label: 'Campanha', type: 'text', sortable: true, defaultVisible: false },
-  { key: 'adgroup', label: 'Grupo de anúncios', type: 'text', sortable: true, defaultVisible: false },
-  { key: 'impressions', label: 'Impressões', type: 'number', sortable: true, defaultVisible: false },
-  { key: 'costPerResult', label: 'Custo por resultado', type: 'money', sortable: true, defaultVisible: false },
-  { key: 'conversions', label: 'Conversões', type: 'number', sortable: true, defaultVisible: false },
-  { key: 'costPerConversion', label: 'Custo por conversão', type: 'money', sortable: true, defaultVisible: false },
-  { key: 'modifiedAt', label: 'Editado em', type: 'datetime', sortable: true, defaultVisible: false },
+  // `levels`: em quais níveis a coluna existe (campaigns, adgroups, ads). O rótulo da coluna "name" muda com o nível (ver `columnLabel`).
+  { key: 'name', label: 'Nome', type: 'name', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'status', label: 'Status', type: 'status', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'toggle', label: 'Ativo', type: 'toggle', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'objective', label: 'Objetivo', type: 'objective', sortable: true, defaultVisible: true, levels: ['campaigns'] },
+  { key: 'goal', label: 'Meta de otimização', type: 'goal', sortable: true, defaultVisible: true, levels: ['adgroups'] },
+  { key: 'budget', label: 'Orçamento', type: 'budget', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups'] },
+  { key: 'createdAt', label: 'Publicado em', type: 'datetime', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'result', label: 'Resultado', type: 'number', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'spend', label: 'Valor gasto', type: 'money', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'cpc', label: 'CPC (link)', type: 'money', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'clicks', label: 'Cliques (link)', type: 'number', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'ctr', label: 'CTR', type: 'percent', sortable: true, defaultVisible: true, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'account', label: 'Conta', type: 'text', sortable: true, defaultVisible: false, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'campaign', label: 'Campanha', type: 'text', sortable: true, defaultVisible: false, levels: ['adgroups', 'ads'] },
+  { key: 'adgroup', label: 'Grupo de anúncios', type: 'text', sortable: true, defaultVisible: false, levels: ['ads'] },
+  { key: 'impressions', label: 'Impressões', type: 'number', sortable: true, defaultVisible: false, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'costPerResult', label: 'Custo por resultado', type: 'money', sortable: true, defaultVisible: false, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'conversions', label: 'Conversões', type: 'number', sortable: true, defaultVisible: false, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'costPerConversion', label: 'Custo por conversão', type: 'money', sortable: true, defaultVisible: false, levels: ['campaigns', 'adgroups', 'ads'] },
+  { key: 'modifiedAt', label: 'Editado em', type: 'datetime', sortable: true, defaultVisible: false, levels: ['campaigns', 'adgroups', 'ads'] },
 ]);
+
+const NAME_LABELS = Object.freeze({ campaigns: 'Campanha', adgroups: 'Grupo de anúncios', ads: 'Anúncio' });
+/** Rótulo da coluna no nível (a primeira coluna é "Campanha", "Grupo de anúncios" ou "Anúncio"). */
+export const columnLabel = (col, level) => (col.key === 'name' ? (NAME_LABELS[level] ?? col.label) : col.label);
+/** A coluna existe neste nível? */
+export const appliesTo = (col, level) => col.levels.includes(level);
 
 export const COLUMN_KEYS = Object.freeze(MANAGER_COLUMNS.map((c) => c.key));
 export const SORTABLE_KEYS = Object.freeze(MANAGER_COLUMNS.filter((c) => c.sortable).map((c) => c.key));
@@ -56,7 +66,7 @@ export const MAX_VIEW_NAME = 40;
 /** Configuração padrão: colunas padrão na ordem do catálogo, ordenado por valor gasto (maior primeiro), sem filtros. */
 export function defaultViewConfig() {
   return {
-    columns: MANAGER_COLUMNS.map((c) => ({ key: c.key, visible: c.defaultVisible })),
+    columns: MANAGER_COLUMNS.map((c) => ({ key: c.key, visible: c.defaultVisible })), // colunas que não existem no nível são ignoradas ao desenhar
     sort: { key: 'spend', dir: 'desc' },
     filters: { status: '', accountId: '', onlySpent: false },
     datePreset: DEFAULT_PRESET,
@@ -80,7 +90,13 @@ export function normalizeViewConfig(input) {
     seen.add(col.key);
     columns.push({ key: col.key, visible: col.visible });
   }
-  for (const key of COLUMN_KEYS) if (!seen.has(key)) columns.push({ key, visible: false });
+  // Coluna que faltava (visualização salva antes dela existir): fica oculta, EXCETO as exclusivas de campanhas/grupos (a visualização só tinha anúncios,
+  // então nada muda lá) — assim já aparecem Objetivo, Meta e Orçamento nas novas abas.
+  for (const key of COLUMN_KEYS) {
+    if (seen.has(key)) continue;
+    const col = columnOf(key);
+    columns.push({ key, visible: col.defaultVisible && !col.levels.includes('ads') });
+  }
   if (!columns.some((c) => c.visible && c.key === 'name')) return null; // o nome do anúncio é a âncora da tabela: sempre visível
 
   const sort = input.sort ?? {};

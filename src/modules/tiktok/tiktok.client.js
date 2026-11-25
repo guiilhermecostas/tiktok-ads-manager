@@ -18,6 +18,10 @@ const HOURLY_MAX_PAGES = 2;
 const HOUR_LABEL_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 const BALANCE_PAGE_SIZE = 50;
 const BALANCE_MAX_PAGES = 20;
+const BALANCE_EXTRA_FIELDS = ['budget_remaining']; // `fields` de /advertiser/balance/get/: campos extras opcionais (orçamento restante)
+// Campos do topo da resposta que, com Payment Portfolio, são do PORTFÓLIO e não da conta (documentação oficial de /advertiser/balance/get/).
+const PORTFOLIO_FIELDS = ['account_balance', 'valid_account_balance', 'frozen_balance', 'tax', 'cash_balance', 'valid_cash_balance', 'transferable_amount'];
+const portfolioTypeOf = (value) => (['SHARED', 'NON_SHARED'].includes(value) ? value : null);
 const MAX_AMOUNT_FIELDS = 40;
 const NUMERIC_TEXT_RE = /^-?\d{1,15}(?:\.\d{1,6})?$/;
 // Campos que são identificação, data, situação ou paginação (não são valores em dinheiro).
@@ -29,6 +33,43 @@ const AD_FIELDS = ['ad_id', 'ad_name', 'advertiser_id', 'campaign_id', 'campaign
 // Métricas do relatório por anúncio (nomes da documentação oficial). "clicks" e "cpc" são os de DESTINO (cliques no link).
 const AD_METRICS_FULL = ['spend', 'impressions', 'clicks', 'ctr', 'cpc', 'result', 'cost_per_result', 'conversion', 'cost_per_conversion'];
 const AD_METRICS_BASIC = ['spend', 'impressions', 'clicks', 'ctr', 'cpc', 'conversion', 'cost_per_conversion'];
+const isoTime = (value) => (AD_TIME_RE.test(String(value ?? '')) ? `${String(value).replace(' ', 'T')}Z` : null);
+const shortText = (value, max = 200) => String(value ?? '').slice(0, max);
+const enumOrNull = (value) => (/^[A-Z][A-Z0-9_]{1,79}$/.test(String(value ?? '')) ? String(value) : null);
+const budgetOf = (raw) => ({ budgetMode: enumOrNull(raw.budget_mode), budget: numOrNull(raw.budget) });
+const commonOf = (raw) => ({
+  operationStatus: ['ENABLE', 'DISABLE', 'FROZEN'].includes(raw.operation_status) ? raw.operation_status : null,
+  status: /^[A-Z_]{3,80}$/.test(String(raw.secondary_status ?? '')) ? raw.secondary_status : null,
+  createdAt: isoTime(raw.create_time),
+  modifiedAt: isoTime(raw.modify_time),
+});
+/**
+ * Contrato de cada nível do Gerenciador (documentação oficial v1.3): onde listar, que campos pedir, onde ativar/pausar e como pedir o
+ * desempenho. `dimension` é a ÚNICA dimensão de ID do relatório (o TikTok não aceita duas).
+ */
+const LEVEL_SPECS = Object.freeze({
+  campaigns: {
+    listPath: '/campaign/get/', idField: 'campaign_id', statusPath: '/campaign/status/update/', idsField: 'campaign_ids', dataLevel: 'AUCTION_CAMPAIGN', dimension: 'campaign_id',
+    fields: ['campaign_id', 'campaign_name', 'advertiser_id', 'objective_type', 'budget_mode', 'budget', 'operation_status', 'secondary_status', 'create_time', 'modify_time'],
+    parse: (raw, id) => ({ campaignId: id, name: shortText(raw.campaign_name), objectiveType: enumOrNull(raw.objective_type), ...budgetOf(raw), ...commonOf(raw) }),
+  },
+  adgroups: {
+    listPath: '/adgroup/get/', idField: 'adgroup_id', statusPath: '/adgroup/status/update/', idsField: 'adgroup_ids', dataLevel: 'AUCTION_ADGROUP', dimension: 'adgroup_id',
+    fields: ['adgroup_id', 'adgroup_name', 'advertiser_id', 'campaign_id', 'campaign_name', 'optimization_goal', 'budget_mode', 'budget', 'operation_status', 'secondary_status', 'create_time', 'modify_time'],
+    parse: (raw, id) => ({
+      adgroupId: id, name: shortText(raw.adgroup_name), campaignId: digitsOrNull(raw.campaign_id), campaignName: shortText(raw.campaign_name),
+      optimizationGoal: enumOrNull(raw.optimization_goal), ...budgetOf(raw), ...commonOf(raw),
+    }),
+  },
+  ads: {
+    listPath: '/ad/get/', idField: 'ad_id', statusPath: '/ad/status/update/', idsField: 'ad_ids', dataLevel: 'AUCTION_AD', dimension: 'ad_id',
+    fields: AD_FIELDS,
+    parse: (raw) => ({
+      name: shortText(raw.ad_name), campaignId: digitsOrNull(raw.campaign_id), campaignName: shortText(raw.campaign_name),
+      adgroupId: digitsOrNull(raw.adgroup_id), adgroupName: shortText(raw.adgroup_name), ...commonOf(raw),
+    }),
+  },
+});
 const CATALOG_PAGE_SIZE = 100; // /catalog/get/: page_size de 1 a 1.000
 const CATALOG_MAX_PAGES = 10;
 const PRODUCT_PAGE_SIZE_MAX = 500; // /catalog/product/get/: page_size até 500 (e page × page_size ≤ 10.000)
@@ -83,7 +124,9 @@ function requireId(value, what) {
 
 /**
  * Valores numéricos de um objeto do TikTok (campos de saldo), como [{ key, value }]. Aceita número ou texto numérico, olha também um
- * nível de objetos aninhados e ignora ids, datas, situação e paginação. O TikTok não documenta cada campo, então lê TUDO que for número.
+ * nível de objetos aninhados e ignora ids, datas, situação e paginação. Lê TUDO que for número (nomes desconhecidos aparecem humanizados).
+ * `balance_info` (documentação oficial: "detalhes dos saldos DA CONTA de anúncio") vem PRIMEIRO e tem prioridade: com Payment Portfolio
+ * ativo, os mesmos campos no topo da resposta são os do PORTFÓLIO (compartilhado), não os da conta.
  */
 export function numericFields(object) {
   const found = [];
@@ -95,7 +138,8 @@ export function numericFields(object) {
     seen.add(key);
     found.push({ key: key.toLowerCase(), value: Math.round(value * 10_000) / 10_000 });
   };
-  for (const [key, raw] of Object.entries(object ?? {})) {
+  const entries = Object.entries(object ?? {}).sort(([a], [b]) => Number(b === 'balance_info') - Number(a === 'balance_info'));
+  for (const [key, raw] of entries) {
     if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
       // `balance_info` repete os campos de saldo (mesmos nomes); os demais objetos (ex.: máximo transferível) levam o nome do grupo.
       for (const [inner, innerRaw] of Object.entries(raw)) add(key === 'balance_info' ? inner : `${key}.${inner}`, innerRaw);
@@ -190,6 +234,75 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
       throw new HttpError(502, `TikTok: ${message}`, 'tiktok_error');
     }
     return json.data ?? {};
+  }
+
+  // ---------- Gerenciador: campanhas, grupos de anúncios e anúncios (mesmas regras de leitura e de ativar/pausar) ----------
+  /** Lista os itens do nível (`/campaign/get/`, `/adgroup/get/` ou `/ad/get/`, sem os excluídos): { items, truncated }. */
+  async function listItems(token, advertiserId, level) {
+    const spec = LEVEL_SPECS[level];
+    if (!spec) throw new HttpError(400, 'Nível inválido.', 'validation_error');
+    const items = new Map();
+    let truncated = false;
+    for (let page = 1; page <= AD_MAX_PAGES; page += 1) {
+      const data = await call(spec.listPath, { token, query: { advertiser_id: advertiserId, fields: spec.fields, filtering: { primary_status: 'STATUS_NOT_DELETE' }, page, page_size: AD_PAGE_SIZE } });
+      const list = Array.isArray(data.list) ? data.list : [];
+      for (const raw of list) {
+        const id = digitsOrNull(raw?.[spec.idField]);
+        if (!id || items.has(id)) continue;
+        items.set(id, { id, advertiserId, ...spec.parse(raw, id) });
+      }
+      const totalPages = num(data.page_info?.total_page);
+      if (!list.length || list.length < AD_PAGE_SIZE || page >= (totalPages || page)) break;
+      if (page === AD_MAX_PAGES) truncated = true;
+    }
+    return { items: [...items.values()], truncated };
+  }
+
+  async function levelMetrics(token, advertiserId, level, { startDate, endDate }) {
+    const spec = LEVEL_SPECS[level];
+    if (!spec) throw new HttpError(400, 'Nível inválido.', 'validation_error');
+    const run = async (metrics) => {
+      const rows = [];
+      for (let page = 1; page <= AD_MAX_PAGES; page += 1) {
+        const data = await call('/report/integrated/get/', {
+          token,
+          query: { advertiser_id: advertiserId, report_type: 'BASIC', data_level: spec.dataLevel, dimensions: [spec.dimension], metrics, start_date: startDate, end_date: endDate, page, page_size: AD_PAGE_SIZE },
+        });
+        const list = Array.isArray(data.list) ? data.list : [];
+        rows.push(...list);
+        if (!list.length || list.length < AD_PAGE_SIZE || page >= (num(data.page_info?.total_page) || page)) break;
+      }
+      return rows;
+    };
+    let rows;
+    let hasResult = true;
+    try {
+      rows = await run(AD_METRICS_FULL);
+    } catch (err) {
+      if (!(err instanceof HttpError && err.code === 'tiktok_error')) throw err;
+      hasResult = false;
+      rows = await run(AD_METRICS_BASIC);
+    }
+    const byId = new Map();
+    for (const row of rows) {
+      const id = digitsOrNull(row.dimensions?.[spec.dimension]);
+      if (!id) continue;
+      const m = row.metrics ?? {};
+      byId.set(id, {
+        spend: num(m.spend), impressions: num(m.impressions), clicks: num(m.clicks), ctr: num(m.ctr), cpc: num(m.cpc),
+        result: num(m.result), costPerResult: num(m.cost_per_result), conversions: num(m.conversion), costPerConversion: num(m.cost_per_conversion),
+      });
+    }
+    return { metrics: byId, hasResult };
+  }
+
+  async function changeStatus(token, advertiserId, level, ids, status) {
+    const spec = LEVEL_SPECS[level];
+    if (!spec) throw new HttpError(400, 'Nível inválido.', 'validation_error');
+    if (!['ENABLE', 'DISABLE'].includes(status)) throw new HttpError(400, 'Status inválido.', 'validation_error');
+    if (!ids.length || ids.length > AD_STATUS_MAX_IDS || !ids.every((id) => /^\d{1,24}$/.test(id))) throw new HttpError(400, `Escolha de 1 a ${AD_STATUS_MAX_IDS} itens.`, 'validation_error');
+    const data = await call(spec.statusPath, { token, method: 'POST', retry: true, body: { advertiser_id: advertiserId, [spec.idsField]: ids, operation_status: status } });
+    return (Array.isArray(data[spec.idsField]) ? data[spec.idsField] : []).map((id) => digitsOrNull(id)).filter(Boolean);
   }
 
   return {
@@ -360,122 +473,87 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
      */
     async getBcBalance(token, bcId) {
       const data = await call('/bc/balance/get/', { token, query: { bc_id: bcId } });
-      return { currency: /^[A-Z]{3}$/.test(String(data?.currency ?? '')) ? data.currency : null, amounts: numericFields(data) };
+      return { currency: /^[A-Z]{3}$/.test(String(data?.currency ?? '')) ? data.currency : null, portfolioType: portfolioTypeOf(data?.payment_portfolio_type), amounts: numericFields(data) };
     },
 
     /**
-     * Saldo e orçamento das contas de anúncio de uma Business Center (`/advertiser/balance/get/`, paginado):
-     * [{ id, name, status, currency, amounts: [{ key, value }] }]. A lista é procurada em `advertiser_account_list`/`list`/`advertisers`
-     * (ou na primeira lista de objetos com `advertiser_id`), e cada conta tem todos os campos numéricos lidos.
+     * Saldo e orçamento das contas de anúncio de uma Business Center (`/advertiser/balance/get/`, paginado, até 50 por página; só devolve as contas em
+     * que a BC é administradora): [{ id, name, status, currency, budgetMode, portfolio, amounts: [{ key, value }] }]. Pede também `budget_remaining`
+     * (o TikTok só devolve o orçamento restante quando pedido em `fields`); se o TikTok recusar `fields`, repete sem ele.
+     *  - `amounts`: saldos DA CONTA (`balance_info` tem prioridade sobre os campos do topo, que com Payment Portfolio são do portfólio).
+     *  - `portfolio`: { id, name, type: 'SHARED' | 'NON_SHARED' | null, amounts } quando a conta usa Payment Portfolio (`amounts` = os campos do topo).
+     *  - `budgetMode`: UNLIMITED | MONTHLY_BUDGET | DAILY_BUDGET | CUSTOM_BUDGET (as três últimas gastam do saldo da BC, dentro do orçamento).
      */
     async listAdvertiserBalances(token, bcId) {
-      const accounts = new Map();
-      for (let page = 1; page <= BALANCE_MAX_PAGES; page += 1) {
-        const data = await call('/advertiser/balance/get/', { token, query: { bc_id: bcId, page, page_size: BALANCE_PAGE_SIZE } });
-        const list = [data?.advertiser_account_list, data?.list, data?.advertisers, ...Object.values(data ?? {})].find((v) => Array.isArray(v) && v.some((x) => x && typeof x === 'object' && ('advertiser_id' in x || 'advertiser' in x))) ?? [];
-        for (const item of list) {
-          const id = digitsOrNull(item?.advertiser_id ?? item?.advertiser?.advertiser_id);
-          if (!id || accounts.has(id)) continue;
-          accounts.set(id, {
-            id,
-            name: String(item?.advertiser_name ?? item?.name ?? item?.advertiser?.advertiser_name ?? '').slice(0, 120),
-            status: typeof (item?.advertiser_status ?? item?.status) === 'string' ? String(item.advertiser_status ?? item.status).slice(0, 40) : null,
-            currency: /^[A-Z]{3}$/.test(String(item?.currency ?? '')) ? item.currency : null,
-            amounts: numericFields(item),
-          });
+      const run = async (withFields) => {
+        const found = new Map();
+        for (let page = 1; page <= BALANCE_MAX_PAGES; page += 1) {
+          const data = await call('/advertiser/balance/get/', { token, query: { bc_id: bcId, ...(withFields ? { fields: BALANCE_EXTRA_FIELDS } : {}), page, page_size: BALANCE_PAGE_SIZE } });
+          const list = [data?.advertiser_account_list, data?.list, data?.advertisers, ...Object.values(data ?? {})].find((v) => Array.isArray(v) && v.some((x) => x && typeof x === 'object' && ('advertiser_id' in x || 'advertiser' in x))) ?? [];
+          for (const item of list) {
+            const id = digitsOrNull(item?.advertiser_id ?? item?.advertiser?.advertiser_id);
+            if (!id || found.has(id)) continue;
+            const portfolioId = digitsOrNull(item?.payment_portfolio_id);
+            found.set(id, {
+              id,
+              name: String(item?.advertiser_name ?? item?.name ?? item?.advertiser?.advertiser_name ?? '').slice(0, 120),
+              status: typeof (item?.advertiser_status ?? item?.status) === 'string' ? String(item.advertiser_status ?? item.status).slice(0, 40) : null,
+              currency: /^[A-Z]{3}$/.test(String(item?.currency ?? '')) ? item.currency : null,
+              budgetMode: /^[A-Z_]{3,30}$/.test(String(item?.budget_mode ?? '')) ? item.budget_mode : null,
+              portfolio: portfolioId || item?.payment_portfolio_type
+                ? { id: portfolioId, name: typeof item.payment_portfolio_name === 'string' ? item.payment_portfolio_name.slice(0, 120) : null, type: portfolioTypeOf(item.payment_portfolio_type), amounts: numericFields(Object.fromEntries(PORTFOLIO_FIELDS.map((key) => [key, item[key]]))) }
+                : null,
+              amounts: numericFields(item),
+            });
+          }
+          const totalPages = num(data?.page_info?.total_page);
+          if (!list.length || page >= (totalPages || 1)) break;
         }
-        const totalPages = num(data?.page_info?.total_page);
-        if (!list.length || page >= (totalPages || 1)) break;
-      }
-      return [...accounts.values()];
-    },
-
-    /**
-     * Todos os anúncios da conta, sem os excluídos (`/ad/get/`, páginas de 1000): [{ adId, name, advertiserId, campaignId, campaignName,
-     * adgroupId, adgroupName, operationStatus ('ENABLE'|'DISABLE'|'FROZEN'|null), status (status secundário, ex.: AD_STATUS_DELIVERY_OK),
-     * createdAt/modifiedAt (ISO, UTC) }]. Devolve também `truncated` se passou do limite de páginas.
-     */
-    async listAds(token, advertiserId) {
-      const ads = new Map();
-      let truncated = false;
-      for (let page = 1; page <= AD_MAX_PAGES; page += 1) {
-        const data = await call('/ad/get/', { token, query: { advertiser_id: advertiserId, fields: AD_FIELDS, filtering: { primary_status: 'STATUS_NOT_DELETE' }, page, page_size: AD_PAGE_SIZE } });
-        const list = Array.isArray(data.list) ? data.list : [];
-        for (const item of list) {
-          const adId = digitsOrNull(item?.ad_id);
-          if (!adId || ads.has(adId)) continue;
-          const time = (value) => (AD_TIME_RE.test(String(value ?? '')) ? `${String(value).replace(' ', 'T')}Z` : null);
-          ads.set(adId, {
-            adId,
-            name: String(item.ad_name ?? '').slice(0, 200),
-            advertiserId,
-            campaignId: digitsOrNull(item.campaign_id),
-            campaignName: String(item.campaign_name ?? '').slice(0, 200),
-            adgroupId: digitsOrNull(item.adgroup_id),
-            adgroupName: String(item.adgroup_name ?? '').slice(0, 200),
-            operationStatus: ['ENABLE', 'DISABLE', 'FROZEN'].includes(item.operation_status) ? item.operation_status : null,
-            status: /^[A-Z_]{3,80}$/.test(String(item.secondary_status ?? '')) ? item.secondary_status : null,
-            createdAt: time(item.create_time),
-            modifiedAt: time(item.modify_time),
-          });
-        }
-        const totalPages = num(data.page_info?.total_page);
-        if (!list.length || list.length < AD_PAGE_SIZE || page >= (totalPages || page)) break;
-        if (page === AD_MAX_PAGES) truncated = true;
-      }
-      return { ads: [...ads.values()], truncated };
-    },
-
-    /**
-     * Desempenho por ANÚNCIO no período (`/report/integrated/get/`, nível anúncio; datas no fuso da conta): Map adId -> métricas em número.
-     * Anúncio sem entrega no período não vem no relatório (quem chama trata como zero). Se o TikTok recusar alguma métrica ("result"), repete
-     * com o conjunto básico e informa `hasResult: false`.
-     */
-    async getAdMetrics(token, advertiserId, { startDate, endDate }) {
-      const run = async (metrics) => {
-        const rows = [];
-        for (let page = 1; page <= AD_MAX_PAGES; page += 1) {
-          const data = await call('/report/integrated/get/', {
-            token,
-            query: { advertiser_id: advertiserId, report_type: 'BASIC', data_level: 'AUCTION_AD', dimensions: ['ad_id'], metrics, start_date: startDate, end_date: endDate, page, page_size: AD_PAGE_SIZE },
-          });
-          const list = Array.isArray(data.list) ? data.list : [];
-          rows.push(...list);
-          if (!list.length || list.length < AD_PAGE_SIZE || page >= (num(data.page_info?.total_page) || page)) break;
-        }
-        return rows;
+        return [...found.values()];
       };
-      let rows;
-      let hasResult = true;
       try {
-        rows = await run(AD_METRICS_FULL);
+        return await run(true);
       } catch (err) {
         if (!(err instanceof HttpError && err.code === 'tiktok_error')) throw err;
-        hasResult = false;
-        rows = await run(AD_METRICS_BASIC);
+        return run(false); // o TikTok recusou `fields` (versão/permissão): lê o básico, sem o orçamento restante
       }
-      const byAd = new Map();
-      for (const row of rows) {
-        const adId = digitsOrNull(row.dimensions?.ad_id);
-        if (!adId) continue;
-        const m = row.metrics ?? {};
-        byAd.set(adId, {
-          spend: num(m.spend), impressions: num(m.impressions), clicks: num(m.clicks), ctr: num(m.ctr), cpc: num(m.cpc),
-          result: num(m.result), costPerResult: num(m.cost_per_result), conversions: num(m.conversion), costPerConversion: num(m.cost_per_conversion),
-        });
-      }
-      return { metrics: byAd, hasResult };
     },
 
     /**
-     * Ativa ou pausa anúncios (`/ad/status/update/`: de 1 a 20 por pedido; só ENABLE e DISABLE: este sistema NUNCA exclui anúncios).
-     * Devolve os IDs que o TikTok confirmou.
+     * Campanhas, grupos de anúncios e anúncios da conta (sem os excluídos): `/campaign/get/`, `/adgroup/get/` e `/ad/get/`, páginas de 1000.
+     * Todos devolvem { items, truncated }; cada item tem `id`, `name`, `advertiserId`, `operationStatus` ('ENABLE'|'DISABLE'|'FROZEN'|null),
+     * `status` (status secundário: AD_STATUS_*, ADGROUP_STATUS_* ou CAMPAIGN_STATUS_*), `createdAt`/`modifiedAt` (ISO, UTC) e os campos do nível
+     * (campanha: objetivo e orçamento; grupo: campanha, meta e orçamento; anúncio: campanha e grupo).
      */
-    async updateAdStatus(token, advertiserId, adIds, status) {
-      if (!['ENABLE', 'DISABLE'].includes(status)) throw new HttpError(400, 'Status inválido.', 'validation_error');
-      if (!adIds.length || adIds.length > AD_STATUS_MAX_IDS || !adIds.every((id) => /^\d{1,24}$/.test(id))) throw new HttpError(400, 'Escolha de 1 a 20 anúncios.', 'validation_error');
-      const data = await call('/ad/status/update/', { token, method: 'POST', retry: true, body: { advertiser_id: advertiserId, ad_ids: adIds, operation_status: status } });
-      return (Array.isArray(data.ad_ids) ? data.ad_ids : []).map((id) => digitsOrNull(id)).filter(Boolean);
+    listManagerItems: listItems,
+
+    /** Compatibilidade: anúncios no formato antigo (`ads` com `adId`). */
+    async listAds(token, advertiserId) {
+      const { items, truncated } = await listItems(token, advertiserId, 'ads');
+      return { ads: items.map((item) => ({ ...item, adId: item.id })), truncated };
+    },
+
+    /**
+     * Desempenho do período por campanha, grupo ou anúncio (`/report/integrated/get/`, `data_level` AUCTION_CAMPAIGN / AUCTION_ADGROUP / AUCTION_AD,
+     * uma dimensão de ID; datas no fuso da conta): Map id -> métricas em número. Quem não teve entrega no período não vem no relatório (quem chama
+     * trata como zero). Se o TikTok recusar alguma métrica ("result"), repete com o conjunto básico e informa `hasResult: false`.
+     */
+    getLevelMetrics: levelMetrics,
+
+    /** Compatibilidade: desempenho por anúncio. */
+    getAdMetrics(token, advertiserId, range) {
+      return levelMetrics(token, advertiserId, 'ads', range);
+    },
+
+    /**
+     * Ativa ou pausa campanhas, grupos ou anúncios (`/campaign/status/update/`, `/adgroup/status/update/`, `/ad/status/update/`: de 1 a 20 por
+     * pedido; só ENABLE e DISABLE: este sistema NUNCA exclui nada). Devolve os IDs que o TikTok confirmou.
+     */
+    updateStatus: changeStatus,
+
+    /** Compatibilidade: ativar/pausar anúncios. */
+    updateAdStatus(token, advertiserId, adIds, status) {
+      return changeStatus(token, advertiserId, 'ads', adIds, status);
     },
 
     // ---------- Catálogo de produtos (Catalog API v1.3; o catálogo é um ativo da Business Center) ----------

@@ -17,7 +17,7 @@ describe('Gerenciador: visualizações e períodos (regras compartilhadas)', () 
   it('a visualização padrão é válida e mostra as colunas pedidas (anúncio, status, ativo, publicado, resultado, gasto, CPC, cliques, CTR)', () => {
     const config = defaultViewConfig();
     assert.deepEqual(normalizeViewConfig(config), config);
-    assert.deepEqual(config.columns.filter((c) => c.visible).map((c) => c.key), ['name', 'status', 'toggle', 'createdAt', 'result', 'spend', 'cpc', 'clicks', 'ctr']);
+    assert.deepEqual(config.columns.filter((c) => c.visible).map((c) => c.key), ['name', 'status', 'toggle', 'objective', 'goal', 'budget', 'createdAt', 'result', 'spend', 'cpc', 'clicks', 'ctr']); // objetivo, meta e orçamento só existem em campanhas/grupos
     assert.equal(config.datePreset, 'today', 'o padrão é HOJE');
     assert.equal(MANAGER_COLUMNS.length, config.columns.length);
   });
@@ -26,7 +26,7 @@ describe('Gerenciador: visualizações e períodos (regras compartilhadas)', () 
     const config = normalizeViewConfig({ columns: [{ key: 'spend', visible: true }, { key: 'name', visible: true }, { key: 'status', visible: false }], sort: { key: 'clicks', dir: 'asc' }, filters: { status: 'active', accountId: '9001', onlySpent: true, hack: 1 }, datePreset: 'last7', pageSize: 50, extra: 'x' });
     assert.deepEqual(config.columns.slice(0, 3), [{ key: 'spend', visible: true }, { key: 'name', visible: true }, { key: 'status', visible: false }]);
     assert.equal(config.columns.length, MANAGER_COLUMNS.length);
-    assert.ok(config.columns.slice(3).every((c) => c.visible === false));
+    assert.ok(config.columns.slice(3).every((c) => c.visible === (['objective', 'goal', 'budget'].includes(c.key))), 'as que faltam ficam ocultas, menos as exclusivas de campanhas/grupos (a visualização antiga só tinha anúncios)');
     assert.deepEqual(Object.keys(config).sort(), ['columns', 'datePreset', 'filters', 'pageSize', 'sort']);
     assert.deepEqual(Object.keys(config.filters).sort(), ['accountId', 'onlySpent', 'status']);
   });
@@ -123,6 +123,12 @@ describe('Gerenciador de anúncios', () => {
     fake.state.failAdStatusFor = new Set();
     fake.state.failReportFor = new Set();
     fake.state.rejectResultMetric = false;
+    fake.state.campaigns = {};
+    fake.state.adgroups = {};
+    fake.state.failCampaignsFor = new Set();
+    fake.state.failAdgroupsFor = new Set();
+    fake.state.failCampaignStatusFor = new Set();
+    fake.state.failAdgroupStatusFor = new Set();
     fake.state.ads = {
       9001: [ad(1001), ad(1002, { ad_name: 'Pausado', operation_status: 'DISABLE', secondary_status: 'AD_STATUS_DISABLE' }), ad(1003, { ad_name: 'Sem gasto hoje' }), ad(1004, { ad_name: 'Excluído', operation_status: 'DELETE', secondary_status: 'AD_STATUS_DELETE' })],
       9002: [ad(2001, { advertiser_id: '9002', ad_name: 'Da conta em reais', campaign_name: 'Campanha B' })],

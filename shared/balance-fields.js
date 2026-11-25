@@ -41,11 +41,20 @@ const LABELS = Object.freeze({
 /** Ordem de exibição dos campos conhecidos (os demais vêm depois, em ordem alfabética). */
 const ORDER = Object.freeze(Object.keys(LABELS));
 
+/** Campos que dizem quanto está DISPONÍVEL para gastar (o total inclui bloqueado e impostos). */
+const AVAILABLE_KEYS = Object.freeze(['valid_account_balance', 'available_balance']);
+
 /** Qual campo representa o "saldo disponível" principal (o primeiro que existir). */
 const MAIN_KEYS = Object.freeze(['valid_account_balance', 'available_balance', 'valid_cash_balance', 'account_balance', 'cash_balance', 'balance']);
 
 /** Campo que representa dinheiro disponível/guardado (conta para "tem saldo"), e não bloqueio, imposto, orçamento, valor transferível ou histórico de recargas. */
 export const isBalanceKey = (key) => /(balance|cash|grant|coupon|credit|available)/.test(key) && !/(frozen|tax|budget|cost|limit|transferable|recharge|minimum|restriction)/.test(key);
+
+/** Como o dinheiro da conta é gerido (Payment Portfolio) e de onde o saldo exibido vem. */
+export const PORTFOLIO_TYPE_LABELS = Object.freeze({ SHARED: 'Portfólio compartilhado', NON_SHARED: 'Portfólio individual' });
+export const BUDGET_MODE_LABELS = Object.freeze({ UNLIMITED: 'Sem limite de orçamento', MONTHLY_BUDGET: 'Orçamento mensal', DAILY_BUDGET: 'Orçamento diário', CUSTOM_BUDGET: 'Orçamento único' });
+/** Contas que gastam do saldo da BC dentro de um orçamento (BC em alocação automática). */
+export const isBudgetMode = (mode) => ['MONTHLY_BUDGET', 'DAILY_BUDGET', 'CUSTOM_BUDGET'].includes(mode);
 
 /** Nome em português do campo: o conhecido, ou o próprio nome sem "_" e com a primeira letra maiúscula. */
 export function balanceLabel(key) {
@@ -70,5 +79,16 @@ export function mainAmount(amounts) {
   return fallback ? fallback.value : null;
 }
 
-/** Tem saldo? Verdadeiro se algum campo de saldo for maior que zero. */
-export const hasBalance = (amounts) => amounts.some((a) => isBalanceKey(a.key) && a.value > 0);
+/**
+ * Tem saldo? Conta o que está DISPONÍVEL para gastar. Pela documentação oficial, `account_balance` = disponível + bloqueado + impostos (e
+ * `cash_balance` idem): olhar o total faria uma conta com dinheiro só bloqueado aparecer "com saldo". Então, quando o TikTok informa o disponível
+ * (`valid_account_balance`/`available_balance`), só ele decide; sem ele, os demais `valid_*`; só em último caso, qualquer campo de saldo.
+ */
+export function hasBalance(amounts) {
+  const known = (keys) => amounts.filter((a) => keys.includes(a.key));
+  const available = known(AVAILABLE_KEYS);
+  if (available.length) return available.some((a) => a.value > 0);
+  const valid = amounts.filter((a) => isBalanceKey(a.key) && a.key.startsWith('valid_'));
+  if (valid.length) return valid.some((a) => a.value > 0);
+  return amounts.some((a) => isBalanceKey(a.key) && a.value > 0);
+}

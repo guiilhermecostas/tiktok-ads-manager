@@ -1,4 +1,4 @@
-import { balanceLabel, hasBalance, mainAmount, sortAmounts } from '../../../shared/balance-fields.js';
+import { balanceLabel, hasBalance, isBudgetMode, mainAmount, sortAmounts } from '../../../shared/balance-fields.js';
 import { HttpError } from '../../lib/http-error.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
 
@@ -18,6 +18,31 @@ function friendly(err) {
 }
 
 const toAmounts = (list) => sortAmounts(list).map((a) => ({ key: a.key, label: balanceLabel(a.key), value: a.value }));
+
+/**
+ * O que a conta pode GASTAR, conforme a documentação oficial de `/advertiser/balance/get/`:
+ *  - normal: o disponível da própria conta (`balance_info`, que o cliente já prioriza);
+ *  - portfólio de pagamento COMPARTILHADO (`SHARED`): o dinheiro é do portfólio e usado por todas as contas ligadas a ele, então o disponível
+ *    é o do portfólio (e ele não pode ser somado uma vez por conta);
+ *  - BC em alocação automática (orçamento mensal/diário/único): a conta gasta do saldo da BC dentro do orçamento, então o disponível é o
+ *    orçamento restante, limitado pelo saldo da BC (o saldo próprio da conta fica zerado por definição).
+ */
+function describeAccount(item, bcMain) {
+  const amounts = toAmounts(item.amounts);
+  const portfolio = item.portfolio ? { id: item.portfolio.id, name: item.portfolio.name, type: item.portfolio.type, amounts: toAmounts(item.portfolio.amounts) } : null;
+  const out = { amounts, main: mainAmount(amounts), hasBalance: hasBalance(amounts), mainSource: 'account', portfolio, budgetMode: item.budgetMode ?? null };
+  if (portfolio?.type === 'SHARED') {
+    const pooled = mainAmount(portfolio.amounts);
+    if (pooled !== null) Object.assign(out, { main: pooled, hasBalance: hasBalance(portfolio.amounts), mainSource: 'portfolio' });
+  } else if (isBudgetMode(item.budgetMode)) {
+    const remaining = amounts.find((a) => a.key === 'budget_remaining')?.value;
+    if (remaining !== undefined) {
+      const usable = Math.max(0, bcMain === null ? remaining : Math.min(remaining, bcMain));
+      Object.assign(out, { main: usable, hasBalance: usable > 0, mainSource: 'budget' });
+    }
+  }
+  return out;
+}
 
 /**
  * Saldo das Business Centers e das contas de anúncio do usuário, em duas visões SEPARADAS (BC e conta). Uma BC sem saldo pode ter
@@ -97,12 +122,12 @@ export function createBalanceService({ tiktok, connections, log = console, now =
       const listedIds = new Set(listed.map((a) => a.id));
       const names = new Map(mine.map((a) => [a.id, a]));
 
+      const bcMain = bc.ok ? mainAmount(bcAmounts) : null;
       for (const item of listed) {
-        const amounts = toAmounts(item.amounts);
         const db = names.get(item.id);
         accounts.push({
           ...base, key: `${connection.id}:${item.id}`, advertiserId: item.id, name: item.name || db?.name || item.id, advertiserStatus: item.status, bcId,
-          currency: item.currency ?? db?.currency ?? bc.currency ?? null, status: 'ok', error: null, amounts, main: mainAmount(amounts), hasBalance: hasBalance(amounts), bcHasBalance: bcHas,
+          currency: item.currency ?? db?.currency ?? bc.currency ?? null, status: 'ok', error: null, ...describeAccount(item, bcMain), bcHasBalance: bcHas,
         });
       }
       // Contas conhecidas desta BC que o TikTok não devolveu (ou a consulta falhou): aparecem sem saldo informado.
@@ -115,7 +140,7 @@ export function createBalanceService({ tiktok, connections, log = console, now =
       bcs.push({
         ...base, key: `${connection.id}:${bcId}`, bcId, status: bc.ok ? 'ok' : 'error', error: bc.ok ? null : bc.error, currency: bc.ok ? bc.currency : null,
         amounts: bcAmounts, main: bc.ok ? mainAmount(bcAmounts) : null, hasBalance: Boolean(bcHas),
-        accountsTotal: Math.max(mine.length, listed.length), accountsWithBalance: listed.filter((a) => hasBalance(toAmounts(a.amounts))).length, accountsError: acc.ok ? null : acc.error,
+        portfolioType: bc.ok ? bc.portfolioType ?? null : null, accountsTotal: Math.max(mine.length, listed.length), accountsWithBalance: accounts.filter((a) => a.connectionId === connection.id && a.bcId === bcId && a.status === 'ok' && a.hasBalance).length, accountsError: acc.ok ? null : acc.error,
       });
     });
 
@@ -131,7 +156,18 @@ export function createBalanceService({ tiktok, connections, log = console, now =
       totals.set(code, row);
     };
     for (const b of bcs) if (b.main !== null) bump(b.currency, 'bc', b.main);
-    for (const a of accounts) if (a.main !== null) bump(a.currency, 'accounts', a.main);
+    // Cada dinheiro entra UMA vez: portfólio compartilhado (o mesmo valor aparece em todas as contas ligadas a ele) soma só uma vez, e conta que
+    // gasta do saldo da BC (orçamento) não soma (esse dinheiro já está no total da BC).
+    const countedPools = new Set();
+    for (const a of accounts) {
+      if (a.main === null || a.mainSource === 'budget') continue;
+      if (a.mainSource === 'portfolio') {
+        const pool = `${a.connectionId}:${a.portfolio.id ?? `bc${a.bcId}`}`;
+        if (countedPools.has(pool)) continue;
+        countedPools.add(pool);
+      }
+      bump(a.currency, 'accounts', a.main);
+    }
 
     return {
       fetchedAt: now().toISOString(),
@@ -144,6 +180,8 @@ export function createBalanceService({ tiktok, connections, log = console, now =
         accountsWithBalance: accounts.filter((a) => a.status === 'ok' && a.hasBalance).length,
         accountsWithoutBalance: accounts.filter((a) => a.status === 'ok' && !a.hasBalance).length,
         accountsUnknown: accounts.filter((a) => a.status !== 'ok').length,
+        accountsOnBudget: accounts.filter((a) => a.mainSource === 'budget').length, // gastam do saldo da BC, dentro de um orçamento (não entram na soma)
+        accountsSharedPortfolio: accounts.filter((a) => a.mainSource === 'portfolio').length, // dividem o saldo de um portfólio (entra uma vez na soma)
       },
       totals: [...totals.values()].sort((a, b) => (b.bc + b.accounts) - (a.bc + a.accounts)),
       bcs,

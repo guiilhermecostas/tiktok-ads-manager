@@ -255,11 +255,17 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
 - **Saldo** (menu "Saldo", área "Contas TikTok"): duas subabas SEPARADAS, **Business Centers** (`/balance`) e **Contas de anúncio** (`/balance/accounts`). Cada linha mostra o saldo
   disponível, a situação (**com saldo**, **sem saldo** ou **sem informação**, com o motivo ao passar o mouse) e, em "Detalhes", **todos** os valores que o TikTok devolveu (saldo total,
   dinheiro, bônus, bloqueado, impostos, orçamento…). Uma BC sem saldo com contas com saldo (e o contrário) aparecem normalmente, e cada conta diz se a BC dela tem saldo. Filtros: busca,
-  situação, moeda e conexão; resumo por moeda (moedas diferentes nunca se somam). Dados da API real: `GET /bc/balance/get/` e `GET /advertiser/balance/get/` (confirmados com token falso;
-  o TikTok **não documenta o formato da resposta**, então o sistema lê todos os campos numéricos de forma tolerante e usa nomes em português só para os conhecidos). Só as conexões do
-  PRÓPRIO usuário (nada compartilhado), cache de 60 s que muda sozinho ao conectar/remover/sincronizar, "Atualizar agora" com limite (6 por 5 minutos) e consulta de poucas BCs ao
+  situação, moeda e conexão; resumo por moeda (moedas diferentes nunca se somam). Dados da API real: `GET /bc/balance/get/` e `GET /advertiser/balance/get/` (documentação oficial v1.3,
+  conferida; só devolve contas em que a BC é administradora e só usuários com função financeira veem o saldo). **Como o saldo é calculado (regras da documentação):**
+  - **"Saldo disponível" é `valid_account_balance`** (o que dá para gastar). `account_balance` é o TOTAL (= disponível + bloqueado + impostos): conta com dinheiro só bloqueado aparece **sem saldo**.
+  - **Os valores da CONTA vêm de `balance_info`**; os mesmos campos no topo da resposta, com *Payment Portfolio* ativo, são os do **portfólio** (compartilhado), não os da conta.
+  - **Portfólio compartilhado (`SHARED`):** o dinheiro é do portfólio e usado por todas as contas ligadas a ele; o disponível mostrado é o do portfólio e **entra UMA vez na soma** (antes cada conta somava o mesmo valor).
+  - **BC em alocação automática** (`budget_mode` mensal/diário/único): a conta gasta do saldo da BC dentro do orçamento; o disponível é o `budget_remaining` (pedido em `fields`) limitado pelo saldo da BC, e **não entra na soma** (já está no saldo da BC).
+  - Se o TikTok recusar o parâmetro `fields`, a consulta é repetida sem ele. Campos desconhecidos continuam aparecendo (nome humanizado). Regras em `shared/balance-fields.js` e `src/modules/tiktok/balance.service.js`.
+
+  Só as conexões do PRÓPRIO usuário (nada compartilhado), cache de 60 s que muda sozinho ao conectar/remover/sincronizar, "Atualizar agora" com limite (6 por 5 minutos) e consulta de poucas BCs ao
   mesmo tempo; falha em uma BC (ex.: sem permissão financeira) aparece naquela BC e não derruba as outras. API: `GET /api/tiktok/balance[?refresh=1]`. **Pendente de conferência com um
-  token real:** o formato exato da resposta e se o token da conexão tem permissão financeira na BC.
+  token real:** como o SEU TikTok devolve `balance_info`/portfólio/orçamento (os testes usam um TikTok simulado seguindo a documentação) e se o token da conexão tem permissão financeira na BC.
 - **Arquivos** (aba de Contas TikTok): anexos para a equipe (ex.: arquivos de logins). Gravados **criptografados** (AES-256-GCM, dono autenticado; desligado sem
   `TOKEN_ENCRYPTION_KEY`), só txt/csv/log/md/pdf/png/jpg/docx/xlsx **conferidos pelo conteúdo**, sempre entregues como **download** (`octet-stream`, `attachment`,
   `nosniff`, sem cache). Limites: 5 MB por arquivo, 50 arquivos e 100 MB por conta. Para senhas, um gerenciador de senhas é mais seguro.
@@ -293,7 +299,22 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
 
 ## Gerenciador de anúncios
 
-**Gerenciador** (menu lateral; exige a área “Campanhas” ou “Relatórios”) mostra, em uma única tabela, **os anúncios de todas as contas** das Business Centers ativas
+O Gerenciador tem **três abas, uma por nível da hierarquia do TikTok: Campanhas → Grupos de anúncios → Anúncios**, cada uma com os dados do próprio nível (a aba mostra a contagem
+depois de carregar). **Clicar no nome de uma campanha abre os grupos dela; clicar num grupo abre os anúncios dele** (um aviso mostra o filtro, com o botão “Ver todos”). Cada aba tem
+as colunas que fazem sentido: **campanha** = objetivo e orçamento; **grupo** = meta de otimização, orçamento e campanha; **anúncio** = campanha e grupo. Status, ativar/pausar (interruptor
+e em massa), período, filtros, colunas e visualizações salvas valem para os três níveis. Pausar uma campanha muda o status do que está dentro dela: as outras abas buscam de novo.
+Cada nível é uma consulta própria, guardada enquanto a pessoa troca de aba no mesmo período (a troca de aba é instantânea depois da primeira vez).
+
+- **Contrato oficial por nível (conferido na documentação):** `GET /campaign/get/`, `GET /adgroup/get/` e `GET /ad/get/` (campos em `fields`, `filtering.primary_status = STATUS_NOT_DELETE`,
+  `page_size` até 1000); desempenho em `GET /report/integrated/get/` com `data_level` **`AUCTION_CAMPAIGN` / `AUCTION_ADGROUP` / `AUCTION_AD`** e **uma** dimensão de ID (`campaign_id`, `adgroup_id`
+  ou `ad_id`; o TikTok não aceita duas); ativar/pausar em `POST /campaign/status/update/` (`campaign_ids`), `/adgroup/status/update/` (`adgroup_ids`) e `/ad/status/update/` (`ad_ids`), de 1 a 20
+  por chamada. **Só `ENABLE`/`DISABLE`: o sistema nunca envia `DELETE`.** Campanhas/grupos/anúncios excluídos não são listados (padrão do TikTok).
+- **Status em português** (`shared/ad-status.js`): tabelas de campanha (`CAMPAIGN_STATUS_*`), grupo (`ADGROUP_STATUS_*`) e anúncio (`AD_STATUS_*`), mais os estados da conta que o TikTok repete em
+  qualquer nível (ex.: `ADVERTISER_ACCOUNT_PUNISH` → “Conta penalizada pelo TikTok”). Valor desconhecido aparece “humanizado”.
+- API: `GET /api/tiktok/manager/{campaigns|adgroups|ads}?preset=&from=&to=&refresh=1` (a lista vem em `campaigns`, `adgroups` ou `ads`) e `POST /api/tiktok/manager/{campaigns|adgroups|ads}/status`
+  (`campaignIds` | `adgroupIds` | `adIds` + `status`). Níveis e rótulos em `shared/manager-levels.js`.
+
+**Gerenciador** (menu lateral; exige a área “Campanhas” ou “Relatórios”) mostra, em uma única tabela por aba, **os itens de todas as contas** das Business Centers ativas
 da pessoa, carregados de uma vez (contas consultadas 6 por vez, com cache de 60 s; “Atualizar” ignora o cache). Colunas padrão: **anúncio** (com ID e campanha), **status**,
 **ativo** (interruptor), **publicado em**, **resultado**, **valor gasto**, **CPC (link)**, **cliques (link)** e **CTR**; opcionais: conta, campanha, grupo, impressões,
 custo por resultado, conversões, custo por conversão e editado em. Rodapé com **total por moeda** (moedas diferentes nunca são somadas).
