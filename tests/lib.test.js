@@ -34,6 +34,22 @@ describe('RateLimiter', () => {
       rl.stop();
     }
   });
+  it('peek consulta sem registrar tentativa (bloqueio só por falhas)', () => {
+    const rl = new RateLimiter({ max: 2, windowMs: 1000 });
+    try {
+      for (let i = 0; i < 5; i += 1) assert.equal(rl.peek('k', 0).allowed, true, 'olhar não conta');
+      rl.consume('k', 0);
+      assert.equal(rl.peek('k', 10).allowed, true);
+      rl.consume('k', 20);
+      const blocked = rl.peek('k', 30);
+      assert.deepEqual([blocked.allowed, blocked.retryAfterSec], [false, 1]);
+      assert.equal(rl.hits.get('k').length, 2, 'peek não adicionou nada');
+      assert.equal(rl.peek('k', 1001).allowed, true, 'libera depois da janela');
+      assert.equal(rl.peek('outra', 0).allowed, true);
+    } finally {
+      rl.stop();
+    }
+  });
   it('sweep remove chaves expiradas (sem vazamento de memória)', () => {
     const rl = new RateLimiter({ max: 5, windowMs: 1000 });
     try {

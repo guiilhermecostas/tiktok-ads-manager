@@ -263,6 +263,18 @@ Colaboradores configuram a própria foto sem precisar de nenhuma área.
   - **BC em alocação automática** (`budget_mode` mensal/diário/único): a conta gasta do saldo da BC dentro do orçamento; o disponível é o `budget_remaining` (pedido em `fields`) limitado pelo saldo da BC, e **não entra na soma** (já está no saldo da BC).
   - Se o TikTok recusar o parâmetro `fields`, a consulta é repetida sem ele. Campos desconhecidos continuam aparecendo (nome humanizado). Regras em `shared/balance-fields.js` e `src/modules/tiktok/balance.service.js`.
 
+  **Transferir saldo (BC ↔ conta de anúncio):** botão **Transferir** em cada conta da aba "Contas de anúncio", pela rota oficial `POST /bc/transfer/` (`transfer_level: ADVERTISER`, só em espécie):
+  **adicionar** = da BC para a conta (`RECHARGE`); **retirar** = da conta de volta para a BC (`REFUND`). Isto só move dinheiro que JÁ está no TikTok: **colocar dinheiro novo na BC (cartão, PIX,
+  boleto) continua sendo no portal do TikTok** (a API não faz isso). O TikTok só deixa quem tem a função **Finance Manager** na BC concluir. Como é dinheiro de verdade, há várias travas:
+  - **só o DONO** das conexões move dinheiro (colaborador vê o saldo, o botão some e a API devolve 403) e **toda transferência pede a senha** (5 senhas erradas = bloqueio de 15 minutos);
+  - duas etapas na tela (preencher → **revisar** com a frase "US$ X da BC … para a conta …" e o saldo de cada lado depois) e **o servidor reconfere tudo** com o saldo ATUAL antes de chamar o TikTok
+    (valor até 2 casas, nunca arredondado; teto de 100.000 por vez e 20 por hora; dentro do saldo da BC ou do valor transferível da conta; mesma moeda);
+  - **não aparece** para contas de portfólio compartilhado (o dinheiro é do portfólio) nem para contas que gastam do saldo da BC por orçamento (não há saldo próprio), com o motivo nos detalhes;
+  - **nunca duas vezes:** cada pedido tem um identificador de operação e vira um registro `balance_transfers` ANTES de falar com o TikTok (chave única por pessoa e operação); clique repetido, reenvio ou
+    duas ao mesmo tempo na mesma conta não movem o dinheiro de novo, e a chamada ao TikTok nunca é repetida sozinha;
+  - **histórico** (tabela `balance_transfers`, só da pessoa, nunca apagado junto com a conexão): `success`, `failed` (o TikTok recusou, nada se moveu) ou `unknown` (o TikTok não respondeu: o dinheiro PODE ter
+    se movido, então a tela manda conferir o saldo e não tenta de novo). Nem senha nem token são gravados. API: `POST /api/tiktok/balance/transfer`, `GET /api/tiktok/balance/transfers`. Regras em `shared/balance-transfer.js`.
+
   Só as conexões do PRÓPRIO usuário (nada compartilhado), cache de 60 s que muda sozinho ao conectar/remover/sincronizar, "Atualizar agora" com limite (6 por 5 minutos) e consulta de poucas BCs ao
   mesmo tempo; falha em uma BC (ex.: sem permissão financeira) aparece naquela BC e não derruba as outras. API: `GET /api/tiktok/balance[?refresh=1]`. **Pendente de conferência com um
   token real:** como o SEU TikTok devolve `balance_info`/portfólio/orçamento (os testes usam um TikTok simulado seguindo a documentação) e se o token da conexão tem permissão financeira na BC.

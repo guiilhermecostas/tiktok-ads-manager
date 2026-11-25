@@ -74,6 +74,10 @@ export function createFakeTiktok() {
     balanceListKey: 'advertiser_account_list', // nome da lista na resposta de /advertiser/balance/get/ (o TikTok não documenta)
     failBalanceBc: new Set(), // BCs cujo /bc/balance/get/ responde "sem permissão"
     failBalanceAdvertisers: new Set(), // BCs cujo /advertiser/balance/get/ responde "sem permissão"
+    transferFinanceRole: true, // false: /bc/transfer/ responde "sem permissão" (só Finance Manager transfere)
+    transferNetworkError: false, // true: a chamada /bc/transfer/ falha por rede DEPOIS de enviada (resultado desconhecido)
+    transferDelayMs: 0, // latência de /bc/transfer/ (testes de cliques repetidos)
+    minRecharge: 0, // valor mínimo aceito em RECHARGE (documentação: há um mínimo que o /advertiser/balance/get/ informa)
     rejectBalanceFields: false, // true: /advertiser/balance/get/ recusa o parâmetro `fields`
     // Catálogo (Catalog API v1.3)
     catalogs: {}, // BC -> [{ catalog_id, catalog_name, catalog_type, ad_creation_eligible, create_time, update_time, bc_info, catalog_conf }]
@@ -279,6 +283,50 @@ export function createFakeTiktok() {
     state.calls.push({ path: u.pathname.replace('/open_api/v1.3', ''), query, token, method: init.method, body, dispatcher: init.dispatcher ?? null });
 
     const path = u.pathname.replace('/open_api/v1.3', '');
+
+    // Transferência de saldo (`/bc/transfer/`): CONTRATO oficial (campos, enums, uma única origem de valor) e o saldo muda de verdade no estado.
+    if (path === '/bc/transfer/') {
+      if (state.transferDelayMs) await new Promise((r) => setTimeout(r, state.transferDelayMs));
+      if (state.transferNetworkError) throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }) });
+      if (init.method !== 'POST') return reply({}, 40002, 'Method not allowed');
+      if (!state.validTokens.has(token)) return reply({}, 40105, 'Access token is incorrect or has been revoked');
+      if (!state.transferFinanceRole) return reply({}, 40001, 'No permission: only users with the Finance Manager role can process a payment');
+      const b = body ?? {};
+      const allowed = ['bc_id', 'transfer_level', 'advertiser_id', 'payment_portfolio_id', 'transfer_type', 'amount_info', 'cash_amount', 'grant_amount', 'request_id'];
+      const extra = Object.keys(b).filter((k) => !allowed.includes(k));
+      if (extra.length) return reply({}, 40002, `Unknown parameter: ${extra[0]}`);
+      if (typeof b.bc_id !== 'string' || !/^\d+$/.test(b.bc_id)) return reply({}, 40002, 'bc_id must be a string of digits');
+      if ((b.transfer_level ?? 'ADVERTISER') !== 'ADVERTISER') return reply({}, 40002, 'transfer_level BC is not supported by this fake');
+      if (typeof b.advertiser_id !== 'string' || !/^\d+$/.test(b.advertiser_id)) return reply({}, 40002, 'advertiser_id is required when transfer_level is ADVERTISER');
+      if (!['RECHARGE', 'REFUND'].includes(b.transfer_type)) return reply({}, 40002, 'transfer_type must be RECHARGE or REFUND');
+      const sources = ['amount_info', 'cash_amount', 'grant_amount'].filter((k) => b[k] !== undefined);
+      if (sources.length !== 1) return reply({}, 40002, 'You need to specify one of amount_info, cash_amount, or grant_amount');
+      if (b.cash_amount === undefined) return reply({}, 40002, 'This fake only handles cash_amount');
+      if (typeof b.cash_amount !== 'number' || !(b.cash_amount > 0) || Math.abs(b.cash_amount * 100 - Math.round(b.cash_amount * 100)) > 1e-7) return reply({}, 40002, 'cash_amount must be a number greater than 0, rounded to two decimal places');
+      if (b.request_id !== undefined && !/^[\w-]{32}$/.test(String(b.request_id))) return reply({}, 40002, 'request_id must be a 32-bit string');
+      const list = state.balances.advertisers[b.bc_id] ?? [];
+      const acct = list.find((a) => a.advertiser_id === b.advertiser_id);
+      const bcRow = state.balances.bc[b.bc_id];
+      if (!acct || !bcRow) return reply({}, 40002, 'The ad account does not belong to this Business Center');
+      const n = (v) => Number(v ?? 0);
+      const bump = (obj, key, delta) => { if (obj && obj[key] !== undefined) obj[key] = String(Math.round((n(obj[key]) + delta) * 100) / 100); };
+      const fromBc = b.transfer_type === 'RECHARGE';
+      if (fromBc && b.cash_amount < state.minRecharge) return reply({}, 40002, `The minimum amount for a recharge is ${state.minRecharge}`);
+      if (fromBc && b.cash_amount > n(bcRow.valid_account_balance)) return reply({}, 40002, 'The Business Center balance is not enough');
+      if (!fromBc && b.cash_amount > n(acct.balance_info?.valid_account_balance ?? acct.valid_account_balance)) return reply({}, 40002, 'The ad account balance is not enough');
+      const sign = fromBc ? 1 : -1;
+      for (const key of ['valid_account_balance', 'account_balance', 'valid_cash_balance', 'cash_balance']) {
+        bump(acct, key, sign * b.cash_amount);
+        bump(acct.balance_info, key, sign * b.cash_amount);
+        bump(bcRow, key, -sign * b.cash_amount);
+      }
+      state.transfers = [...(state.transfers ?? []), { bc_id: b.bc_id, advertiser_id: b.advertiser_id, type: b.transfer_type, amount: b.cash_amount }];
+      const tid = () => `${Date.now()}${++state.nextId}`;
+      return reply({ bc_id: b.bc_id, advertiser_id: b.advertiser_id, transaction_infos: [
+        { transaction_id: tid(), transaction_type: 'CASH', payee_account: fromBc ? { account_type: 'ADVERTISER', account_id: b.advertiser_id } : { account_type: 'BC', account_id: b.bc_id }, remitter_account: null },
+        { transaction_id: tid(), transaction_type: 'CASH', remitter_account: fromBc ? { account_type: 'BC', account_id: b.bc_id } : { account_type: 'ADVERTISER', account_id: b.advertiser_id }, payee_account: null },
+      ] });
+    }
 
     // Troca do código de autorização: não usa token; autentica por app_id + secret.
     if (path === '/oauth2/access_token/') {

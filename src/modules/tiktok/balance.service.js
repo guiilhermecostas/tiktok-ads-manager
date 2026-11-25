@@ -1,5 +1,8 @@
 import { balanceLabel, hasBalance, isBudgetMode, mainAmount, sortAmounts } from '../../../shared/balance-fields.js';
-import { HttpError } from '../../lib/http-error.js';
+import { transferEligibility, validateTransferInput } from '../../../shared/balance-transfer.js';
+import { isUniqueViolation } from '../../db/helpers.js';
+import { HttpError, badRequest } from '../../lib/http-error.js';
+import { verifyPassword } from '../../lib/password.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
 
 const CACHE_TTL_MS = 60_000;
@@ -51,9 +54,10 @@ function describeAccount(item, bcMain) {
  *  - Uma consulta por BC do TikTok (`/bc/balance/get/` + `/advertiser/balance/get/`), poucas ao mesmo tempo, em cache por 60 s.
  *  - Falha em uma BC (ex.: sem permissão financeira) aparece como aviso naquela BC; as outras seguem normalmente.
  */
-export function createBalanceService({ tiktok, connections, log = console, now = () => new Date() }) {
+export function createBalanceService({ tiktok, connections, transfers, users, log = console, now = () => new Date() }) {
   const cache = new TtlCache({ ttlMs: CACHE_TTL_MS, maxEntries: 100 });
   const inflight = new Map();
+  const transferring = new Set(); // contas com uma transferência em andamento (nunca duas ao mesmo tempo na mesma conta)
 
   /** Consulta uma BC do TikTok com o token da conexão. Devolve os dois resultados, cada um com o próprio erro (se houver). */
   async function fetchBc(connection, bcId) {
@@ -189,7 +193,23 @@ export function createBalanceService({ tiktok, connections, log = console, now =
     };
   }
 
-  return {
+  const formatMoney = (value, currency) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: currency ?? 'USD' }).format(value);
+
+  /** Resultado de uma tentativa que o TikTok NÃO confirmou (sem resposta): o dinheiro pode ter se movido. */
+  const UNCONFIRMED = new Set(['tiktok_unreachable', 'tiktok_bad_response', 'proxy_error']);
+
+  /** Mensagem para a tela quando o TikTok recusa a transferência (nunca token nem detalhes internos). */
+  function transferError(err) {
+    if (err instanceof HttpError) {
+      if (err.code === 'tiktok_reauth') return 'O acesso desta conexão expirou ou foi revogado. Renove o acesso em Contas TikTok.';
+      if (err.code === 'tiktok_rate_limited') return 'O TikTok limitou as consultas. Nada foi transferido: tente de novo em instantes.';
+      if (err.code === 'tiktok_error' && /(permission|authoriz|forbid|role|finance)/i.test(err.message)) return `Sem permissão para transferir saldo: só quem tem a função Finance Manager na Business Center pode. (${err.message})`;
+      if (err.code === 'tiktok_error') return err.message;
+    }
+    return 'Não foi possível concluir a transferência.';
+  }
+
+  const service = {
     /** Visão completa (BCs e contas). `fresh` ignora o cache de 60 s. Consultas simultâneas do mesmo usuário compartilham o resultado. */
     async overview(actor, { fresh = false } = {}) {
       const loaded = await load(actor);
@@ -207,5 +227,75 @@ export function createBalanceService({ tiktok, connections, log = console, now =
       inflight.set(key, promise);
       return promise;
     },
+
+    /**
+     * Transfere dinheiro entre a BC e uma conta de anúncio. Cada passo existe para o dinheiro nunca andar por engano:
+     *  1. só o DONO das conexões (um colaborador vê o saldo, mas não move dinheiro) e só com a senha confirmada;
+     *  2. pedido validado com as regras compartilhadas (valor com até 2 casas, teto, IDs numéricos, operação de 32 hex);
+     *  3. conferência com o saldo ATUAL (consulta nova ao TikTok): conta elegível, moedas iguais, valor dentro do que há;
+     *  4. o registro "pending" é criado ANTES de falar com o TikTok; a chave única (pessoa, operação) barra repetição e duas ao mesmo tempo na mesma conta;
+     *  5. uma única chamada, sem repetir sozinha. Sem resposta = "unknown" (confira o saldo); recusa do TikTok = "failed".
+     */
+    async transfer(actor, user, rawInput) {
+      if (actor.id !== user.id) throw new HttpError(403, 'Só o dono da conta pode movimentar saldo. Colaboradores veem o saldo, mas não transferem.', 'transfer_owner_only');
+      const { value: input, errors } = validateTransferInput(rawInput);
+      if (errors.length) throw badRequest(errors[0].message, 'validation_error');
+
+      const stored = await users.findById(user.id);
+      if (!stored || !(await verifyPassword(input.password, stored.password_hash))) throw new HttpError(403, 'Senha incorreta.', 'invalid_password');
+
+      const previous = await transfers.findByOperation(user.id, input.operationId);
+      if (previous) {
+        if (previous.status === 'success') return { transfer: previous, duplicate: true };
+        throw new HttpError(409, previous.status === 'pending' ? 'Esta transferência já está em andamento. Aguarde e confira o histórico.' : 'Esta operação já foi processada e não deu certo. Revise e envie de novo (será uma operação nova).', 'transfer_duplicate');
+      }
+
+      const data = await service.overview(actor, { fresh: true });
+      const account = data.accounts.find((a) => a.connectionId === input.connectionId && a.bcId === input.bcId && a.advertiserId === input.advertiserId);
+      const bc = data.bcs.find((b) => b.connectionId === input.connectionId && b.bcId === input.bcId);
+      if (!account || !bc) throw new HttpError(404, 'Conta de anúncio não encontrada nas suas Business Centers.', 'not_found');
+      const eligibility = transferEligibility(account, bc);
+      if (!eligibility.ok) throw new HttpError(409, eligibility.reason, 'transfer_not_allowed');
+      const limit = input.type === 'RECHARGE' ? eligibility.maxRecharge : eligibility.maxRefund;
+      if (input.amount > limit) {
+        const where = input.type === 'RECHARGE' ? 'a Business Center tem' : 'a conta pode devolver';
+        throw new HttpError(409, `Saldo insuficiente: ${where} ${formatMoney(limit, account.currency)} agora e você pediu ${formatMoney(input.amount, account.currency)}.`, 'insufficient_balance');
+      }
+
+      if (transferring.has(account.advertiserId)) throw new HttpError(409, 'Já há uma transferência em andamento para esta conta. Aguarde terminar.', 'transfer_in_progress');
+      transferring.add(account.advertiserId);
+      try {
+        let record;
+        try {
+          record = await transfers.begin(user.id, { connectionId: input.connectionId, bcId: input.bcId, advertiserId: input.advertiserId, advertiserName: account.name, direction: input.type, amount: input.amount, currency: account.currency, operationId: input.operationId });
+        } catch (err) {
+          if (isUniqueViolation(err)) throw new HttpError(409, 'Esta transferência já foi enviada.', 'transfer_duplicate');
+          throw err;
+        }
+        log.info?.(`[saldo] transferência ${record.id} (${input.type}) iniciada: usuário ${user.id}, conexão ${input.connectionId}, conta ${input.advertiserId}`); // sem valores sensíveis nem token
+        try {
+          const { transactionIds } = await tiktok.withToken(input.connectionId, (token, api) => api.transferBalance(token, { bcId: input.bcId, advertiserId: input.advertiserId, type: input.type, amount: input.amount }));
+          cache.clear(); // o saldo mudou: a próxima consulta já mostra o novo valor
+          const done = await transfers.finish(user.id, record.id, { status: 'success', transactionIds });
+          log.info?.(`[saldo] transferência ${record.id}: concluída`);
+          return { transfer: done ?? record, duplicate: false };
+        } catch (err) {
+          const unconfirmed = err instanceof HttpError && UNCONFIRMED.has(err.code);
+          const message = unconfirmed ? 'O TikTok não respondeu: o dinheiro PODE ter sido transferido. Confira o saldo antes de tentar de novo.' : transferError(err);
+          await transfers.finish(user.id, record.id, { status: unconfirmed ? 'unknown' : 'failed', error: message });
+          cache.clear();
+          log.warn?.(`[saldo] transferência ${record.id}: ${unconfirmed ? 'sem confirmação' : 'recusada'} (${err?.code ?? 'erro'})`);
+          throw new HttpError(502, message, unconfirmed ? 'transfer_unconfirmed' : 'transfer_failed'); // nunca 401/403 do TikTok: a tela trataria como sessão/permissão do sistema
+        }
+      } finally {
+        transferring.delete(account.advertiserId);
+      }
+    },
+
+    /** Últimas transferências DA PESSOA (o histórico financeiro é dela, não da equipe). */
+    async recentTransfers(user, limit = 20) {
+      return transfers.listRecent(user.id, limit);
+    },
   };
+  return service;
 }

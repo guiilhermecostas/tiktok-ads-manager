@@ -1,9 +1,11 @@
 import { BUDGET_MODE_LABELS, PORTFOLIO_TYPE_LABELS } from '/shared/balance-fields.js';
+import { TRANSFER_TYPES, transferEligibility } from '/shared/balance-transfer.js';
 import { get } from '../api.js';
 import { h, icon, setChildren } from '../dom.js';
 import { formatCurrency } from '../format.js';
 import { alertBox, badge, button, emptyState, spinner, toast } from '../ui.js';
 import { currencyBadge } from './account-filter.js';
+import { openTransferDialog } from './balance-transfer.js';
 import { pageHeader } from './layout.js';
 
 /**
@@ -48,7 +50,7 @@ function balanceLayout({ active, counts, children }) {
 }
 
 /** Tabela com linhas que se expandem em "Detalhes" (todos os valores do TikTok). */
-function table({ columns, rows, renderCells, renderDetails, emptyText }) {
+function table({ columns, rows, renderCells, renderDetails, renderActions = null, emptyText }) {
   const open = new Set();
   const body = h('tbody');
   function paint() {
@@ -60,7 +62,7 @@ function table({ columns, rows, renderCells, renderDetails, emptyText }) {
         type: 'button', class: 'balance__toggle', 'aria-expanded': String(isOpen), 'aria-label': `${isOpen ? 'Ocultar' : 'Ver'} detalhes`,
         onClick: () => { if (open.has(row.key)) open.delete(row.key); else open.add(row.key); paint(); },
       }, isOpen ? 'Ocultar' : 'Detalhes');
-      nodes.push(h('tr', { class: isOpen ? 'is-open' : null }, renderCells(row), h('td', { 'data-label': 'Detalhes', class: 'balance__cell-toggle' }, toggle)));
+      nodes.push(h('tr', { class: isOpen ? 'is-open' : null }, renderCells(row), h('td', { 'data-label': 'Detalhes', class: 'balance__cell-toggle' }, h('div', { class: 'balance__actions' }, renderActions?.(row) ?? null, toggle))));
       if (isOpen) nodes.push(h('tr', { class: 'balance__details-row' }, h('td', { colspan: columns.length + 1 }, renderDetails(row))));
     }
     setChildren(body, nodes);
@@ -98,7 +100,7 @@ function details(row, extra = []) {
 }
 
 async function balanceScreen(tabName) {
-  const state = { q: '', status: '', currency: '', connection: '', data: null };
+  const state = { q: '', status: '', currency: '', connection: '', data: null, transfers: null };
   const content = h('div', { class: 'reports__content' }, spinner());
   const filtersBar = h('div', { class: 'reports__filters' });
   let shell;
@@ -184,6 +186,49 @@ async function balanceScreen(tabName) {
     return h('div', { class: 'kpis', role: 'group', 'aria-label': 'Resumo do saldo' }, cards);
   }
 
+  // ---------- transferência de saldo (BC ↔ conta) ----------
+  const bcOf = (row) => state.data.bcs.find((b) => b.connectionId === row.connectionId && b.bcId === row.bcId) ?? null;
+  function transferButton(row) {
+    if (!state.data.canTransfer || !transferEligibility(row, bcOf(row)).ok) return null;
+    return button('Transferir', { small: true, ariaLabel: `Transferir saldo da conta ${row.name}`, onClick: () => openTransferDialog({ account: row, bc: bcOf(row), onDone: () => { load({ fresh: true }); loadTransfers(); } }) });
+  }
+  /** Nos detalhes: por que esta conta não tem o botão (ou dica de que ele existe). */
+  function transferNote(row) {
+    if (!state.data.canTransfer) return state.data.accounts.length ? h('p', { class: 'muted balance__meta' }, 'Só o dono da conta movimenta saldo.') : null;
+    const e = transferEligibility(row, bcOf(row));
+    return e.ok ? null : alertBox(`Sem transferência por aqui: ${e.reason}`, 'info');
+  }
+
+  async function loadTransfers() {
+    try {
+      state.transfers = (await get('/tiktok/balance/transfers')).transfers;
+    } catch {
+      state.transfers = null; // o histórico é um extra: se falhar, a tela segue
+    }
+    if (state.data) drawContent();
+  }
+
+  const TRANSFER_STATUS = { success: ['Concluída', 'success'], pending: ['Em andamento', 'warning'], failed: ['Não concluída', 'danger'], unknown: ['Sem confirmação', 'warning'] };
+  function transferHistory() {
+    const list = state.transfers;
+    if (!list || (!list.length && !state.data.canTransfer)) return null;
+    return h('section', { class: 'balance__history' },
+      h('h3', { class: 'form-section__title' }, 'Últimas transferências'),
+      list.length
+        ? h('div', { class: 'card table-wrap' }, h('table', { class: 'table table--stack' },
+          h('thead', null, h('tr', null, ['Quando', 'Transferência', 'Valor', 'Resultado'].map((c) => h('th', { scope: 'col' }, c)))),
+          h('tbody', null, list.map((t) => {
+            const [label, tone] = TRANSFER_STATUS[t.status] ?? [t.status, 'neutral'];
+            const when = new Date(t.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+            return h('tr', null,
+              h('td', { 'data-label': 'Quando', class: 'muted' }, when),
+              h('td', { 'data-label': 'Transferência' }, h('span', { class: 'cell-strong' }, TRANSFER_TYPES[t.direction]?.label ?? t.direction), h('span', { class: 'acc-id' }, `${t.advertiserName || t.advertiserId} · BC ${t.bcId}`)),
+              h('td', { 'data-label': 'Valor', class: 'num' }, money(t.amount, t.currency)),
+              h('td', { 'data-label': 'Resultado' }, badge(label, tone), t.error ? h('span', { class: 'acc-id balance__source' }, t.error) : null));
+          }))))
+        : h('p', { class: 'muted' }, 'Nenhuma transferência feita por aqui ainda.'));
+  }
+
   function drawContent() {
     const data = state.data;
     if (!data) return;
@@ -217,7 +262,8 @@ async function balanceScreen(tabName) {
         h('td', { 'data-label': 'Saldo disponível', class: 'num' }, h('strong', null, money(r.main, r.currency)), sourceCaption(r)),
         h('td', { 'data-label': 'Situação' }, situationBadge(r)),
       ],
-      renderDetails: (r) => details(r, [h('p', { class: 'muted balance__meta' }, `Conexão: ${r.connectionName}${r.advertiserStatus ? ` · Situação da conta no TikTok: ${accountStatus(r.advertiserStatus)}` : ''}`)]),
+      renderActions: (r) => transferButton(r),
+      renderDetails: (r) => details(r, [transferNote(r), h('p', { class: 'muted balance__meta' }, `Conexão: ${r.connectionName}${r.advertiserStatus ? ` · Situação da conta no TikTok: ${accountStatus(r.advertiserStatus)}` : ''}`)]),
     });
     const s = data.summary;
     const accountNotes = tabName === 'accounts' && (s.accountsOnBudget || s.accountsSharedPortfolio)
@@ -226,12 +272,13 @@ async function balanceScreen(tabName) {
         s.accountsOnBudget ? `${s.accountsOnBudget} conta(s) gastam do saldo da BC dentro de um orçamento: o valor mostrado é o orçamento restante e não entra na soma (já está no saldo da BC).` : '',
       ].join(''))
       : null;
-    setChildren(content, summaryCards(), tabName === 'bc' ? bcTable() : accountsTable(), accountNotes, note);
+    setChildren(content, summaryCards(), tabName === 'bc' ? bcTable() : accountsTable(), accountNotes, tabName === 'accounts' ? transferHistory() : null, note);
   }
 
   shell = balanceLayout({ active: tabName === 'bc' ? '/balance' : '/balance/accounts', counts: null, children: [filtersBar, content] });
   drawFilters();
   load();
+  if (tabName === 'accounts') loadTransfers();
   return { element: shell };
 }
 

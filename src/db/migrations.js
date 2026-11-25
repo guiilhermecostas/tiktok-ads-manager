@@ -515,6 +515,37 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['catalog_defaults'], revoke: ['catalog_defaults'], identity: ['catalog_defaults'] })}
     `,
   },
+  {
+    version: 18,
+    description: 'Saldo: registro de cada transferência de dinheiro entre a Business Center e a conta de anúncio (auditoria + proteção contra repetição)',
+    sql: `
+      -- Cada pedido de transferência vira UMA linha ANTES de falar com o TikTok ("pending") e é fechada com o resultado. A chave única
+      -- (pessoa, operação) impede que um clique repetido, um reenvio ou uma nova tentativa mova o dinheiro duas vezes. "unknown" = o TikTok
+      -- não respondeu (rede/tempo esgotado): o dinheiro PODE ter se movido, e a tela manda conferir o saldo. A linha nunca é apagada
+      -- junto com a conexão (connection_id vira NULL): é o histórico financeiro.
+      CREATE TABLE balance_transfers (
+        id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id         INTEGER       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        connection_id   INTEGER       REFERENCES tiktok_business_centers(id) ON DELETE SET NULL,
+        bc_id           TEXT          NOT NULL CHECK (bc_id ~ '^[0-9]{1,24}$'),
+        advertiser_id   TEXT          NOT NULL CHECK (advertiser_id ~ '^[0-9]{1,24}$'),
+        advertiser_name TEXT          CHECK (advertiser_name IS NULL OR char_length(advertiser_name) <= 120),
+        direction       TEXT          NOT NULL CHECK (direction IN ('RECHARGE', 'REFUND')),
+        amount          NUMERIC(14,2) NOT NULL CHECK (amount > 0 AND amount <= 1000000),
+        currency        TEXT          CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$'),
+        operation_id    TEXT          NOT NULL CHECK (operation_id ~ '^[0-9a-f]{32}$'),
+        status          TEXT          NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'success', 'failed', 'unknown')),
+        transaction_ids TEXT          CHECK (transaction_ids IS NULL OR char_length(transaction_ids) <= 300),
+        error_message   TEXT          CHECK (error_message IS NULL OR char_length(error_message) <= 300),
+        created_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),
+        finished_at     TIMESTAMPTZ,
+        UNIQUE (user_id, operation_id)
+      );
+      CREATE INDEX idx_balance_transfers_user ON balance_transfers (user_id, created_at DESC);
+
+      ${protectTables({ rls: ['balance_transfers'], revoke: ['balance_transfers'], identity: ['balance_transfers'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

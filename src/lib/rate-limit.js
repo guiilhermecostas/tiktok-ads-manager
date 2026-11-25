@@ -31,6 +31,12 @@ export class RateLimiter {
     return { allowed: true, retryAfterSec: 0 };
   }
 
+  /** Consulta SEM registrar tentativa (ex.: bloquear depois de N falhas, contando só as falhas). */
+  peek(key, now = Date.now()) {
+    const list = (this.hits.get(key) ?? []).filter((t) => now - t < this.windowMs);
+    return list.length >= this.max ? { allowed: false, retryAfterSec: Math.ceil((this.windowMs - (now - list[0])) / 1000) } : { allowed: true, retryAfterSec: 0 };
+  }
+
   clear(key) {
     this.hits.delete(key);
   }

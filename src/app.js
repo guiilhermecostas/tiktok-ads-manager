@@ -39,6 +39,7 @@ import { createTiktokCallbackRouter, createTiktokRouter } from './modules/tiktok
 import { createManagerRouter } from './modules/manager/manager.routes.js';
 import { createManagerService } from './modules/manager/manager.service.js';
 import { createManagerViewsRepository } from './modules/manager/manager-views.repository.js';
+import { createBalanceTransfersRepository } from './modules/tiktok/balance-transfers.repository.js';
 import { createBalanceRouter } from './modules/tiktok/balance.routes.js';
 import { createBalanceService } from './modules/tiktok/balance.service.js';
 import { createCatalogDefaultsRepository } from './modules/catalog/catalog-defaults.repository.js';
@@ -73,7 +74,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const proxiesService = createProxiesService({ repo: createProxiesRepository(db, { encryptionKey: config.tiktok.encryptionKey }), config, fetchFn: fetchFn ?? fetch, log });
   const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, config, log });
   // Saldo (BCs e contas de anúncio) direto da API do TikTok, em cache curto.
-  const balanceService = createBalanceService({ tiktok: tiktokService, connections: businessCenters, log, now: clock });
+  const balanceService = createBalanceService({ tiktok: tiktokService, connections: businessCenters, transfers: createBalanceTransfersRepository(db), users, log, now: clock });
   // Gerenciador de anúncios: todos os anúncios de todas as contas, com desempenho, ativar/pausar e visualizações salvas por pessoa.
   const managerService = createManagerService({ tiktok: tiktokService, connections: businessCenters, views: createManagerViewsRepository(db), log, now: clock });
   // Gasto por hora: coleta a cada 30 min (ligada só pelo servidor, em server.js) e leitura para a aba Relatórios → Por hora.

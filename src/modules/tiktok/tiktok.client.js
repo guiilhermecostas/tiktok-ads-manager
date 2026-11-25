@@ -520,6 +520,23 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
     },
 
     /**
+     * Move dinheiro entre a Business Center e UMA conta de anúncio (`POST /bc/transfer/`, `transfer_level: ADVERTISER`, só em espécie):
+     * RECHARGE = da BC para a conta; REFUND = da conta para a BC. Exige função Finance Manager na BC. NUNCA repete sozinho (não é uma consulta):
+     * quem chama decide o que fazer se a resposta não chegar. Devolve { transactionIds } (os dois lados da transferência).
+     */
+    async transferBalance(token, { bcId, advertiserId, type, amount }) {
+      if (!/^\d{1,24}$/.test(bcId) || !/^\d{1,24}$/.test(advertiserId)) throw new HttpError(400, 'Conta ou Business Center inválida.', 'validation_error');
+      if (!['RECHARGE', 'REFUND'].includes(type)) throw new HttpError(400, 'Tipo de transferência inválido.', 'validation_error');
+      if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0 || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-7) throw new HttpError(400, 'Valor inválido.', 'validation_error');
+      const data = await call('/bc/transfer/', {
+        token, method: 'POST',
+        body: { bc_id: bcId, transfer_level: 'ADVERTISER', advertiser_id: advertiserId, transfer_type: type, cash_amount: Math.round(amount * 100) / 100 },
+      });
+      const ids = (Array.isArray(data.transaction_infos) ? data.transaction_infos : []).map((t) => String(t?.transaction_id ?? '')).filter((id) => /^[\w-]{1,64}$/.test(id));
+      return { transactionIds: [...new Set(ids)].slice(0, 4) };
+    },
+
+    /**
      * Campanhas, grupos de anúncios e anúncios da conta (sem os excluídos): `/campaign/get/`, `/adgroup/get/` e `/ad/get/`, páginas de 1000.
      * Todos devolvem { items, truncated }; cada item tem `id`, `name`, `advertiserId`, `operationStatus` ('ENABLE'|'DISABLE'|'FROZEN'|null),
      * `status` (status secundário: AD_STATUS_*, ADGROUP_STATUS_* ou CAMPAIGN_STATUS_*), `createdAt`/`modifiedAt` (ISO, UTC) e os campos do nível
