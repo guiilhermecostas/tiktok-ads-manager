@@ -3,6 +3,7 @@ import { get, post } from '../../api.js';
 import { h, setChildren } from '../../dom.js';
 import { formatCurrency, formatNumber } from '../../format.js';
 import { alertBox, badge, button, toast } from '../../ui.js';
+import { bulkGenerator } from './bulk-generator.js';
 import { catalogUrl, refQuery } from './detail.js';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -18,7 +19,7 @@ function errorTable(headers, rows) {
 }
 
 /**
- * Aba "Adicionar produtos": importa uma planilha CSV ou adiciona um produto pelo formulário, junta tudo numa lista de envio e envia em lotes.
+ * Aba "Adicionar produtos": gera produtos em lote (um clique), importa uma planilha CSV ou adiciona um produto pelo formulário, junta tudo numa lista de envio e envia em lotes.
  * Valida no navegador com as MESMAS regras do servidor (shared/catalog.js) e mostra o resultado do processamento do TikTok (novos, atualizados,
  * erros com o motivo). O mesmo SKU enviado de novo atualiza o produto (envio incremental).
  */
@@ -193,12 +194,21 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
       ])) : null);
   }
 
+  /** Gerador em lote: põe os produtos gerados na lista de envio e envia tudo (o que sobrar por falha continua na lista). */
+  async function generate(products) {
+    if (sending) return;
+    for (const product of products) queue.set(product.skuId, product);
+    drawQueue();
+    await send();
+  }
+
   const fileInput = h('input', { type: 'file', accept: '.csv,text/csv,text/plain', class: 'catalog-add__file', 'aria-label': 'Escolher planilha CSV', disabled: !canWrite, onChange: (e) => onFile(e.target.files[0], e.target) });
   setChildren(root,
     h('div', { class: 'card card--pad catalog-add__intro' },
       h('p', null, 'Cada produto precisa de SKU, título, descrição, disponibilidade (ou a quantidade em estoque), marca, imagem, condição, preço e página do produto.'),
       h('p', { class: 'muted' }, 'Quer preço e estoque sempre atualizados sem enviar nada? Use a aba "Sincronização": o TikTok busca o feed da sua loja sozinho. O TikTok guarda só a disponibilidade, não o número do estoque.'),
       h('p', { class: 'muted' }, 'As imagens devem ser JPG ou PNG com pelo menos 500 × 500 px e abrir sem login (o TikTok as baixa). O mesmo SKU enviado de novo atualiza o produto.')),
+    bulkGenerator({ catalog, disabled: !canWrite, onGenerate: generate }),
     h('section', { class: 'form-section' },
       h('h3', { class: 'form-section__title' }, 'Importar planilha (CSV)'),
       h('p', { class: 'muted' }, `Até ${formatNumber(MAX_IMPORT_PRODUCTS)} produtos por importação. Aceita as colunas do modelo, do Google Merchant e do Meta (id, title, description, availability, condition, price, brand, image_link, link…).`),

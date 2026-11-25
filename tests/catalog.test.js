@@ -3,6 +3,7 @@ import { after, before, describe, it } from 'node:test';
 import {
   CATALOG_NAME_MAX, MAX_PRODUCTS_PER_REQUEST, buildSetConditions, csvTemplate, csvToProducts, normalizeCatalogInput, normalizeProduct, normalizeProductSetName, parseCsv, parsePrice, toBatches,
 } from '../shared/catalog.js';
+import { generateProducts } from '../shared/catalog-bulk.js';
 import { HttpError } from '../src/lib/http-error.js';
 import { toTikTokProduct } from '../src/modules/catalog/catalog.payloads.js';
 import { createTiktokClient } from '../src/modules/tiktok/tiktok.client.js';
@@ -448,6 +449,27 @@ describe('Catálogo: API do sistema', () => {
     assert.deepEqual([log.addCount, log.errorCount, log.errors[0].field, log.errors[0].items[0].skuId], [1, 1, 'image_url', 'SKU-2']);
     assert.equal((await user.client.get(`/api/tiktok/catalogs/${catalog.id}/logs/../x?${base(id)}`)).status, 404);
     assert.equal((await user.client.get(`/api/tiktok/catalogs/${catalog.id}/logs/${encodeURIComponent('a b')}?${base(id)}`)).status, 400, 'id de processamento inválido');
+  });
+
+  it('geração em lote: 600 produtos gerados viram 2 envios aceitos pelo servidor; lote adulterado é recusado', async () => {
+    const user = await setup();
+    const id = await connect(user);
+    const catalog = (await createCatalog(user, id, { regionCode: 'US', currency: 'USD' })).json.catalog;
+    const { products, errors } = generateProducts({ name: 'AD-EX-01', count: 600, price: '27', brand: 'Generic', description: '', imageUrl: 'https://loja.example/img.jpg', landingPageUrl: 'https://loja.example/oferta?a=1&b=2' }, 'abc12345');
+    assert.deepEqual(errors, []);
+    const url = `/api/tiktok/catalogs/${catalog.id}/products`;
+    const counts = [];
+    for (const batch of toBatches(products)) {
+      const res = await user.client.post(url, { connectionId: id, bcId: '111', products: batch });
+      assert.equal(res.status, 202, messageOf(res));
+      counts.push(res.json.count);
+    }
+    assert.deepEqual(counts, [500, 100]);
+    const sent = callsOf('/catalog/product/upload/').flatMap((c) => c.body.products ?? c.body.upload_products ?? []);
+    assert.equal(new Set(sent.map((p) => p.sku_id)).size, 600, 'o TikTok recebeu 600 SKUs diferentes');
+    assert.equal(sent[0].landing_page.landing_page_url, 'https://loja.example/oferta?a=1&b=2', 'o link segue exatamente como foi informado');
+    assert.equal((await user.client.post(url, { connectionId: id, bcId: '111', products: [{ ...products[0], price: -1 }] })).status, 400, 'preço adulterado');
+    assert.equal((await user.client.post(url, { connectionId: id, bcId: '111', products: [products[0], products[0]] })).status, 400, 'SKU repetido');
   });
 
   it('produtos: paginação, busca por SKU, só os disponíveis e limite de navegação do TikTok (10.000)', async () => {
