@@ -52,6 +52,7 @@ import { createBalanceTransfersRepository } from './modules/tiktok/balance-trans
 import { createBalanceRouter } from './modules/tiktok/balance.routes.js';
 import { createBalanceService } from './modules/tiktok/balance.service.js';
 import { createCatalogDefaultsRepository } from './modules/catalog/catalog-defaults.repository.js';
+import { createCatalogHiddenRepository } from './modules/catalog/catalog-hidden.repository.js';
 import { createCatalogRouter } from './modules/catalog/catalog.routes.js';
 import { createCatalogService } from './modules/catalog/catalog.service.js';
 import { createAdvertiserStatusRepository } from './modules/tiktok/advertiser-status.repository.js';
@@ -113,7 +114,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const creativeCleaner = cleaner ?? createCreativeCleaner({ ffmpegPath: cleaning.ffmpegPath ?? null, tmpDir: creativeStorage.tmpDir, concurrency: cleaning.concurrency, timeoutMs: cleaning.timeoutMs, threads: cleaning.threads, log });
   const creativesRepo = createCreativesRepository(db);
   const creativesService = createCreativesService({ repo: creativesRepo, storage: creativeStorage, cleaner: creativeCleaner, tiktok: tiktokService, config, log });
-  const catalogService = createCatalogService({ tiktok: tiktokService, connections: businessCenters, defaults: createCatalogDefaultsRepository(db), creatives: creativesService, log }); // o de criativos só confere o dono dos criativos do anúncio padrão
+  const catalogService = createCatalogService({ tiktok: tiktokService, connections: businessCenters, defaults: createCatalogDefaultsRepository(db), hidden: createCatalogHiddenRepository(db), creatives: creativesService, log }); // o de criativos só confere o dono dos criativos do anúncio padrão
   // Hook com IA (Kling): gera um começo de 2 a 3 s e o aplica a um vídeo da biblioteca. Sem KLING_API_KEY fica desligado.
   const hooksService = createHooksService({
     repo: createHooksRepository(db),

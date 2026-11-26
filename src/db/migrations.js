@@ -762,6 +762,23 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['registration_codes'], revoke: ['registration_codes'], identity: [] })}
     `,
   },
+  {
+    version: 24,
+    description: 'Catálogo: catálogos que a pessoa ocultou da própria lista (só visual, por pessoa)',
+    sql: `
+      -- "Apagar" um catálogo da lista é só VISUAL: o catálogo continua no TikTok e para as outras pessoas. Cada linha é um catálogo oculto por uma pessoa;
+      -- apagar a pessoa apaga as linhas dela. O ID do catálogo é único no TikTok, por isso (pessoa, catálogo) basta como chave.
+      CREATE TABLE catalog_hidden (
+        user_id    INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        catalog_id TEXT        NOT NULL CHECK (catalog_id ~ '^[0-9]{1,24}$'),
+        bc_id      TEXT        NOT NULL CHECK (bc_id ~ '^[0-9]{1,24}$'),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (user_id, catalog_id)
+      );
+
+      ${protectTables({ rls: ['catalog_hidden'], revoke: ['catalog_hidden'], identity: [] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

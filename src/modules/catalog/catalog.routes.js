@@ -13,6 +13,7 @@ const intIn = (value, fallback, min, max) => {
 /**
  * Catálogo de produtos (montado em /api/tiktok/catalogs, depois de sessão + conta aprovada). Área "Campanhas".
  *  - GET    /                                                       catálogos de todas as BCs (?refresh=1 ignora o cache)
+ *  - PUT    /hidden                    { items: [{ bcId, catalogId }], hidden: true|false }   oculta/mostra na lista DESTA pessoa (só visual)
  *  - GET    /meta?connectionId=&bcId=                               países e moedas aceitos para criar
  *  - POST   /                          { connectionId, bcId, name, regionCode, currency }
  *  - GET    /:catalogId/overview?connectionId=&bcId=                aprovados / reprovados / em análise
@@ -44,7 +45,12 @@ export function createCatalogRouter({ service, limits = {} }) {
   };
 
   router.get('/', canUse, throttle(readLimiter), refreshGuard, async (req, res) => {
-    res.json(await service.list(req.actor, { fresh: req.query.refresh === '1' }));
+    res.json(await service.list(req.actor, { fresh: req.query.refresh === '1', viewerId: req.user.id }));
+  });
+
+  // Ocultar é uma preferência da PESSOA que usa o sistema (req.user), não do espaço de trabalho: o colaborador não esconde catálogos do dono.
+  router.put('/hidden', canUse, throttle(writeLimiter), async (req, res) => {
+    res.json(await service.setHidden(req.actor, req.user.id, asObject(req.body)));
   });
 
   router.get('/meta', canUse, throttle(readLimiter), async (req, res) => {

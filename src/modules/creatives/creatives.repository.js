@@ -26,6 +26,18 @@ const SELECT = `
          COALESCE((SELECT array_agg(a.advertiser_id ORDER BY a.advertiser_id) FROM creative_tiktok_assets a WHERE a.creative_id = c.id), '{}') AS tiktok_advertisers
     FROM creatives c`;
 
+/**
+ * Ordenações permitidas da lista. O nome vem do cliente, mas só entra no SQL o texto DESTA tabela, nunca o valor recebido.
+ * Arquivos que só existem no TikTok não têm tamanho: ficam sempre no fim (NULLS LAST).
+ */
+export const SORTS = {
+  date: 'c.created_at',
+  name: 'lower(c.name)',
+  size: 'c.size_bytes',
+  kind: 'c.kind',
+};
+export const SORT_DIRS = ['asc', 'desc'];
+
 /** Escapa % _ \ para uso em ILIKE (o texto do usuário é dado, nunca padrão). */
 const escapeLike = (text) => text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 
@@ -44,8 +56,11 @@ export function createCreativesRepository(db) {
       const count = (kind) => rows.find((r) => r.kind === kind)?.total ?? 0;
       return { total: count('image') + count('video'), images: count('image'), videos: count('video'), latest: latest.rows.map((r) => r.name) };
     },
-    /** `folderId`: número = só essa pasta; 'none' = só os sem pasta; ausente = todos. */
-    async list(userId, { kind, q, folderId, limit = 60, offset = 0 } = {}) {
+    /** `folderId`: número = só essa pasta; 'none' = só os sem pasta; ausente = todos. `sort`/`dir`: ver SORTS (padrão: mais recentes primeiro). */
+    async list(userId, { kind, q, folderId, sort = 'date', dir = 'desc', limit = 60, offset = 0 } = {}) {
+      const sortExpr = SORTS[sort];
+      if (!sortExpr || !SORT_DIRS.includes(dir)) throw new Error('Ordenação inválida.'); // a rota já validou: esta é só a última trava contra SQL montado errado
+      const direction = dir === 'asc' ? 'ASC' : 'DESC';
       const where = ['c.user_id = $1'];
       const params = [userId];
       if (folderId === 'none') where.push('c.folder_id IS NULL');
@@ -63,7 +78,7 @@ export function createCreativesRepository(db) {
       }
       const clause = where.join(' AND ');
       const total = (await db.query(`SELECT COUNT(*)::int AS total FROM creatives c WHERE ${clause}`, params)).rows[0].total;
-      const { rows } = await db.query(`${SELECT} WHERE ${clause} ORDER BY c.created_at DESC, c.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, [...params, limit, offset]);
+      const { rows } = await db.query(`${SELECT} WHERE ${clause} ORDER BY ${sortExpr} ${direction} NULLS LAST, c.id ${direction} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, [...params, limit, offset]);
       return { creatives: rows.map(toCreative), total };
     },
 
@@ -117,13 +132,13 @@ export function createCreativesRepository(db) {
     /** Pastas do usuário com quantos criativos há em cada uma, mais os totais (todos e sem pasta). */
     async folders(userId) {
       const { rows } = await db.query(
-        `SELECT f.id, f.name, f.created_at, COUNT(c.id)::int AS total
+        `SELECT f.id, f.name, f.created_at, COUNT(c.id)::int AS total, COALESCE(SUM(c.size_bytes), 0)::bigint AS size
            FROM creative_folders f LEFT JOIN creatives c ON c.folder_id = f.id AND c.user_id = f.user_id
           WHERE f.user_id = $1 GROUP BY f.id ORDER BY lower(f.name), f.id`,
         [userId],
       );
       const counts = (await db.query('SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE folder_id IS NULL)::int AS unfiled FROM creatives WHERE user_id = $1', [userId])).rows[0];
-      return { folders: rows.map((r) => ({ id: r.id, name: r.name, count: r.total, createdAt: toIso(r.created_at) })), total: counts.total, unfiledCount: counts.unfiled };
+      return { folders: rows.map((r) => ({ id: r.id, name: r.name, count: r.total, sizeBytes: Number(r.size), createdAt: toIso(r.created_at) })), total: counts.total, unfiledCount: counts.unfiled };
     },
     async getFolder(userId, id) {
       const { rows } = await db.query('SELECT id, name FROM creative_folders WHERE user_id = $1 AND id = $2', [userId, id]);

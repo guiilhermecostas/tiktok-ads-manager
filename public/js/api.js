@@ -86,6 +86,8 @@ export function uploadFile(path, file, { onProgress } = {}) {
       }
       if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
       const err = new ApiError(xhr.status, data?.error?.message ?? 'Não foi possível enviar o arquivo.', data?.error?.code, data?.error?.details);
+      const retryAfter = Number(xhr.getResponseHeader('Retry-After'));
+      if (xhr.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) err.retryAfterSec = retryAfter; // "muitas requisições": quem envia pode esperar e tentar de novo
       if (xhr.status === 401 || (typeof err.code === 'string' && err.code.startsWith('account_'))) sessionInvalidHandler();
       reject(err);
     });

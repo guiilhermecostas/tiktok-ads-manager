@@ -1,6 +1,8 @@
 import { del, get, patch, post } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
 import { alertBox, button, confirmDialog, field, openModal, toast } from '../../ui.js';
+import { openContextMenu } from './context-menu.js';
+import { DROP_ATTR } from './drop-upload.js';
 
 /** Valores do filtro de pasta: '' = todas, 'none' = sem pasta, número = uma pasta. */
 export const FOLDER_ALL = '';
@@ -9,26 +11,28 @@ export const MAX_FOLDER_NAME = 60;
 /** Formato usado ao arrastar criativos para uma pasta. */
 export const DRAG_TYPE = 'application/x-creative-ids';
 
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+export const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 /** ID da pasta para enviar ao servidor (só quando uma pasta de verdade está aberta). */
 export const folderIdOf = (current) => (typeof current === 'number' ? current : null);
 
+/** Mesmo critério do servidor: espaços extras viram um só e o nome tem no máximo 60 caracteres. */
+export const cleanFolderName = (name) => String(name).replace(/\s+/g, ' ').trim().slice(0, MAX_FOLDER_NAME);
+
 /**
- * Pastas da biblioteca (uma por oferta). Desenha a barra de pastas e cuida de criar, renomear, apagar e mover.
+ * Pastas da biblioteca (uma por oferta). Desenha a barra lateral de pastas e cuida de criar, renomear, apagar e mover.
  *  - `onSelect(value)`: a pessoa escolheu "Todos", "Sem pasta" ou uma pasta.
- *  - `onChanged()`: algo mudou (criativos movidos, pasta criada/apagada…): a tela recarrega a lista.
- *  - `getDragIds(id)`: IDs a mover quando se arrasta o criativo `id` (a seleção inteira, se ele estiver nela).
+ *  - `onChanged()`: algo mudou (criativos movidos, pasta renomeada/apagada…): a tela recarrega a lista.
+ * Cada item da barra aceita soltar CRIATIVOS (move) e ARQUIVOS do computador (envia: atributo `data-drop-folder`).
  * Todo texto (inclusive nome de pasta) entra como nó de texto, nunca como HTML.
  */
 export function createFolders({ onSelect, onChanged }) {
   const state = { folders: [], total: 0, unfiled: 0, current: FOLDER_ALL, loaded: false, error: null };
-  const bar = h('div', { class: 'folders', role: 'group', 'aria-label': 'Pastas' });
-  const header = h('div', { class: 'folders__header' });
-  const element = h('div', { class: 'folders-wrap' }, bar, header);
+  const element = h('nav', { class: 'folder-nav', 'aria-label': 'Pastas' });
 
   const nameOf = (id) => state.folders.find((f) => f.id === id)?.name ?? null;
-  const currentFolder = () => (typeof state.current === 'number' ? state.folders.find((f) => f.id === state.current) ?? null : null);
+  const byId = (id) => state.folders.find((f) => f.id === id) ?? null;
+  const currentFolder = () => (typeof state.current === 'number' ? byId(state.current) : null);
 
   // ---------- mover (por arrastar ou pelo botão) ----------
   async function moveTo(ids, folderId) {
@@ -43,66 +47,71 @@ export function createFolders({ onSelect, onChanged }) {
     }
   }
 
-  function chip({ value, label, count, iconName, folder = null }) {
+  /** Faz de `el` um destino para soltar criativos da própria tela (`folderId`: número ou null = sem pasta). */
+  function bindMoveTarget(el, folderId) {
+    el.addEventListener('dragover', (event) => {
+      if (!event.dataTransfer?.types?.includes(DRAG_TYPE)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      el.classList.add('is-drop');
+    });
+    el.addEventListener('dragleave', (event) => {
+      if (!el.contains(event.relatedTarget)) el.classList.remove('is-drop');
+    });
+    el.addEventListener('drop', (event) => {
+      el.classList.remove('is-drop');
+      const raw = event.dataTransfer?.getData(DRAG_TYPE);
+      if (!raw) return;
+      event.preventDefault();
+      let ids;
+      try {
+        ids = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      if (Array.isArray(ids) && ids.length && ids.every(Number.isInteger)) moveTo(ids, folderId);
+    });
+  }
+
+  /** Itens do menu de contexto de uma pasta (usados na barra lateral e nos cartões de pasta). */
+  const menuItems = (folder) => [
+    { label: 'Abrir', icon: 'folder', onClick: () => select(folder.id) },
+    'separator',
+    { label: 'Renomear pasta', icon: 'edit', onClick: () => openRename(folder) },
+    { label: 'Excluir pasta', icon: 'trash', danger: true, onClick: () => confirmDelete(folder) },
+  ];
+
+  function navItem({ value, label, count, iconName, folder = null }) {
     const active = state.current === value;
     const el = h(
       'button',
       {
         type: 'button',
-        class: `folder-chip${active ? ' is-on' : ''}`,
-        'aria-pressed': String(active),
+        class: `folder-item${active ? ' is-on' : ''}`,
+        'aria-current': active ? 'page' : null,
         'data-folder': String(value),
+        [DROP_ATTR]: folder ? String(folder.id) : 'none', // "Todos" e "Sem pasta": arquivos do computador entram sem pasta
         title: folder ? folder.name : label,
         onClick: () => select(value),
       },
-      iconName ? icon(iconName, 15) : null,
-      h('span', { class: 'folder-chip__name' }, label),
-      h('span', { class: 'folder-chip__count' }, String(count)),
+      icon(iconName, 16),
+      h('span', { class: 'folder-item__name' }, label),
+      h('span', { class: 'folder-item__count' }, String(count)),
     );
-    // Soltar criativos arrastados em cima da pasta move todos (só "Todas" não é destino).
-    if (value !== FOLDER_ALL) {
-      el.addEventListener('dragover', (event) => {
-        if (!event.dataTransfer?.types?.includes(DRAG_TYPE)) return;
-        event.preventDefault();
-        el.classList.add('is-drop');
-      });
-      el.addEventListener('dragleave', () => el.classList.remove('is-drop'));
-      el.addEventListener('drop', (event) => {
-        el.classList.remove('is-drop');
-        const raw = event.dataTransfer?.getData(DRAG_TYPE);
-        if (!raw) return;
-        event.preventDefault();
-        let ids;
-        try {
-          ids = JSON.parse(raw);
-        } catch {
-          return;
-        }
-        if (Array.isArray(ids) && ids.length && ids.every(Number.isInteger)) moveTo(ids, value === FOLDER_NONE ? null : value);
-      });
-    }
+    // Soltar criativos arrastados em cima de uma pasta move todos; "Todos" não é destino.
+    if (value !== FOLDER_ALL) bindMoveTarget(el, value === FOLDER_NONE ? null : value);
+    if (folder) el.addEventListener('contextmenu', (event) => { event.preventDefault(); openContextMenu({ x: event.clientX, y: event.clientY, items: menuItems(folder), label: `Ações da pasta ${folder.name}` }); });
     return el;
   }
 
   function draw() {
     setChildren(
-      bar,
-      chip({ value: FOLDER_ALL, label: 'Todos', count: state.total }),
-      chip({ value: FOLDER_NONE, label: 'Sem pasta', count: state.unfiled }),
-      state.folders.map((f) => chip({ value: f.id, label: f.name, count: f.count, iconName: 'folder', folder: f })),
-      h('button', { type: 'button', class: 'folder-chip folder-chip--new', onClick: () => openCreate() }, icon('plus', 14), h('span', null, 'Nova pasta')),
-    );
-    const folder = currentFolder();
-    setChildren(
-      header,
-      folder
-        ? [
-            h('strong', { class: 'folders__title' }, icon('folder', 16), h('span', { title: folder.name }, folder.name), h('span', { class: 'muted' }, plural(folder.count, 'criativo', 'criativos'))),
-            h('span', { class: 'folders__actions' },
-              button('Renomear pasta', { small: true, onClick: () => openRename(folder) }),
-              button('Excluir pasta', { small: true, variant: 'danger-ghost', onClick: () => confirmDelete(folder) })),
-          ]
-        : null,
+      element,
+      navItem({ value: FOLDER_ALL, label: 'Todos os arquivos', count: state.total, iconName: 'box' }),
+      navItem({ value: FOLDER_NONE, label: 'Sem pasta', count: state.unfiled, iconName: 'inbox' }),
+      state.folders.length ? h('div', { class: 'folder-nav__title' }, 'Pastas') : null,
+      state.folders.map((f) => navItem({ value: f.id, label: f.name, count: f.count, iconName: 'folder', folder: f })),
+      h('button', { type: 'button', class: 'folder-item folder-item--new', onClick: () => openCreate() }, icon('plus', 16), h('span', { class: 'folder-item__name' }, 'Nova pasta')),
     );
   }
 
@@ -126,6 +135,28 @@ export function createFolders({ onSelect, onChanged }) {
       state.error = err.message;
     }
     draw();
+  }
+
+  /**
+   * Devolve o ID da pasta com este nome (a comparação ignora maiúsculas e espaços extras), criando-a se ainda não existir.
+   * Usado ao soltar uma PASTA do computador: ela vira uma pasta da biblioteca com o mesmo nome. Lança Error com mensagem em português.
+   */
+  async function ensure(rawName) {
+    const name = cleanFolderName(rawName);
+    if (!name) throw new Error('A pasta solta não tem nome.');
+    const find = () => state.folders.find((f) => f.name.toLowerCase() === name.toLowerCase());
+    if (find()) return find().id;
+    try {
+      const { folder } = await post('/creatives/folders', { name });
+      await refresh();
+      return folder.id;
+    } catch (err) {
+      if (err.code === 'folder_exists') {
+        await refresh();
+        if (find()) return find().id;
+      }
+      throw err;
+    }
   }
 
   // ---------- criar / renomear ----------
@@ -265,11 +296,22 @@ export function createFolders({ onSelect, onChanged }) {
   return {
     element,
     refresh,
+    select,
+    ensure,
     openCreate,
+    openRename,
+    confirmDelete,
     openMove,
     moveTo,
+    bindMoveTarget,
+    menuItems,
     folders: () => state.folders,
     folderName: nameOf,
+    folderById: byId,
+    currentFolder,
+    get total() {
+      return state.total;
+    },
     get current() {
       return state.current;
     },

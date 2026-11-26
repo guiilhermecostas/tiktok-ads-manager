@@ -1,4 +1,5 @@
 import { defaultCreativeRefs, validateCatalogDefaults } from '../../../shared/catalog-defaults.js';
+import { normalizeHideInput } from '../../../shared/catalog-filters.js';
 import { MAX_PRODUCTS_PER_REQUEST, buildSetConditions, isCatalogId, normalizeCatalogInput, normalizeFeedInput, normalizeProduct, normalizeProductSetName } from '../../../shared/catalog.js';
 import { HttpError, badRequest, forbidden, notFound } from '../../lib/http-error.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
@@ -30,7 +31,7 @@ function friendly(err) {
  *  - Cada pedido informa a conexão e a BC do TikTok; a BC precisa ser uma das da conexão (nunca aceitamos BC solta) e o ID do catálogo só numérico.
  *  - Falha em uma BC aparece naquela BC; as outras seguem. Lista em cache por 60 s (muda ao criar um catálogo).
  */
-export function createCatalogService({ tiktok, connections, defaults, creatives, log = console }) {
+export function createCatalogService({ tiktok, connections, defaults, hidden, creatives, log = console }) {
   const listCache = new TtlCache({ ttlMs: LIST_TTL_MS, maxEntries: 100 });
   const metaCache = new TtlCache({ ttlMs: META_TTL_MS, maxEntries: 100 });
   const inflight = new Map();
@@ -97,19 +98,43 @@ export function createCatalogService({ tiktok, connections, defaults, creatives,
   }
 
   const service = {
-    /** Catálogos de todas as BCs do usuário. `fresh` ignora o cache de 60 s. */
-    async list(actor, { fresh = false } = {}) {
+    /**
+     * Catálogos de todas as BCs do usuário. `fresh` ignora o cache de 60 s.
+     * `viewerId` (a PESSOA que está olhando) marca cada catálogo com `hidden` e conta os ocultos: a lista em cache é do espaço de trabalho e
+     * nunca é alterada (cada pessoa recebe a sua própria cópia marcada).
+     */
+    async list(actor, { fresh = false, viewerId = null } = {}) {
       // As conexões entram na chave do cache: conectar (ou remover, ou renovar) uma Business Center muda a lista na hora.
       const visible = await connections.listVisible(actor.id);
       const signature = visible.map((c) => `${c.id}.${c.status}.${bcIdsOf(c).join(',')}`).join('|');
       const key = `catalogs:${actor.id}:${versions.get(actor.id) ?? 0}:${signature}`;
       if (fresh) listCache.delete(key);
-      const cached = listCache.get(key);
-      if (cached) return cached;
-      if (inflight.has(key)) return inflight.get(key);
-      const promise = build(actor, visible).then((data) => { listCache.set(key, data); return data; }).finally(() => inflight.delete(key));
-      inflight.set(key, promise);
-      return promise;
+      let data = listCache.get(key);
+      if (!data) {
+        if (!inflight.has(key)) {
+          inflight.set(key, build(actor, visible).then((built) => { listCache.set(key, built); return built; }).finally(() => inflight.delete(key)));
+        }
+        data = await inflight.get(key);
+      }
+      if (viewerId === null || !hidden) return data;
+      const hiddenIds = await hidden.ids(viewerId);
+      const catalogs = data.catalogs.map((c) => ({ ...c, hidden: hiddenIds.has(c.id) }));
+      return { ...data, catalogs, hiddenCount: catalogs.filter((c) => c.hidden).length };
+    },
+
+    /**
+     * Oculta ou mostra catálogos NA LISTA DESTA PESSOA (só visual: nada muda no TikTok nem para as outras pessoas). Ocultar só vale para
+     * Business Centers que a pessoa pode ver; mostrar de volta só mexe nas linhas dela.
+     */
+    async setHidden(actor, viewerId, raw) {
+      const { value, errors } = normalizeHideInput(raw);
+      if (errors.length) throw badRequest(errors[0].message, 'validation_error');
+      if (value.hidden) {
+        const allowed = new Set((await connections.listVisible(actor.id)).flatMap(bcIdsOf));
+        if (value.items.some((item) => !allowed.has(item.bcId))) throw notFound('Business Center não encontrada.');
+        return { changed: await hidden.hide(viewerId, value.items), hidden: true };
+      }
+      return { changed: await hidden.show(viewerId, value.items.map((i) => i.catalogId)), hidden: false };
     },
 
     /** Países e moedas aceitos para criar um catálogo nesta BC (documentação: /catalog/available_country/get/ e /catalog/location_currency/get/). */

@@ -33,11 +33,11 @@ export function createCatalogPicker({ id, value, disabled = false, error = false
   const refresh = h('button', { type: 'button', class: 'btn btn--secondary btn--sm', disabled, 'aria-label': 'Atualizar a lista de catálogos' }, 'Atualizar');
   const status = h('p', { class: 'field__hint pixel-picker__status', 'aria-live': 'polite' });
 
-  /** Só catálogos das conexões das contas escolhidas (e da BC dona da conta, quando o sistema sabe qual é). */
+  /** Só catálogos das conexões das contas escolhidas (e da BC dona da conta, quando o sistema sabe qual é), sem os ocultos. */
   const usable = (list) => {
     const connections = new Set(accounts.map((a) => a.businessCenterId));
     const bcs = new Set(accounts.map((a) => a.ownerBcId).filter(Boolean));
-    return list.filter((c) => connections.has(c.connectionId) && (!bcs.size || bcs.has(c.bcId)));
+    return list.filter((c) => !c.hidden && connections.has(c.connectionId) && (!bcs.size || bcs.has(c.bcId))); // os que a pessoa ocultou na aba Catálogo não aparecem aqui
   };
 
   function drawOptions() {

@@ -3,6 +3,7 @@ import { h, icon } from '../dom.js';
 import { can, isWorkspaceOwner, setSession, state } from '../state.js';
 import { openCampaignWizard } from './campaign-wizard/index.js';
 import { avatarEl } from './avatar.js';
+import { createNavGroup } from './nav-groups.js';
 import { createBell } from './notifications-bell.js';
 import { openProfile } from './profile.js';
 
@@ -20,6 +21,9 @@ const NAV = [
   { path: '/admin', label: 'Administração', icon: 'shield', adminOnly: true, section: 'Gestão' },
   { path: '/reports', label: 'Relatórios', icon: 'chart', areas: ['reports'], section: 'KPI' },
 ];
+
+// Ícone do título de cada grupo do menu (as opções de dentro aparecem ao passar o mouse).
+const SECTION_ICONS = { Ads: 'megaphone', 'BC e CA': 'building', Gestão: 'users', KPI: 'chart' };
 
 const COLLAPSE_KEY = 'tt.sidebar.collapsed';
 const readCollapsed = () => {
@@ -61,45 +65,63 @@ export function renderLayout(ctx, currentPath, content) {
   }
 
   // ----- navegação + busca -----
-  const navEntries = [];
+  // Início fica solto; as demais opções ficam em grupos (Ads, BC e CA, Gestão, KPI) que abrem ao passar o mouse.
+  const navEntries = []; // cada opção do menu (para a busca): { node, label, path }
+  const groupEntries = []; // cada grupo: { node, entries, close } (some inteiro na busca se nenhuma opção bate)
   const navChildren = [];
-  let lastSection = null;
+  let searching = false;
+
+  // 1) um link por opção
+  const built = new Map(); // opção de NAV -> { link, active, entry }
   for (const item of visibleItems) {
-    if (item.section && item.section !== lastSection) {
-      const label = h('p', { class: 'nav-section' }, item.section);
-      navChildren.push(label);
-      navEntries.push({ node: label, label: '' });
-    }
-    lastSection = item.section ?? lastSection;
+    const active = isActive(item.path);
     const link = h(
       'a',
       {
         href: item.path,
         'data-link': true,
         title: item.label,
-        class: `nav-item${isActive(item.path) ? ' is-active' : ''}`,
-        'aria-current': isActive(item.path) ? 'page' : null,
+        class: `nav-item${active ? ' is-active' : ''}`,
+        'aria-current': active ? 'page' : null,
       },
       icon(item.icon),
       h('span', { class: 'nav-item__label' }, item.label),
     );
-    navChildren.push(link);
-    navEntries.push({ node: link, label: item.label.toLowerCase(), path: item.path });
+    const entry = { node: link, label: item.label.toLowerCase(), path: item.path };
+    navEntries.push(entry);
+    built.set(item, { link, active, entry });
+  }
+  // 2) na ordem do menu: itens soltos entram direto; as opções de uma seção entram juntas, num grupo, na posição da primeira delas
+  const placedSections = new Set();
+  for (const item of visibleItems) {
+    if (!item.section) {
+      navChildren.push(built.get(item).link);
+      continue;
+    }
+    if (placedSections.has(item.section)) continue;
+    placedSections.add(item.section);
+    const members = visibleItems.filter((other) => other.section === item.section).map((other) => built.get(other));
+    const group = createNavGroup({ label: item.section, iconName: SECTION_ICONS[item.section] ?? 'panel', items: members.map((m) => m.link), hasActive: members.some((m) => m.active), isSearching: () => searching });
+    groupEntries.push({ node: group.element, entries: members.map((m) => m.entry), close: group.close });
+    navChildren.push(group.element);
   }
   const noResults = h('p', { class: 'nav-empty', hidden: true }, 'Nenhum resultado');
   navChildren.push(noResults);
+  const navEl = h('nav', { class: 'nav', 'aria-label': 'Navegação principal' }, navChildren);
 
   function applyFilter(term) {
     const query = term.trim().toLowerCase();
+    searching = query !== '';
+    navEl.classList.toggle('nav--searching', searching);
     let matches = 0;
     for (const entry of navEntries) {
-      if (!entry.path) {
-        entry.node.hidden = query !== '';
-        continue;
-      }
       const match = !query || entry.label.includes(query);
       entry.node.hidden = !match;
       if (match) matches += 1;
+    }
+    for (const group of groupEntries) {
+      if (searching) group.close();
+      group.node.hidden = searching && !group.entries.some((e) => !e.node.hidden); // sem opção que bata: o grupo inteiro some
     }
     noResults.hidden = matches > 0;
   }
@@ -160,7 +182,7 @@ export function renderLayout(ctx, currentPath, content) {
       toggle,
     ),
     h('label', { class: 'search' }, icon('search', 16), search, h('kbd', { class: 'search__kbd' }, '⌘K')),
-    h('nav', { class: 'nav', 'aria-label': 'Navegação principal' }, navChildren),
+    navEl,
     h(
       'div',
       { class: 'sidebar__bottom' },

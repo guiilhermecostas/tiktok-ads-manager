@@ -39,6 +39,18 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
   /** Remove o arquivo sem derrubar a requisição: sobra de disco não pode virar erro para o usuário. */
   const discardFile = (key) => storage.remove(key).catch((err) => log.error('[criativos] não foi possível apagar o arquivo:', err.code ?? err.message));
 
+  async function removeOne(actor, id) {
+    await requireOwned(actor, id);
+    const using = await repo.findDraftCampaignsUsing(actor.id, id);
+    if (using.length) {
+      const err = new HttpError(409, `Este criativo é usado em rascunho(s) de campanha: ${using.map((c) => `"${c.name}"`).join(', ')}. Troque o criativo nelas antes de excluir.`, 'creative_in_use');
+      err.details = using.map((c) => ({ path: 'campaign', message: String(c.id) }));
+      throw err;
+    }
+    const removed = await repo.remove(actor.id, id);
+    if (removed?.storage_key) await discardFile(removed.storage_key);
+  }
+
   return {
     limits,
 
@@ -200,16 +212,25 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
     },
 
     /** Exclui da biblioteca. Bloqueia se um rascunho de campanha ainda depende dele. */
-    async remove(actor, id) {
-      await requireOwned(actor, id);
-      const using = await repo.findDraftCampaignsUsing(actor.id, id);
-      if (using.length) {
-        const err = new HttpError(409, `Este criativo é usado em rascunho(s) de campanha: ${using.map((c) => `"${c.name}"`).join(', ')}. Troque o criativo nelas antes de excluir.`, 'creative_in_use');
-        err.details = using.map((c) => ({ path: 'campaign', message: String(c.id) }));
-        throw err;
+    remove: removeOne,
+
+    /**
+     * Exclui vários (1 a 100), um por vez e cada um com as MESMAS regras de `remove` (dono, rascunho de campanha que usa o criativo).
+     * Quem não puder sair fica e vem em `failed` com o motivo; os demais são excluídos mesmo assim.
+     */
+    async removeMany(actor, ids) {
+      const failed = [];
+      let removed = 0;
+      for (const id of new Set(ids)) {
+        try {
+          await removeOne(actor, id);
+          removed += 1;
+        } catch (err) {
+          if (!(err instanceof HttpError)) throw err; // falha inesperada (banco fora do ar…) não vira "motivo": a requisição inteira falha
+          failed.push({ id, message: err.message });
+        }
       }
-      const removed = await repo.remove(actor.id, id);
-      if (removed?.storage_key) await discardFile(removed.storage_key);
+      return { removed, failed };
     },
 
     /** Caminho e tipo para servir o arquivo ao dono. */

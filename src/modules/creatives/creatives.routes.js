@@ -3,6 +3,7 @@ import { badRequest, tooMany } from '../../lib/http-error.js';
 import { RateLimiter } from '../../lib/rate-limit.js';
 import { asObject, parseEnum, parseId, parseText } from '../../lib/validation.js';
 
+import { SORTS, SORT_DIRS } from './creatives.repository.js';
 import { MAX_MOVE_BATCH } from './creatives.service.js';
 
 const NUMERIC_ID_RE = /^\d{1,24}$/;
@@ -62,6 +63,13 @@ export function createCreativesRouter({ service, limits = {} }) {
     res.json(await service.move(req.actor, ids.map((id) => parseId(id)), folderId === null ? null : parseId(folderId)));
   });
 
+  // Excluir vários de uma vez: { ids: [1, 2, …] }. Cada um é tratado separadamente (um em uso em rascunho não impede os outros): devolve quantos saíram e o motivo dos que ficaram.
+  router.post('/delete', write, async (req, res) => {
+    const { ids } = asObject(req.body);
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > MAX_MOVE_BATCH) throw badRequest(`Escolha de 1 a ${MAX_MOVE_BATCH} criativos.`);
+    res.json(await service.removeMany(req.actor, ids.map((id) => parseId(id))));
+  });
+
   router.get('/', read, async (req, res) => {
     const { kind, q } = req.query;
     const limit = req.query.limit === undefined ? 60 : Number(req.query.limit);
@@ -73,6 +81,8 @@ export function createCreativesRouter({ service, limits = {} }) {
         kind: kind === undefined ? undefined : parseEnum(kind, KINDS, 'Tipo'),
         q: q === undefined || q === '' ? undefined : parseText(q, 'Busca', { min: 1, max: 100 }),
         folderId: parseFolderQuery(req.query.folderId, { allowNone: true }),
+        sort: req.query.sort === undefined ? undefined : parseEnum(req.query.sort, Object.keys(SORTS), 'Ordenação'),
+        dir: req.query.dir === undefined ? undefined : parseEnum(req.query.dir, SORT_DIRS, 'Direção'),
         limit,
         offset,
       }),

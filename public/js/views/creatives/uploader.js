@@ -7,6 +7,10 @@ import { button, toast } from '../../ui.js';
 export const ACCEPT = 'image/jpeg,image/png,video/mp4,video/quicktime,.jpg,.jpeg,.png,.mp4,.mov';
 const KIND_BY_TYPE = { 'image/jpeg': 'image', 'image/png': 'image', 'video/mp4': 'video', 'video/quicktime': 'video' };
 const MAX_PARALLEL = 2;
+/** O servidor limita quantos envios por minuto: ao receber "espere" (429), o arquivo volta para a fila e tenta de novo (até 3 vezes). */
+const MAX_RETRIES = 3;
+const DEFAULT_RETRY_SECONDS = 10;
+const MAX_RETRY_SECONDS = 60;
 
 /** Mensagem curta para o tamanho máximo, ex.: "10 MB". */
 const limitText = (bytes) => formatBytes(bytes);
@@ -24,8 +28,10 @@ function validate(file, limits) {
 /**
  * Fila de envios com barra de progresso (até 2 em paralelo).
  * `getLimits()` devolve os limites atuais; `onUploaded(creative)` é chamado a cada envio concluído;
- * `getFolderId()` (opcional) devolve a pasta em que os arquivos devem entrar (ou null = sem pasta).
- * Retorna { element, add(files), pending() }.
+ * `getFolderId()` (opcional) devolve a pasta padrão dos arquivos (ou null = sem pasta).
+ * `add(files, { folderId, folderLabel })` envia para uma pasta ESCOLHIDA NA HORA de soltar/escolher (não muda se a pessoa trocar de pasta
+ * enquanto o arquivo espera na fila); sem opções, usa a pasta padrão. `folderLabel` aparece na fila ("→ Oferta X").
+ * Retorna { element, add(files, options), pending() }.
  */
 export function createUploader({ getLimits, onUploaded, getFolderId = () => null }) {
   const list = h('ul', { class: 'uploads__list' });
@@ -37,11 +43,16 @@ export function createUploader({ getLimits, onUploaded, getFolderId = () => null
     panel.hidden = list.children.length === 0;
   };
 
-  function makeItem(file) {
+  function makeItem(file, folderLabel) {
     const bar = h('div', { class: 'progress__bar' });
     const status = h('span', { class: 'uploads__status' }, 'Na fila');
     const cancel = h('button', { type: 'button', class: 'link-btn' }, 'Cancelar');
-    const li = h('li', { class: 'uploads__item' }, h('div', { class: 'uploads__row' }, h('span', { class: 'uploads__name' }, file.name), h('span', { class: 'muted' }, formatBytes(file.size)), status, cancel), h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': `Envio de ${file.name}` }, bar));
+    const li = h(
+      'li',
+      { class: 'uploads__item' },
+      h('div', { class: 'uploads__row' }, h('span', { class: 'uploads__name', title: file.name }, file.name), h('span', { class: 'muted' }, formatBytes(file.size)), folderLabel ? h('span', { class: 'uploads__dest muted', title: `Destino: ${folderLabel}` }, `→ ${folderLabel}`) : null, status, cancel),
+      h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': `Envio de ${file.name}` }, bar),
+    );
     return { li, bar, status, cancel };
   }
 
@@ -54,12 +65,13 @@ export function createUploader({ getLimits, onUploaded, getFolderId = () => null
     else item.li.append(h('button', { type: 'button', class: 'link-btn', onClick: () => { item.li.remove(); refreshVisibility(); } }, 'Dispensar'));
   }
 
-  async function pump() {
+  function pump() {
     while (running < MAX_PARALLEL && queue.length) {
-      const { file, item } = queue.shift();
+      const entry = queue.shift();
+      const { file, item, folderId } = entry;
       running += 1;
       item.status.textContent = 'Enviando…';
-      const folderId = getFolderId();
+      item.bar.style.width = '0%';
       const upload = uploadFile(`/creatives?filename=${encodeURIComponent(file.name)}${folderId === null ? '' : `&folderId=${folderId}`}`, file, {
         onProgress: (fraction) => {
           const percent = Math.round(fraction * 100);
@@ -67,14 +79,25 @@ export function createUploader({ getLimits, onUploaded, getFolderId = () => null
           item.status.textContent = `Enviando… ${percent}%`;
         },
       });
-      item.cancel.onclick = () => upload.abort();
+      item.cancel.onclick = () => {
+        entry.cancelled = true;
+        clearTimeout(entry.retryTimer);
+        upload.abort();
+        if (entry.waiting) {
+          entry.waiting = false;
+          finish(item, false, 'Cancelado');
+        }
+      };
       upload.promise
         .then(({ creative }) => {
           item.bar.style.width = '100%';
           finish(item, true, 'Concluído');
           onUploaded(creative);
         })
-        .catch((err) => finish(item, false, err.code === 'aborted' ? 'Cancelado' : err.message))
+        .catch((err) => {
+          if (err.status === 429 && !entry.cancelled && (entry.attempts ?? 0) < MAX_RETRIES) return retryLater(entry, err.retryAfterSec);
+          return finish(item, false, err.code === 'aborted' ? 'Cancelado' : err.message);
+        })
         .finally(() => {
           running -= 1;
           pump();
@@ -82,14 +105,29 @@ export function createUploader({ getLimits, onUploaded, getFolderId = () => null
     }
   }
 
+  /** O servidor pediu para esperar: mostra o aviso e põe o arquivo de volta na fila depois do tempo indicado. */
+  function retryLater(entry, retryAfterSec) {
+    entry.attempts = (entry.attempts ?? 0) + 1;
+    entry.waiting = true;
+    const seconds = Math.min(MAX_RETRY_SECONDS, Math.max(1, Math.ceil(retryAfterSec ?? DEFAULT_RETRY_SECONDS)));
+    entry.item.status.textContent = `Muitos envios seguidos: tentando de novo em ${seconds}s…`;
+    entry.item.bar.style.width = '0%';
+    entry.retryTimer = setTimeout(() => {
+      if (entry.cancelled) return;
+      entry.waiting = false;
+      queue.push(entry);
+      pump();
+    }, seconds * 1000);
+  }
+
   return {
     element: panel,
     pending: () => running + queue.length,
-    add(files) {
+    add(files, { folderId = getFolderId(), folderLabel = null } = {}) {
       const limits = getLimits();
       let accepted = 0;
       for (const file of files) {
-        const item = makeItem(file);
+        const item = makeItem(file, folderLabel);
         list.append(item.li);
         const problem = validate(file, limits);
         if (problem) {
@@ -97,7 +135,7 @@ export function createUploader({ getLimits, onUploaded, getFolderId = () => null
           finish(item, false, problem);
           continue;
         }
-        queue.push({ file, item });
+        queue.push({ file, item, folderId });
         accepted += 1;
       }
       refreshVisibility();
