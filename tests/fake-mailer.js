@@ -17,6 +17,11 @@ export function createFakeMailer({ enabled = true } = {}) {
     },
     /** Último e-mail enviado para o endereço. */
     lastTo: (to) => [...state.sent].reverse().find((m) => m.to === to) ?? null,
+    /** Código de 6 dígitos do e-mail de verificação do cadastro (a linha que só tem os 6 números), ou null. */
+    codeFrom(message) {
+      const match = /^(\d{6})$/m.exec(message?.text ?? '');
+      return match ? match[1] : null;
+    },
     /** Token do convite extraído do link do e-mail (vem no fragmento "#"). */
     tokenFrom(message) {
       const match = /\/invite#([A-Za-z0-9_-]{43})/.exec(message.text);

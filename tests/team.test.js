@@ -474,7 +474,7 @@ describe('Colaboradores: permissões por área e isolamento do espaço', () => {
     const { client, member } = await addCollaborator(ctx, mailer, owner, ['creatives']);
     assert.equal((await client.patch(`/api/team/members/${member.id}`, { areas: ALL_AREAS })).status, 403);
     assert.equal((await client.post('/api/team/invites', { email: emailOf(), name: 'Amigo', areas: ALL_AREAS })).status, 403);
-    assert.equal((await client.request('POST', '/api/auth/register', { body: { name: 'Outro', email: emailOf(), password: USER_PASSWORD } })).status, 201, 'registro público segue igual (cria conta pendente, sem vínculo)');
+    assert.equal((await client.request('POST', '/api/auth/register', { body: { name: 'Outro', email: emailOf(), password: USER_PASSWORD } })).status, 200, 'registro público segue igual (primeira etapa: manda o código; a conta só nasce ao confirmar)');
     assert.deepEqual((await owner.client.get('/api/team')).json.members.find((m) => m.id === member.id).areas, ['creatives']);
   });
 });
@@ -491,13 +491,14 @@ describe('Colaboradores: limites de uso (anti-abuso)', () => {
 
   it('limita quantos e-mails de convite cada conta envia por hora', async () => {
     const owner = await createUser(ctx, { approve: true, email: emailOf('dono') });
+    const sentBefore = mailer.state.sent.length; // (o código de verificação do cadastro do dono já foi enviado)
     const send = () => owner.client.post('/api/team/invites', { email: emailOf(), name: 'Pessoa', areas: ['creatives'] });
     assert.equal((await send()).status, 201);
     assert.equal((await send()).status, 201);
     const third = await send();
     assert.equal(third.status, 429);
     assert.ok(third.headers.get('retry-after'));
-    assert.equal(mailer.state.sent.length, 2, 'o 3º não gerou e-mail');
+    assert.equal(mailer.state.sent.length - sentBefore, 2, 'o 3º não gerou e-mail');
   });
 
   it('limita consultas e aceites por IP (tentativa de adivinhar token)', async () => {

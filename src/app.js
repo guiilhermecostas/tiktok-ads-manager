@@ -11,6 +11,7 @@ import { createBillingService } from './modules/billing/billing.service.js';
 import { createImpersonationService } from './modules/admin/impersonation.service.js';
 import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createAuthService } from './modules/auth/auth.service.js';
+import { createRegistrationsRepository } from './modules/auth/registrations.repository.js';
 import { createSessionsRepository } from './modules/auth/sessions.repository.js';
 import { createAdminNotificationsRouter, createNotificationsRouter } from './modules/notifications/notifications.routes.js';
 import { createNotificationsRepository } from './modules/notifications/notifications.repository.js';
@@ -75,7 +76,10 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const users = createUsersRepository(db);
   const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
   const campaigns = createCampaignsRepository(db);
-  const authService = createAuthService({ users, sessions, config });
+  // E-mail (código de verificação do cadastro e convites de colaboradores) pelo Resend. `mailer` pode ser injetado nos testes.
+  const mail = mailer ?? createMailer({ config, fetchFn, log });
+  const registrations = createRegistrationsRepository(db);
+  const authService = createAuthService({ users, sessions, registrations, mailer: mail, config, now: clock });
   // Administração: registro de auditoria e acesso do admin à conta de outra pessoa (somente leitura).
   const audit = createAuditRepository(db);
   const impersonation = createImpersonationService({ users, sessions, audit });
@@ -123,8 +127,6 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
     intervalMs: hooksIntervalMs,
   });
 
-  // E-mail (convites de colaboradores) pelo Resend. `mailer` pode ser injetado nos testes.
-  const mail = mailer ?? createMailer({ config, fetchFn, log });
   const teamService = createTeamService({ repo: createTeamRepository(db), mailer: mail, sessions, config, log });
 
   // Foto de perfil: o arquivo enviado é sempre recodificado no servidor (JPEG 256x256, sem metadados). Mesmo FFmpeg dos criativos.
@@ -277,6 +279,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   return {
     app,
     authService,
+    registrations,
     sessions,
     creativeStorage,
     creativeCleaner,

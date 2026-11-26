@@ -7,7 +7,7 @@ const config = loadConfig();
 const db = await openDatabase(config.database);
 console.log(`[db] ${config.database.url ? 'PostgreSQL (DATABASE_URL)' : `PGlite de desenvolvimento em ${config.database.devDataDir}`}`);
 
-const { app, authService, sessions, creativeStorage, creativeCleaner, hourly, billing, hooks, close } = createApp({ config, db });
+const { app, authService, sessions, registrations, creativeStorage, creativeCleaner, hourly, billing, hooks, close } = createApp({ config, db });
 await creativeStorage.init(); // pastas privadas da biblioteca de criativos + limpeza de temporários antigos
 // A limpeza dos criativos depende do FFmpeg: confere na subida e avisa alto se não executa (não derruba o sistema).
 // O mesmo para as proxies: o fetch precisa aceitar os dispatchers (HTTP e SOCKS) neste ambiente.
@@ -21,7 +21,7 @@ else console.error(`[criativos] ATENÇÃO: a limpeza de criativos NÃO está dis
 await authService.ensureAdmin();
 
 // Limpeza periódica de sessões vencidas. Erros são só registrados: nunca podem derrubar o processo.
-const purge = () => sessions.purgeExpired().catch((err) => console.error('[sessões] falha na limpeza:', err.code ?? err.message));
+const purge = () => Promise.all([sessions.purgeExpired(), registrations.purgeExpired(new Date())]).catch((err) => console.error('[sessões] falha na limpeza:', err.code ?? err.message));
 await purge();
 const purgeTimer = setInterval(purge, 60 * 60 * 1000);
 purgeTimer.unref();

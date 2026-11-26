@@ -736,6 +736,32 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['advertiser_status', 'advertiser_status_events'], revoke: ['advertiser_status', 'advertiser_status_events'], identity: ['advertiser_status_events'] })}
     `,
   },
+  {
+    version: 23,
+    description: 'Cadastro: verificação do e-mail por código de 6 dígitos antes de criar a conta',
+    sql: `
+      -- Cadastro em andamento: guarda o que a pessoa preencheu (a senha já em hash) e o HASH do código enviado por e-mail. A conta só é criada quando o código
+      -- confere. O "ticket" (segredo que fica só no navegador de quem se cadastrou) liga o código ao cadastro certo: ninguém consegue trocar os dados do cadastro
+      -- de outra pessoa. O código vale 10 minutos e erra no máximo 5 vezes; linhas vencidas são apagadas.
+      CREATE TABLE registration_codes (
+        ticket_hash   TEXT        PRIMARY KEY CHECK (ticket_hash ~ '^[0-9a-f]{64}$'),
+        email         TEXT        NOT NULL CHECK (char_length(email) <= 254),
+        name          TEXT        NOT NULL CHECK (char_length(name) BETWEEN 1 AND 200),
+        company       TEXT        CHECK (company IS NULL OR char_length(company) <= 200),
+        password_hash TEXT        NOT NULL,
+        code_hash     TEXT        NOT NULL CHECK (code_hash ~ '^[0-9a-f]{64}$'),
+        attempts      INTEGER     NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        sends         INTEGER     NOT NULL DEFAULT 1 CHECK (sends >= 1),
+        last_sent_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        expires_at    TIMESTAMPTZ NOT NULL,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX idx_registration_codes_email ON registration_codes (lower(email));
+      CREATE INDEX idx_registration_codes_expires ON registration_codes (expires_at);
+
+      ${protectTables({ rls: ['registration_codes'], revoke: ['registration_codes'], identity: [] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

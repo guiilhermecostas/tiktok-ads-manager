@@ -42,7 +42,11 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
 
 ## Fluxo de contas
 
-1. Qualquer pessoa cria conta em `/register` → status **pendente**.
+1. Qualquer pessoa se cadastra em `/register` em **duas etapas**: (1) preenche os dados e o sistema envia um **código de 6 dígitos** para o e-mail; (2) digita o código e **só então a conta é criada**, com status **pendente** e já com o **plano padrão (US$ 0 de mensalidade + 10% do gasto em anúncios)**, que o admin pode mudar depois por pessoa.
+   - O código vale **10 minutos**, aceita **5 tentativas** (depois o cadastro é descartado) e só pode ser reenviado **1 vez por minuto, no máximo 5 vezes**. No banco ficam só os *hashes* do código e da senha.
+   - Um **ticket secreto** (que só o navegador de quem se cadastrou tem) liga o código ao cadastro certo: ninguém troca os dados do cadastro de outra pessoa. E-mail que já tem conta (e o do admin) recebem a mesma resposta, sem envio, para não revelar quem tem conta. Há limite por e-mail (5 códigos/hora) e por IP.
+   - Precisa do envio de e-mail configurado (`RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`, os mesmos dos convites): sem isso o cadastro responde 503, nunca pula a verificação.
+   - Contas que entram por **convite de colaborador** não passam por este fluxo (o link do convite já prova o e-mail) e não recebem plano: a cobrança é do dono do espaço.
 2. Pendente/rejeitada/bloqueada vê apenas uma tela de status; **toda** a API (exceto login/cadastro/`me`/logout) responde `403`.
 3. O admin (`ADMIN_EMAIL`) acessa **Administração**, e aprova, rejeita, bloqueia ou reativa. A mudança vale na próxima requisição; rejeitar/bloquear derruba as sessões na hora.
 
@@ -452,6 +456,8 @@ suspenso por 5 minutos. Com dezenas de contas isso aparecia no Gerenciador (“O
   Objetivo, com 5 etapas: **Objetivo → Campanha → Grupo de anúncios → Anúncio → Revisão e publicação**, espelhando a hierarquia do TikTok
   (campanha, grupo de anúncios, anúncio). Fechar com alterações não salvas pede confirmação; clicar fora não fecha. A lista de rascunhos e
   campanhas publicadas fica em **Início → Gerenciar campanhas** (endereço `/campaigns`; fora da barra lateral).
+- No passo **Grupo de anúncios**, a seção **Meta e conversão** reúne, nesta ordem e juntos, a **meta de otimização**, o **pixel** (lista os pixels da conta) e o **evento de conversão** (só aparecem o pixel e o evento quando a meta
+  é de conversão); lance, cobrança e ritmo ficam logo abaixo em **Lance e cobrança**. Em campanha de catálogo, o catálogo vem antes.
 - **A conta de anúncio é escolhida no FINAL** (etapa de revisão), não no começo: a mesma campanha pode ser publicada em **várias contas, de
   várias Business Centers**, de uma vez. As contas aparecem agrupadas por Business Center (com a moeda de cada uma). O sistema publica
   **uma conta por vez**, mostra o progresso e o resultado de cada uma, e a falha de uma não impede as outras; dá para tentar de novo só as

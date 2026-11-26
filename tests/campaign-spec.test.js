@@ -335,3 +335,57 @@ describe('ajustes por conta de anúncio (publicar a mesma campanha em contas dif
     assert.ok(errors.some((e) => e.path === 'adGroup.pixelId'));
   });
 });
+
+describe('grupo de anúncios: meta, pixel e evento de conversão ficam JUNTOS', () => {
+  const visibleGroups = (config) => {
+    const groups = [];
+    for (const { field } of fieldsOfStep('adGroup').filter(({ field: f }) => isVisible(f, config))) {
+      const last = groups.at(-1);
+      if (last?.title === field.group) last.keys.push(field.key);
+      else groups.push({ title: field.group, keys: [field.key] });
+    }
+    return groups;
+  };
+  const withObjective = (objective, adGroup = {}) => ({ ...completeConfig(objective), adGroup: { ...completeConfig(objective).adGroup, ...adGroup } });
+
+  it('Conversões no site: uma seção só, logo depois do nome, na ordem meta → pixel → evento', () => {
+    const groups = visibleGroups(withObjective('WEB_CONVERSIONS', { optimizationGoal: 'CONVERT' }));
+    assert.deepEqual(groups.slice(0, 2).map((g) => g.title), ['Identificação', 'Meta e conversão']);
+    assert.deepEqual(groups[1].keys, ['optimizationGoal', 'pixelId', 'optimizationEvent']);
+    assert.equal(groups.filter((g) => g.keys.includes('pixelId')).length, 1, 'o pixel não aparece em outra seção');
+    assert.ok(!groups.some((g) => g.title === 'Conversão'), 'não existe mais uma seção "Conversão" separada lá em cima');
+  });
+
+  it('o resto da otimização (cobrança, lance, ritmo) fica depois, em "Lance e cobrança"', () => {
+    const groups = visibleGroups(withObjective('WEB_CONVERSIONS', { optimizationGoal: 'CONVERT' }));
+    const bid = groups.find((g) => g.title === 'Lance e cobrança');
+    assert.ok(bid.keys.includes('billingEvent') && bid.keys.includes('bidType') && bid.keys.includes('pacing'));
+    assert.ok(groups.indexOf(bid) > groups.findIndex((g) => g.title === 'Meta e conversão'));
+  });
+
+  it('Tráfego: a seção tem só a meta (sem pixel nem evento)', () => {
+    const groups = visibleGroups(withObjective('TRAFFIC', { optimizationGoal: 'CLICK' }));
+    assert.deepEqual(groups.find((g) => g.title === 'Meta e conversão').keys, ['optimizationGoal']);
+  });
+
+  it('Catálogo com meta de conversão: primeiro o catálogo, depois meta, pixel e evento juntos; com "Cliques" não há pixel', () => {
+    const conv = visibleGroups(withObjective('PRODUCT_SALES', { optimizationGoal: 'CONVERT' }));
+    const titles = conv.map((g) => g.title);
+    assert.ok(titles.indexOf('Catálogo') < titles.indexOf('Meta e conversão'));
+    assert.deepEqual(conv.find((g) => g.title === 'Meta e conversão').keys, ['optimizationGoal', 'pixelId', 'optimizationEvent']);
+    const click = visibleGroups(withObjective('PRODUCT_SALES', { optimizationGoal: 'CLICK' }));
+    assert.deepEqual(click.find((g) => g.title === 'Meta e conversão').keys, ['optimizationGoal']);
+  });
+
+  it('Aplicativo: as regras de cada campo não mudaram (a meta continua obrigatória e o pixel continua só onde cabia)', () => {
+    const goal = findField('adGroup', 'optimizationGoal');
+    const pixel = findField('adGroup', 'pixelId');
+    assert.equal(isRequired(goal, withObjective('APP_PROMOTION')), true);
+    assert.equal(isVisible(pixel, withObjective('APP_PROMOTION')), false);
+    assert.equal(isRequired(pixel, withObjective('WEB_CONVERSIONS', { optimizationGoal: 'CONVERT' })), true);
+  });
+
+  it('há ajuda curta e clara nos três campos', () => {
+    for (const key of ['optimizationGoal', 'pixelId', 'optimizationEvent']) assert.ok(findField('adGroup', key).help.length > 20, key);
+  });
+});

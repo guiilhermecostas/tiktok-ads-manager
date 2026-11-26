@@ -9,6 +9,8 @@ export const MAX_PAYMENT_CENTS = 100_000_000; // US$ 1.000.000,00 por pagamento
 export const NOTE_MAX = 200;
 /** O mês só fecha 2 dias depois de acabar (o TikTok ainda ajusta os números das últimas horas). */
 export const CLOSE_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
+/** Plano que toda conta nova recebe ao concluir o cadastro (o admin muda depois, por pessoa): US$ 0 de mensalidade + 10% do gasto em anúncios. */
+export const DEFAULT_PLAN = Object.freeze({ monthlyFeeCents: 0, percentBp: 1000, note: 'Plano padrão do cadastro' });
 export const PLAN_EFFECTIVE = Object.freeze({ current: 'Este mês', next: 'Próximo mês' });
 export const LOCK_KINDS = Object.freeze({ bc: 'Business Center', advertiser: 'Conta de anúncio' });
 

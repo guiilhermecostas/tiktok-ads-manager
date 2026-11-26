@@ -45,3 +45,36 @@ export function inviteEmail({ ownerName, inviteeName, areas, link, expiresInDays
 </body></html>`;
   return { subject, html, text };
 }
+
+/**
+ * E-mail com o código de 6 dígitos que confirma o e-mail no cadastro. O nome entra escapado; o código é só dígitos (gerado pelo servidor).
+ * Devolve { subject, html, text }.
+ */
+export function verificationEmail({ name, code, expiresInMinutes }) {
+  const person = oneLine(name);
+  const subject = `${code} é o seu código de verificação`;
+  const text = [
+    `Olá, ${person}!`,
+    '',
+    `Seu código para confirmar o e-mail no ${APP_NAME} é:`,
+    '',
+    code,
+    '',
+    `Ele vale por ${expiresInMinutes} minutos. Digite-o na tela de cadastro para concluir a criação da conta.`,
+    'Se você não pediu este código, ignore este e-mail: nenhuma conta será criada.',
+    'Nunca compartilhe este código com ninguém.',
+  ].join('\n');
+  const html = `<!doctype html>
+<html lang="pt-BR"><body style="margin:0;padding:24px;background:#f4f4f5;font-family:Arial,Helvetica,sans-serif;color:#111;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+    <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:12px;padding:28px;">
+      <tr><td style="font-size:18px;font-weight:700;padding-bottom:12px;">${escapeHtml(APP_NAME)}</td></tr>
+      <tr><td style="font-size:15px;line-height:1.55;padding-bottom:12px;">Olá, ${escapeHtml(person)}! Use este código para confirmar o seu e-mail:</td></tr>
+      <tr><td align="center" style="padding:8px 0 18px;"><div style="display:inline-block;background:#f4f4f5;border-radius:10px;padding:14px 26px;font-size:32px;font-weight:700;letter-spacing:8px;font-family:'Courier New',monospace;">${escapeHtml(code)}</div></td></tr>
+      <tr><td style="font-size:13px;line-height:1.5;color:#555;">O código vale por ${escapeHtml(expiresInMinutes)} minutos. Digite-o na tela de cadastro para concluir a criação da conta. Nunca compartilhe este código com ninguém.</td></tr>
+      <tr><td style="font-size:12px;color:#888;padding-top:14px;">Se você não pediu este código, ignore este e-mail: nenhuma conta será criada.</td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+  return { subject, html, text };
+}

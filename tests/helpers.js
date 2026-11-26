@@ -4,7 +4,8 @@ import path from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
 import { loadConfig } from '../src/config.js';
 import { createCreativeCleaner } from '../src/modules/creatives/creative-cleaner.js';
-import { createAvatarProcessor } from '../src/modules/profile/avatar-processor.js';import { createStubCleaner } from './stub-cleaner.js';
+import { createAvatarProcessor } from '../src/modules/profile/avatar-processor.js';import { createFakeMailer } from './fake-mailer.js';
+import { createStubCleaner } from './stub-cleaner.js';
 import { createApp } from '../src/app.js';
 import { openDatabase } from '../src/db/index.js';
 
@@ -64,7 +65,10 @@ export async function startTestServer({ limits, config: overrides, fetchFn, isol
   const chosenCleaner = cleaner === 'real' ? createCreativeCleaner({ ffmpegPath, tmpDir, concurrency: 2, log: silentLog }) : (cleaner ?? createStubCleaner());
   // Fotos de perfil: FFmpeg de verdade (rápido com imagens pequenas), a menos que o teste injete outro processador.
   const chosenAvatars = avatarProcessor ?? createAvatarProcessor({ ffmpegPath, tmpDir });
-  const built = createApp({ config, db, log: silentLog, limits, fetchFn, cleaner: chosenCleaner, mailer, avatarProcessor: chosenAvatars, clock, hourlyPauseMs: 0, hourlyReconcileDays: 0, hourlyMonitorStatuses: monitorStatuses, klingFetch });
+  // E-mail falso por padrão: o cadastro envia um código por e-mail e os testes leem o código aqui. Os limites do cadastro ficam frouxos (os testes criam muitas contas).
+  const chosenMailer = mailer ?? createFakeMailer();
+  const testLimits = { registerEmail: 1_000_000, registerVerify: 1_000_000, registerResend: 1_000_000, ...limits };
+  const built = createApp({ config, db, log: silentLog, limits: testLimits, fetchFn, cleaner: chosenCleaner, mailer: chosenMailer, avatarProcessor: chosenAvatars, clock, hourlyPauseMs: 0, hourlyReconcileDays: 0, hourlyMonitorStatuses: monitorStatuses, klingFetch });
   await built.authService.ensureAdmin(silentLog);
   await built.creativeStorage.init();
 
@@ -80,6 +84,7 @@ export async function startTestServer({ limits, config: overrides, fetchFn, isol
     creativesDir,
     cleaner: chosenCleaner,
     ...built,
+    mailer: chosenMailer,
     client: () => createClient(baseUrl),
     async stop() {
       built.close();
@@ -152,7 +157,9 @@ export const uniqueEmail = (prefix = 'user') => `${prefix}${++counter}@example.c
 export async function createUser(ctx, { approve = false, name = 'Usuário Teste', email = uniqueEmail() } = {}) {
   const anon = ctx.client();
   const reg = await anon.post('/api/auth/register', { name, email, password: USER_PASSWORD });
-  if (reg.status !== 201) throw new Error(`cadastro falhou: ${reg.status} ${reg.text}`);
+  if (reg.status !== 200) throw new Error(`cadastro falhou: ${reg.status} ${reg.text}`);
+  const verified = await anon.post('/api/auth/register/verify', { ticket: reg.json.ticket, code: ctx.mailer.codeFrom(ctx.mailer.lastTo(email)) });
+  if (verified.status !== 201) throw new Error(`verificação do e-mail falhou: ${verified.status} ${verified.text}`);
   const id = (await one(ctx.db, 'SELECT id FROM users WHERE email = $1', [email])).id;
   if (approve) (await run(ctx.db, "UPDATE users SET status = 'approved' WHERE id = $1", [id]));
   const client = ctx.client();

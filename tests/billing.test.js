@@ -32,7 +32,12 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
     fake.state.failHourlyFor = new Set();
     fake.state.hourlyDelayMs = 0;
   };
-  const person = (name) => createUser(ctx, { approve: true, name });
+  /** Pessoa nova SEM plano: o cadastro já dá o plano padrão (US$ 0 + 10%), que aqui é removido para cada teste partir do zero. */
+  const person = async (name) => {
+    const user = await createUser(ctx, { approve: true, name });
+    await run(ctx.db, 'DELETE FROM billing_plans WHERE user_id = $1', [user.id]);
+    return user;
+  };
   const plan = (who, monthlyFee, percent, extra = {}) => admin.put(`/api/admin/billing/users/${who.id}/plan`, { monthlyFee, percent, ...extra });
   /** Gasto direto no livro (em dólar por padrão). `hour`: ISO em UTC. */
   const seed = (who, advertiser, hour, spend, currency = 'USD') => run(ctx.db, 'INSERT INTO spend_ledger (owner_id, advertiser_id, hour_start, currency, spend) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (owner_id, advertiser_id, hour_start) DO UPDATE SET spend = EXCLUDED.spend', [who.id, advertiser, hour, currency, spend]);
@@ -497,6 +502,7 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
       try {
         const boss = await loginAdmin(limited);
         const a = await createUser(limited, { approve: true });
+        await run(limited.db, 'DELETE FROM billing_plans WHERE user_id = $1', [a.id]);
         const statuses = [];
         for (let i = 0; i < 3; i += 1) statuses.push((await boss.put(`/api/admin/billing/users/${a.id}/plan`, { monthlyFee: String(i), percent: '1' })).status);
         assert.deepEqual(statuses, [200, 200, 429]);

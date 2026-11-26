@@ -9,6 +9,9 @@ import { presentSession } from './session-view.js';
 export function createAuthRouter({ authService, sessions, impersonation, config, limits = {} }) {
   const router = Router();
   const registerLimiter = new RateLimiter({ max: limits.register ?? 10, windowMs: 60 * 60 * 1000 });
+  const emailSendLimiter = new RateLimiter({ max: limits.registerEmail ?? 5, windowMs: 60 * 60 * 1000 });
+  const verifyLimiter = new RateLimiter({ max: limits.registerVerify ?? 30, windowMs: 15 * 60 * 1000 });
+  const resendLimiter = new RateLimiter({ max: limits.registerResend ?? 10, windowMs: 60 * 60 * 1000 });
   const loginIpLimiter = new RateLimiter({ max: limits.loginIp ?? 30, windowMs: 15 * 60 * 1000 });
   const loginAccountLimiter = new RateLimiter({ max: limits.loginAccount ?? 5, windowMs: 15 * 60 * 1000 });
 
@@ -17,6 +20,13 @@ export function createAuthRouter({ authService, sessions, impersonation, config,
     if (!result.allowed) throw tooMany(result.retryAfterSec);
   };
 
+  const TICKET_RE = /^[A-Za-z0-9_-]{43}$/;
+  const ticketOf = (body) => {
+    if (typeof body.ticket !== 'string' || !TICKET_RE.test(body.ticket)) throw badRequest('Cadastro não encontrado. Volte e preencha o formulário de novo.', 'invalid_ticket');
+    return body.ticket;
+  };
+
+  // Etapa 1: valida, guarda o cadastro e envia o código de 6 dígitos por e-mail. A conta ainda NÃO existe.
   router.post('/register', async (req, res) => {
     enforce(registerLimiter, req.ip);
     const body = asObject(req.body);
@@ -26,12 +36,25 @@ export function createAuthRouter({ authService, sessions, impersonation, config,
       email: parseEmail(body.email),
       password: parsePassword(body.password),
     };
-    await authService.register(input);
+    enforce(emailSendLimiter, input.email); // contado mesmo para e-mails que já têm conta: ninguém usa isto para encher a caixa de entrada de outra pessoa
+    const started = await authService.startRegistration(input);
+    res.json({ ...started, message: `Enviamos um código de 6 dígitos para ${started.email}. Digite-o para confirmar o e-mail e criar a conta.` });
+  });
+
+  // Etapa 2: confere o código. Acertando, cria a conta PENDENTE (aprovação do admin) com o plano padrão.
+  router.post('/register/verify', async (req, res) => {
+    enforce(verifyLimiter, req.ip);
+    const body = asObject(req.body);
+    const ticket = ticketOf(body);
+    await authService.verifyRegistration({ ticket, code: typeof body.code === 'string' ? body.code.replace(/\s+/g, '') : body.code });
     res.status(201).json({
-      message:
-        'Cadastro recebido! Sua conta ficará pendente até a aprovação do administrador. ' +
-        'Se o e-mail já estiver em uso, nenhuma nova conta será criada.',
+      message: 'E-mail confirmado! Sua conta foi criada e ficará pendente até a aprovação do administrador.',
     });
+  });
+
+  router.post('/register/resend', async (req, res) => {
+    enforce(resendLimiter, req.ip);
+    res.json({ ...(await authService.resendCode({ ticket: ticketOf(asObject(req.body)) })), sent: true });
   });
 
   router.post('/login', async (req, res) => {
@@ -81,6 +104,6 @@ export function createAuthRouter({ authService, sessions, impersonation, config,
     res.status(204).end();
   });
 
-  router.stop = () => [registerLimiter, loginIpLimiter, loginAccountLimiter].forEach((l) => l.stop());
+  router.stop = () => [registerLimiter, emailSendLimiter, verifyLimiter, resendLimiter, loginIpLimiter, loginAccountLimiter].forEach((l) => l.stop());
   return router;
 }

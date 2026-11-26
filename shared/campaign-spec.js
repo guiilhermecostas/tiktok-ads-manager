@@ -171,10 +171,6 @@ export const FIELDS = {
     { key: 'name', label: 'Nome do grupo de anúncios', type: 'string', step: 'adGroup', required: true, min: 2, max: 100, group: 'Identificação' },
 
     // Específicos do objetivo
-    { key: 'pixelId', perAccount: true, label: 'ID do Pixel do TikTok', type: 'string', step: 'adGroup', group: 'Conversão', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
-      // Conversões no site sempre usa pixel; em campanha de catálogo só nas metas de conversão (com meta "Cliques" o TikTok recusa o pixel).
-      showWhen: [{ 'campaign.objective': ['WEB_CONVERSIONS'] }, CATALOG_CONVERSION], requiredWhen: [{ 'campaign.objective': ['WEB_CONVERSIONS'] }, CATALOG_CONVERSION],
-      help: 'Encontre em Gerenciador de Eventos → Pixel.' },
     { key: 'appPlatform', label: 'Plataforma do app', type: 'enum', step: 'adGroup', group: 'Aplicativo',
       options: [{ value: 'APP_ANDROID', label: 'Android' }, { value: 'APP_IOS', label: 'iOS' }],
       showWhen: { 'campaign.objective': ['APP_PROMOTION'] }, requiredWhen: { 'campaign.objective': ['APP_PROMOTION'] } },
@@ -192,6 +188,23 @@ export const FIELDS = {
     { key: 'leadFormId', perAccount: true, label: 'ID da página/formulário instantâneo', type: 'string', step: 'adGroup', group: 'Leads', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': ['LEAD_GENERATION'], 'adGroup.leadDestination': ['INSTANT_FORM'] },
       requiredWhen: { 'campaign.objective': ['LEAD_GENERATION'], 'adGroup.leadDestination': ['INSTANT_FORM'] } },
+
+    // Meta e conversão: a meta, o pixel e o evento ficam JUNTOS (nesta ordem), logo depois do que está sendo promovido.
+    { key: 'optimizationGoal', label: 'Meta de otimização (o que você quer conseguir)', type: 'enum', step: 'adGroup', group: 'Meta e conversão', required: true,
+      help: 'É o que o TikTok vai tentar conseguir com o seu dinheiro. Para vender, escolha Conversões.',
+      optionsBy: { path: 'campaign.objective', map: optionsMap(GOALS_BY_OBJECTIVE) } },
+    { key: 'pixelId', perAccount: true, label: 'ID do Pixel do TikTok', type: 'string', step: 'adGroup', group: 'Meta e conversão', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+      // Conversões no site sempre usa pixel; em campanha de catálogo só nas metas de conversão (com meta "Cliques" o TikTok recusa o pixel).
+      showWhen: [{ 'campaign.objective': ['WEB_CONVERSIONS'] }, CATALOG_CONVERSION], requiredWhen: [{ 'campaign.objective': ['WEB_CONVERSIONS'] }, CATALOG_CONVERSION],
+      help: 'Escolha o pixel da sua conta: é ele que mede as conversões do seu site.' },
+    { key: 'optimizationEvent', label: 'Evento de conversão (a ação que conta como resultado)', type: 'enum', step: 'adGroup', group: 'Meta e conversão', help: 'A ação do seu site que o pixel registra e que o TikTok vai buscar (ex.: Compra).',
+      options: [
+        { value: 'SHOPPING', label: 'Compra (geral)' }, { value: 'COMPLETE_PAYMENT', label: 'Pagamento concluído' },
+        { value: 'ADD_TO_CART', label: 'Adicionar ao carrinho' }, { value: 'INITIATE_ORDER', label: 'Início de pedido' },
+        { value: 'FORM', label: 'Envio de formulário' }, { value: 'ON_WEB_REGISTER', label: 'Cadastro' },
+      ],
+      showWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'], 'adGroup.optimizationGoal': CONVERSION_GOALS },
+      requiredWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'], 'adGroup.optimizationGoal': CONVERSION_GOALS } },
 
     // Posicionamentos
     { key: 'placementType', label: 'Posicionamentos', type: 'enum', step: 'adGroup', group: 'Posicionamentos', default: 'PLACEMENT_TYPE_AUTOMATIC',
@@ -230,24 +243,14 @@ export const FIELDS = {
     { key: 'scheduleEnd', label: 'Fim', type: 'datetime', step: 'adGroup', group: 'Orçamento e agenda',
       showWhen: { 'adGroup.scheduleType': ['SCHEDULE_START_END'] }, requiredWhen: { 'adGroup.scheduleType': ['SCHEDULE_START_END'] } },
 
-    // Otimização e lance
-    { key: 'optimizationGoal', label: 'Meta de otimização', type: 'enum', step: 'adGroup', group: 'Otimização e lance', required: true,
-      optionsBy: { path: 'campaign.objective', map: optionsMap(GOALS_BY_OBJECTIVE) } },
-    { key: 'optimizationEvent', label: 'Evento de conversão', type: 'enum', step: 'adGroup', group: 'Otimização e lance',
-      options: [
-        { value: 'SHOPPING', label: 'Compra (geral)' }, { value: 'COMPLETE_PAYMENT', label: 'Pagamento concluído' },
-        { value: 'ADD_TO_CART', label: 'Adicionar ao carrinho' }, { value: 'INITIATE_ORDER', label: 'Início de pedido' },
-        { value: 'FORM', label: 'Envio de formulário' }, { value: 'ON_WEB_REGISTER', label: 'Cadastro' },
-      ],
-      showWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'], 'adGroup.optimizationGoal': CONVERSION_GOALS },
-      requiredWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'], 'adGroup.optimizationGoal': CONVERSION_GOALS } },
-    { key: 'billingEvent', label: 'Evento de cobrança', type: 'enum', step: 'adGroup', group: 'Otimização e lance', required: true,
+    // Lance e cobrança
+    { key: 'billingEvent', label: 'Evento de cobrança', type: 'enum', step: 'adGroup', group: 'Lance e cobrança', required: true,
       optionsBy: { path: 'adGroup.optimizationGoal', map: optionsMap(BILLING_BY_GOAL) } },
-    { key: 'bidType', label: 'Estratégia de lance', type: 'enum', step: 'adGroup', group: 'Otimização e lance', default: 'BID_TYPE_NO_BID',
+    { key: 'bidType', label: 'Estratégia de lance', type: 'enum', step: 'adGroup', group: 'Lance e cobrança', default: 'BID_TYPE_NO_BID',
       options: [{ value: 'BID_TYPE_NO_BID', label: 'Menor custo (automático)' }, { value: 'BID_TYPE_CUSTOM', label: 'Limite de custo / lance manual' }] },
-    { key: 'bidPrice', label: 'Valor do lance', type: 'money', step: 'adGroup', group: 'Otimização e lance', min: 1, max: 100_000_000,
+    { key: 'bidPrice', label: 'Valor do lance', type: 'money', step: 'adGroup', group: 'Lance e cobrança', min: 1, max: 100_000_000,
       showWhen: { 'adGroup.bidType': ['BID_TYPE_CUSTOM'] }, requiredWhen: { 'adGroup.bidType': ['BID_TYPE_CUSTOM'] } },
-    { key: 'pacing', label: 'Ritmo de entrega', type: 'enum', step: 'adGroup', group: 'Otimização e lance', default: 'PACING_MODE_SMOOTH',
+    { key: 'pacing', label: 'Ritmo de entrega', type: 'enum', step: 'adGroup', group: 'Lance e cobrança', default: 'PACING_MODE_SMOOTH',
       options: [{ value: 'PACING_MODE_SMOOTH', label: 'Padrão (distribuído ao longo do dia)' }, { value: 'PACING_MODE_FAST', label: 'Acelerado (gasta mais rápido)' }] },
     { key: 'frequency', label: 'Limite de frequência (impressões por pessoa)', type: 'int', step: 'adGroup', group: 'Frequência', min: 1, max: 10,
       showWhen: { 'campaign.objective': ['REACH', 'VIDEO_VIEWS'] } },

@@ -9,10 +9,19 @@ describe('Cadastro e login', () => {
   });
   after(() => ctx.stop());
 
+  /** Cadastro completo em duas etapas (código de 6 dígitos por e-mail). */
+  const register = async (extra = {}) => {
+    const email = extra.email ?? uniqueEmail();
+    const client = ctx.client();
+    const first = await client.post('/api/auth/register', { name: 'Maria Silva', company: 'Loja X', email, password: USER_PASSWORD, ...extra });
+    assert.equal(first.status, 200);
+    const verified = await client.post('/api/auth/register/verify', { ticket: first.json.ticket, code: ctx.mailer.codeFrom(ctx.mailer.lastTo(email)) });
+    return { email, first, verified };
+  };
+
   it('cria conta como PENDENTE e sem privilégios', async () => {
-    const email = uniqueEmail();
-    const res = await ctx.client().post('/api/auth/register', { name: 'Maria Silva', company: 'Loja X', email, password: USER_PASSWORD });
-    assert.equal(res.status, 201);
+    const { email, verified } = await register();
+    assert.equal(verified.status, 201);
     const row = (await one(ctx.db, 'SELECT * FROM users WHERE email = $1', [email]));
     assert.equal(row.status, 'pending');
     assert.equal(row.role, 'user');
@@ -21,8 +30,7 @@ describe('Cadastro e login', () => {
   });
 
   it('ignora tentativa de injetar role/status no cadastro (mass assignment)', async () => {
-    const email = uniqueEmail();
-    await ctx.client().post('/api/auth/register', { name: 'Hacker', email, password: USER_PASSWORD, role: 'admin', status: 'approved' });
+    const { email } = await register({ name: 'Hacker', role: 'admin', status: 'approved' });
     const row = (await one(ctx.db, 'SELECT role, status FROM users WHERE email = $1', [email]));
     assert.deepEqual({ ...row }, { role: 'user', status: 'pending' });
   });
@@ -44,19 +52,26 @@ describe('Cadastro e login', () => {
   });
 
   it('e-mail duplicado tem a mesma resposta (sem enumerar contas) e não altera a conta original', async () => {
-    const email = uniqueEmail();
-    const first = await ctx.client().post('/api/auth/register', { name: 'Original', email, password: USER_PASSWORD });
+    const { email } = await register({ name: 'Original' });
+    const sentBefore = ctx.mailer.state.sent.length;
     const second = await ctx.client().post('/api/auth/register', { name: 'Impostor', email: email.toUpperCase(), password: 'OutraSenha-123456' });
-    assert.equal(second.status, first.status);
-    assert.deepEqual(second.json, first.json);
+    const fresh = await ctx.client().post('/api/auth/register', { name: 'Outra Pessoa', email: uniqueEmail(), password: USER_PASSWORD });
+    assert.equal(second.status, fresh.status);
+    assert.deepEqual(Object.keys(second.json).sort(), Object.keys(fresh.json).sort(), 'mesma forma de resposta para e-mail novo e e-mail que já tem conta');
+    assert.equal(second.json.ticket.length, fresh.json.ticket.length);
+    assert.equal(ctx.mailer.state.sent.length, sentBefore + 1, 'para o e-mail que já tem conta NADA é enviado (só para o novo)');
+    assert.equal((await ctx.client().post('/api/auth/register/verify', { ticket: second.json.ticket, code: '123456' })).json.error.code, 'invalid_code');
     assert.equal((await one(ctx.db, 'SELECT COUNT(*) c FROM users WHERE email = $1', [email])).c, 1);
     assert.equal((await one(ctx.db, 'SELECT name FROM users WHERE email = $1', [email])).name, 'Original');
     assert.equal((await ctx.client().login(email, 'OutraSenha-123456')).status, 401);
   });
 
   it('NÃO permite sequestrar o e-mail do administrador via cadastro público', async () => {
+    const sentBefore = ctx.mailer.state.sent.length;
     const res = await ctx.client().post('/api/auth/register', { name: 'Atacante', email: ADMIN_EMAIL, password: 'SenhaDoAtacante-123' });
-    assert.equal(res.status, 201); // resposta genérica
+    assert.equal(res.status, 200); // resposta genérica (como a de qualquer cadastro)
+    assert.equal(ctx.mailer.state.sent.length, sentBefore, 'nenhum código é enviado ao e-mail do admin');
+    assert.equal((await ctx.client().post('/api/auth/register/verify', { ticket: res.json.ticket, code: '000000' })).status, 400);
     assert.equal((await ctx.client().login(ADMIN_EMAIL, 'SenhaDoAtacante-123')).status, 401);
     assert.equal((await ctx.client().login(ADMIN_EMAIL, ADMIN_PASSWORD)).status, 200);
   });

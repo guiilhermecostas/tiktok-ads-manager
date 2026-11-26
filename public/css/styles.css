@@ -95,6 +95,8 @@ a { color: var(--tt-red-dark); }
   border-radius: 16px; padding: 32px; box-shadow: var(--shadow);
 }
 .auth__title { font-size: 24px; letter-spacing: -0.01em; margin-bottom: 6px; }
+.auth__code { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 28px; font-weight: 700; letter-spacing: 0.4em; text-align: center; padding: 12px; }
+.auth__code-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .auth__switch { margin-top: 20px; text-align: center; color: var(--muted); }
 .status { text-align: center; }
 .status__icon { width: 56px; height: 56px; border-radius: 50%; display: inline-grid; place-items: center; margin-bottom: 16px; }
