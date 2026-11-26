@@ -4,6 +4,7 @@ import { del, get, post } from '../../api.js';
 import { h, setChildren } from '../../dom.js';
 import { formatNumber } from '../../format.js';
 import { alertBox, badge, button, confirmDialog, emptyState, openModal, spinner, toast } from '../../ui.js';
+import { tabIntro } from '../subtabs.js';
 import { catalogUrl, refQuery } from './detail.js';
 
 const MODE_LABEL = { INCREMENTAL: 'Atualizar', OVERWRITE: 'Substituir tudo', SUPPLEMENT: 'Complementar' };
@@ -174,13 +175,14 @@ export function feedsTab({ catalog, canWrite }) {
   }
 
   setChildren(root,
-    h('div', { class: 'card card--pad catalog-add__intro' },
-      h('p', null, h('strong', null, 'Preço e estoque sempre em dia, sem trabalho manual.')),
-      h('p', { class: 'muted' }, 'Informe a URL do feed de produtos da sua loja (CSV, TSV ou XML no formato do Google Merchant/RSS/ATOM, até 8 GB). O próprio TikTok busca o feed no horário escolhido e atualiza preço, disponibilidade e dados dos produtos. A maioria das plataformas de loja (Shopify, WooCommerce, Nuvemshop, Tray…) gera esse feed.'),
-      h('p', { class: 'muted' }, 'O TikTok não guarda número de estoque, só a disponibilidade (em estoque, sem estoque…): o seu feed precisa ter a coluna de disponibilidade (availability).')),
+    tabIntro('Sincronização automática', 'Deixe o TikTok buscar o feed da sua loja sozinho e manter preço e estoque em dia, sem você enviar nada.'),
+    h('details', { class: 'catalog-add__tips' }, h('summary', null, 'O que é o feed da loja?'), h('ul', null,
+      h('li', null, 'É um endereço (URL) com a lista dos seus produtos em CSV, TSV ou XML. A maioria das plataformas (Shopify, WooCommerce, Nuvemshop, Tray…) gera isso.'),
+      h('li', null, 'O TikTok guarda só a disponibilidade (em estoque, sem estoque…), não o número do estoque: o feed precisa ter a coluna "availability".'))),
     listSlot,
     h('section', { class: 'form-section' },
       h('h3', { class: 'form-section__title' }, 'Nova sincronização'),
+      h('p', { class: 'form-section__help' }, 'Informe o endereço do feed e de quanto em quanto tempo o TikTok deve buscar.'),
       canWrite ? null : alertBox('Só o dono da conexão cria ou altera sincronizações.', 'warning'),
       h('form', { class: 'form', novalidate: true, onSubmit },
         errorSlot,

@@ -3,6 +3,7 @@ import { get, post } from '../../api.js';
 import { h, setChildren } from '../../dom.js';
 import { formatNumber } from '../../format.js';
 import { alertBox, badge, button, emptyState, spinner, toast } from '../../ui.js';
+import { tabIntro } from '../subtabs.js';
 import { catalogUrl, refQuery } from './detail.js';
 
 /**
@@ -75,13 +76,14 @@ export function productSetsTab({ catalog, canWrite }) {
   }
 
   setChildren(root,
+    tabIntro('Conjuntos de produtos', 'Um conjunto é um grupo de produtos (por marca, preço, estoque…). Use quando quiser anunciar só uma parte do catálogo.'),
     listSlot,
     h('section', { class: 'form-section' },
-      h('h3', { class: 'form-section__title' }, 'Criar conjunto de produtos'),
+      h('h3', { class: 'form-section__title' }, 'Criar um conjunto'),
+      h('p', { class: 'form-section__help' }, 'Preencha pelo menos um filtro. Se preencher vários, o produto precisa servir em todos.'),
       h('form', { class: 'form', novalidate: true, onSubmit },
         errorSlot,
         h('div', { class: 'form-grid' }, name.element, brands.element, words.element, availability.element, condition.element, min.element, max.element),
-        h('p', { class: 'field__hint' }, 'Escolha ao menos um filtro. Todos os filtros preenchidos valem ao mesmo tempo (E).'),
         submit)));
   load();
   return root;

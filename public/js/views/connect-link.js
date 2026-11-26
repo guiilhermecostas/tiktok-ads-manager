@@ -1,6 +1,6 @@
 import { del, get, post } from '../api.js';
 import { h } from '../dom.js';
-import { alertBox, button, field, openModal } from '../ui.js';
+import { alertBox, button, field, loader, openModal } from '../ui.js';
 
 /** O link de autorização só pode apontar para o TikTok: qualquer outra origem é descartada. */
 const TIKTOK_ORIGIN = 'https://business-api.tiktok.com';
@@ -138,7 +138,7 @@ export function connectByLink({ initialName = '', onDone, onUseToken }) {
 
     const statusText = h('span', null, 'Aguardando você liberar o acesso no TikTok…');
     const remaining = h('span', { class: 'muted' });
-    const status = h('div', { class: 'connect__status', 'aria-live': 'polite' }, h('span', { class: 'spinner' }), statusText, remaining);
+    const status = h('div', { class: 'connect__status', 'aria-live': 'polite' }, loader({ small: true }), statusText, remaining);
 
     body.replaceChildren(
       h(

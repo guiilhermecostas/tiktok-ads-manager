@@ -17,8 +17,9 @@ function parseAreas(value) {
 /**
  * Gerenciamento da equipe. Montado atrás de sessão + conta aprovada + "somente o dono do espaço" (veja app.js):
  * colaborador nenhum chega aqui, nem com "acesso total".
+ * Também serve o registro de atividades da equipe (`GET /activity` e `GET /activity/summary`).
  */
-export function createTeamRouter({ service, limits = {} }) {
+export function createTeamRouter({ service, activity, limits = {} }) {
   const router = Router();
   const readLimiter = new RateLimiter({ max: limits.teamRead ?? 120, windowMs: 60 * 1000 });
   const writeLimiter = new RateLimiter({ max: limits.teamWrite ?? 30, windowMs: 60 * 1000 });
@@ -33,6 +34,15 @@ export function createTeamRouter({ service, limits = {} }) {
 
   router.get('/', read, async (req, res) => {
     res.json(await service.overview(req.user));
+  });
+
+  // Registro de atividades da equipe (só o dono lê): quem fez o quê e quando, com filtros por pessoa, tipo de ação e período.
+  router.get('/activity', read, async (req, res) => {
+    res.json(await activity.list(req.actor, req.query));
+  });
+
+  router.get('/activity/summary', read, async (req, res) => {
+    res.json(await activity.summary(req.actor, req.query));
   });
 
   router.post('/invites', ...send, async (req, res) => {

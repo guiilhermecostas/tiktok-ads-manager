@@ -1,17 +1,26 @@
 import { del, get, patch, uploadFile } from '../api.js';
 import { h, setChildren } from '../dom.js';
 import { setSession, state } from '../state.js';
-import { alertBox, button, confirmDialog, field, openModal, toast } from '../ui.js';
+import { alertBox, button, confirmDialog, field, openModal, spinner, toast } from '../ui.js';
 import { avatarEl, syncAccountUi } from './avatar.js';
 import { createPhotoEditor } from './photo-editor.js';
+import { levelPanel } from './profile-level.js';
+import { subTabs } from './subtabs.js';
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_SOURCE_BYTES = 25 * 1024 * 1024; // só para não abrir arquivos absurdos no navegador; o envio é o recorte (~50 KB)
 
-/** "Minha conta": a pessoa vê e troca a foto (com editor de recorte) e o nome. A foto aparece no menu e para a equipe. */
+/**
+ * "Minha conta": cabeçalho com foto, nome e acesso; abaixo, duas abas — "Meu nível" (barra de gasto em anúncios com 13 níveis, só para o
+ * dono da conta) e "Meus dados" (foto com editor de recorte e nome). A foto aparece no menu e para a equipe.
+ */
 export function openProfile() {
   const body = h('div', { class: 'profile' });
   let editor = null;
+  let tab = null; // aba aberta (lembrada ao voltar do editor de foto)
+  let levelData; // undefined = ainda não pediu, null = sem nível para esta pessoa, objeto = nível carregado
+  let levelError = null;
+  const showsLevel = () => Boolean(state.workspace?.isOwner) && state.user.role !== 'admin'; // colaborador não vê o gasto do dono; admin não anuncia
 
   const roleText = () => {
     if (!state.workspace?.isOwner) return `Colaborador · equipe de ${state.workspace?.ownerName ?? '—'}`;
@@ -54,25 +63,65 @@ export function openProfile() {
       }
     } }, name.element, saveName);
 
-    setChildren(
-      body,
-      errorSlot,
+    const panel = h('div', { class: 'profile__panel', role: 'tabpanel' });
+    const header = h(
+      'header',
+      { class: 'profile__hero' },
+      avatarEl(user, { size: 'lg' }),
+      h('div', { class: 'profile__who' }, h('strong', { class: 'profile__name-text' }, user.name), h('span', { class: 'profile__email' }, user.email), h('span', { class: 'badge badge--neutral profile__role' }, roleText())),
+    );
+
+    const dataTab = () => h(
+      'div',
+      { class: 'profile__section' },
       h(
         'div',
         { class: 'profile__photo' },
-        avatarEl(user, { size: 'lg' }),
         h(
           'div',
           { class: 'profile__photo-actions' },
-          button(user.avatarVersion ? 'Trocar foto' : 'Escolher foto', { variant: 'primary', onClick: () => fileInput.click() }),
-          user.avatarVersion ? button('Remover foto', { variant: 'danger-ghost', onClick: () => removePhoto(errorSlot) }) : null,
+          h('strong', { class: 'profile__label' }, 'Sua foto'),
+          h('div', { class: 'profile__buttons' }, button(user.avatarVersion ? 'Trocar foto' : 'Escolher foto', { variant: 'primary', small: true, onClick: () => fileInput.click() }), user.avatarVersion ? button('Remover foto', { variant: 'danger-ghost', small: true, onClick: () => removePhoto(errorSlot) }) : null),
           fileInput,
           h('p', { class: 'field__hint' }, 'JPG, PNG ou WebP. Você ajusta o recorte antes de salvar. Sua equipe vê esta foto.'),
         ),
       ),
-      nameForm,
-      h('dl', { class: 'profile__info' }, h('div', null, h('dt', null, 'E-mail'), h('dd', null, user.email)), h('div', null, h('dt', null, 'Acesso'), h('dd', null, roleText()))),
+      h('div', { class: 'profile__block' }, h('strong', { class: 'profile__label' }, 'Seu nome'), nameForm),
     );
+
+    const draw = () => {
+      if (tab === 'level') setChildren(panel, levelContent());
+      else setChildren(panel, dataTab());
+    };
+
+    function levelContent() {
+      if (levelError) return h('div', null, alertBox(levelError), button('Tentar de novo', { small: true, onClick: () => { levelError = null; levelData = undefined; draw(); loadLevel(); } }));
+      if (levelData === undefined) return spinner('Calculando seu nível…');
+      if (levelData === null) return h('p', { class: 'field__hint' }, 'O nível de gasto aparece para o titular da conta.');
+      return levelPanel(levelData, { userId: user.id });
+    }
+
+    async function loadLevel() {
+      if (levelData !== undefined) return;
+      try {
+        levelData = (await get('/profile/level')).level;
+      } catch (err) {
+        levelError = err.message;
+      }
+      if (body.isConnected && tab === 'level') draw();
+    }
+
+    let tabs = null;
+    if (showsLevel()) {
+      tab ??= 'level';
+      tabs = subTabs({ items: [{ id: 'level', label: 'Meu nível' }, { id: 'data', label: 'Meus dados' }], active: tab, label: 'Minha conta', onChange: (id) => { tab = id; draw(); if (id === 'level') loadLevel(); } });
+    } else {
+      tab = 'data';
+    }
+
+    setChildren(body, errorSlot, header, tabs?.element, panel);
+    draw();
+    if (tab === 'level') loadLevel();
   }
 
   // ---------- escolher e ajustar ----------

@@ -3,7 +3,7 @@ import { countByCurrency, currencySymbol, distinctCurrencies, isMainCurrency } f
 import { ACCOUNT_FIELDS, applyAccountOverrides, getPath, validateConfig } from '/shared/campaign-spec.js';
 import { h, setChildren } from '../../dom.js';
 import { centsToInput } from '../../format.js';
-import { badge } from '../../ui.js';
+import { badge, loader } from '../../ui.js';
 import { createAccountFilter, currencyBadge, labelBadge } from '../account-filter.js';
 import { renderAccountFields } from './form-fields.js';
 
@@ -130,7 +130,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
 
   function statusChip(account) {
     const result = results.get(account.id);
-    if (result?.state === 'running') return h('span', { class: 'targets__state targets__state--running' }, h('span', { class: 'spinner' }), 'Preparando criativos e publicando…');
+    if (result?.state === 'running') return h('span', { class: 'targets__state targets__state--running' }, loader({ small: true }), 'Preparando criativos e publicando…');
     if (result?.state === 'done') return h('span', { class: 'targets__state targets__state--done' }, '✓ Publicada (pausada)');
     if (result?.state === 'failed') return h('span', { class: 'targets__state targets__state--failed' }, '✗ Falhou');
     const publication = publicationOf(account.id);

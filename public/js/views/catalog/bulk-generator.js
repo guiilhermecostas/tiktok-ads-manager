@@ -9,7 +9,7 @@ const DEFAULTS = { count: '100', startAt: '1', brand: 'Generic' };
 const newTag = () => [...crypto.getRandomValues(new Uint8Array(4))].map((b) => b.toString(16).padStart(2, '0')).join('');
 
 /**
- * Seção "Gerar produtos em lote": a pessoa preenche nome, link, preço, marca, imagem e quantidade UMA vez e um clique cria todos os produtos
+ * Formulário "Gerar produtos em lote" (a introdução fica na aba que o contém): a pessoa preenche nome, link, preço, marca, imagem e quantidade UMA vez e um clique cria todos os produtos
  * (cada um com SKU próprio e título numerado) e os envia. Valida com as regras de shared/catalog-bulk.js (as mesmas do servidor).
  *  - catalog: { currency }  (o preço é sempre na moeda do catálogo)
  *  - onGenerate(products): recebe os produtos válidos e faz o envio; devolve uma Promise
@@ -74,20 +74,17 @@ export function bulkGenerator({ catalog, disabled = false, onGenerate }) {
 
   const form = h('form', { class: 'form', novalidate: true, onSubmit, onInput: drawPreview },
     h('div', { class: 'form-grid' },
-      field({ key: 'name', label: 'Nome base *', attrs: { props: { maxlength: BULK_NAME_MAX, placeholder: 'Ex.: AD-EX-01' } }, hint: 'Vira o título de cada produto, com o número no fim (ex.: "AD-EX-01 · 1").' }),
+      field({ key: 'name', label: 'Nome base *', attrs: { props: { maxlength: BULK_NAME_MAX, placeholder: 'Ex.: AD-EX-01' } }, hint: 'É o título de cada produto, com o número no fim (ex.: "AD-EX-01 · 1").' }),
       field({ key: 'count', label: 'Quantidade de produtos *', attrs: { props: { inputmode: 'numeric', maxlength: 5 } }, hint: `De 1 a ${formatNumber(MAX_BULK_PRODUCTS)}.` }),
-      field({ key: 'landingPageUrl', label: 'Link de destino (página do produto) *', wide: true, attrs: { props: { maxlength: 2000, placeholder: 'https://seudominio.com/oferta' } }, hint: 'Cole o link COMPLETO, com todos os parâmetros. Ele é usado como está em todos os produtos.' }),
-      field({ key: 'imageUrl', label: 'Imagem dos produtos (URL) *', wide: true, attrs: { props: { maxlength: 2000, placeholder: 'https://seudominio.com/imagem.jpg' } }, hint: 'JPG ou PNG de pelo menos 500 × 500 px, aberta sem login (o TikTok baixa a imagem; menor que isso reprova o produto).' }),
+      field({ key: 'landingPageUrl', label: 'Link de destino (página do produto) *', wide: true, attrs: { props: { maxlength: 2000, placeholder: 'https://seudominio.com/oferta' } }, hint: 'Para onde a pessoa vai ao clicar. Cole o link completo, ele é usado igual em todos os produtos.' }),
+      field({ key: 'imageUrl', label: 'Imagem dos produtos (URL) *', wide: true, attrs: { props: { maxlength: 2000, placeholder: 'https://seudominio.com/imagem.jpg' } }, hint: 'JPG ou PNG com pelo menos 500 × 500 px, que abra sem login. Menor que isso o TikTok reprova.' }),
       field({ key: 'price', label: `Preço (${catalog.currency ?? 'moeda do catálogo'}) *`, attrs: { props: { inputmode: 'decimal', maxlength: 14, placeholder: '27' } }, hint: 'Sempre na moeda do catálogo.' }),
       field({ key: 'brand', label: 'Marca *', attrs: { props: { maxlength: 150 } } }),
-      field({ key: 'description', label: 'Descrição padrão', wide: true, attrs: { tag: 'textarea' }, hint: 'Opcional: sem texto, usa o nome base.' }),
-      field({ key: 'startAt', label: 'Numerar a partir de', attrs: { props: { inputmode: 'numeric', maxlength: 5 } }, hint: 'Útil para gerar mais produtos depois, continuando a numeração.' })),
+      field({ key: 'description', label: 'Descrição padrão', wide: true, attrs: { tag: 'textarea' }, hint: 'Opcional. Sem texto, usamos o nome base.' }),
+      field({ key: 'startAt', label: 'Numerar a partir de', attrs: { props: { inputmode: 'numeric', maxlength: 5 } }, hint: 'Para gerar mais depois, continuando a contagem.' })),
     preview,
     h('div', { class: 'catalog-add__send' }, submit));
   drawPreview();
 
-  return h('section', { class: 'form-section' },
-    h('h3', { class: 'form-section__title' }, 'Gerar produtos em lote'),
-    h('p', { class: 'muted' }, 'Preencha uma vez e um clique cria todos os produtos e já envia ao TikTok. Produtos que já estiverem na lista de envio (abaixo) vão junto. A aprovação leva alguns minutos.'),
-    form);
+  return form;
 }

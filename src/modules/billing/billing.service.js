@@ -157,6 +157,18 @@ export function createBillingService({ repo, users, log = console, now = () => n
     setRate: (currency, usdPerUnit, adminId) => repo.setRate(currency, usdPerUnit, adminId),
     listRates: () => repo.listRates(),
 
+    /** Converte gastos por moeda ({ currency, spend }) em dólar com as cotações atuais; moeda sem cotação volta em `unconverted`. */
+    async toUsd(rows) {
+      const rates = new Map((await repo.listRates()).map((r) => [r.currency, r.usdPerUnit]));
+      return toUsdCents(rows, rates);
+    },
+
+    /** Gasto vitalício guardado no livro permanente, já em dólar. */
+    async lifetimeSpend(ownerId) {
+      const [rows, rates] = await Promise.all([repo.spendTotals(ownerId), repo.listRates()]);
+      return toUsdCents(rows, new Map(rates.map((r) => [r.currency, r.usdPerUnit])));
+    },
+
     // ---------- ganchos usados pela integração com o TikTok ----------
     /**
      * Chamado ANTES de remover uma conexão: se a dona tem débito, bloqueia a BC e as contas dela para outras pessoas.

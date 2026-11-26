@@ -93,6 +93,8 @@ Rotas: `GET /api/notifications`, `POST /api/notifications/read`; admin: `/api/ad
 
 ### Assistente do Início: perguntas sobre a operação
 
+A tela é limpa: só o campo de escrever (bordas 100% arredondadas), com **microfone** (ditado pelo navegador, quando disponível) e **sugestões enquanto você digita** (`shared/chat-suggest.js`; a tecla `/` mostra tudo o que o assistente sabe responder).
+
 Além dos tutoriais, o chat responde, com os mesmos dados das telas e citando o período ("hoje", "ontem", "nos últimos 7 dias", "este mês"): **quantas BCs e contas**, **contas que caíram**, **anúncios reprovados**,
 **criativos enviados**, **gasto total**, **melhores criativos** e **melhores anúncios em custo**. Não há modelo de linguagem: a pergunta é reconhecida por palavras-chave (`shared/assistant-intents.js`) e as
 contas/rankings são funções puras (`shared/assistant-ops.js`). Limites ditos nas respostas: "caiu" = mudança de situação **vista** pela coleta a cada 30 min (`advertiser_status_events`, a partir de
@@ -230,6 +232,14 @@ trabalha dentro do espaço do dono (mesmas Business Centers, criativos e campanh
   limites por IP e por conta (`429`); toda rota exige a área certa **no servidor** (o menu só esconde o que daria erro); colaborador nunca é
   admin (nem no espaço de um admin), não compartilha BC com a equipe e não gerencia equipe; se o dono for bloqueado, a equipe cai junto.
   Se o e-mail já tiver conta no sistema, o aceite avisa (o convite não é gasto). Limite de 30 colaboradores + convites por conta.
+- **Abas da tela:** **No time** (quem já entrou: editar acesso ou remover), **Pendentes** (convites: reenviar ou cancelar) e **Atividade** (o que cada pessoa fez).
+- **Atividade da equipe (registro de ações):** o dono vê **quem fez o quê e a que horas**: ativou/pausou no Gerenciador (nível, quantidade e conta), publicou campanha (conta, **link de destino**, **criativos**, **catálogo**, objetivo),
+  enviou/alterou/excluiu criativos e pastas, hooks com IA, catálogos (produtos, conjuntos, sincronizações, anúncio padrão), conexões/BCs, contas de anúncio criadas, proxies, arquivos, transferências de saldo, convites e entradas
+  (o login dos colaboradores também é registrado). Filtros por **pessoa**, **tipo de ação** e **período** (24 h a 1 ano), cartões de **resumo por pessoa** (campanhas publicadas, ativações/pausas, criativos, contas) e linha do tempo
+  por dia, com "Carregar mais". API (só o dono): `GET /api/team/activity?actor=&group=&range=&page=` e `GET /api/team/activity/summary?range=`.
+  Como funciona: um observador central (`src/modules/activity/activity.trail.js`) olha as rotas por regras declarativas (`activity.rules.js`), então nenhum módulo precisou ser alterado; só registra **depois de sucesso (2xx)**, guarda o
+  nome de quem agiu (continua aparecendo se a pessoa for removida), **nunca grava token, senha ou corpo da requisição** (só campos permitidos em `shared/activity.js`) e falha de registro nunca derruba a ação. É somente de acréscimo
+  (a única remoção é a limpeza do que passa de 1 ano). Tabela `workspace_activity` (migração 25, RLS).
 - **Configuração do e-mail** (segredos do servidor, nunca no navegador nem no repositório): `RESEND_API_KEY` (a chave pode ser só de
   envio), `EMAIL_FROM` (padrão `TikTok Ads Manager <convites@payfac.dev>`, o domínio precisa estar verificado no Resend) e `APP_URL`
   (endereço público, usado nos links; **nunca** deduzido do cabeçalho Host). Sem elas o convite fica indisponível e a tela avisa.
@@ -241,6 +251,12 @@ trabalha dentro do espaço do dono (mesmas Business Centers, criativos e campanh
 Clicar na conta, no canto do menu, abre **Minha conta**: a pessoa escolhe uma foto, ajusta o recorte (arrastar, zoom, girar, teclado) e salva;
 também troca o nome e remove a foto. A foto aparece no menu e para a equipe (na tela **Colaboradores** o dono vê a foto de cada um).
 Colaboradores configuram a própria foto sem precisar de nenhuma área.
+
+**Nível de gasto em anúncios (só o titular):** a janela tem as abas **Meu nível** e **Meus dados**. A barra tem **13 níveis** (US$ 0–1 mil · 1–10 mil · 10–50 mil · 50–100 mil · 100–250 mil · 250–500 mil · 500 mil–1 mi · 1–2,5 mi · 2,5–5 mi ·
+5–10 mi · 10–20 mi · 20–50 mi · 50–100 mi, o último), **uma cor por nível**, quanto falta para o próximo, uma frase de incentivo, a escada completa e uma mensagem de comemoração ao subir de nível. Regras em `shared/spend-levels.js`.
+O gasto é **vitalício e em dólar**: vale o **maior** entre o relatório oficial do TikTok (gasto de cada conta, conta repetida em duas BCs conta uma vez) e o livro permanente de gasto por hora (continua valendo se a BC for removida);
+outras moedas só entram com a **cotação** cadastrada pelo admin (sem ela, a tela avisa). Se o TikTok estiver fora do ar, o nível sai do livro e a tela avisa. `GET /api/profile/level` devolve `{ level: null }` para colaborador
+(ele nunca vê o gasto do dono).
 
 - **O arquivo enviado nunca é guardado como veio.** O navegador recorta e reduz (JPEG 512 px); o servidor confirma pelo **conteúdo** que é JPG/PNG
   (o `Content-Type` é só dica; SVG, HTML, GIF e afins são recusados), lê as dimensões do cabeçalho (recusa imagens enormes, contra “bomba de
@@ -421,6 +437,8 @@ custo por resultado, conversões, custo por conversão e editado em. Rodapé com
 **Catálogo** (menu lateral, grupo **Ads**; exige a área “Campanhas”) mostra os catálogos de **todas** as Business Centers da pessoa e é o passo que faltava para campanhas de
 **Vendas de produtos** (um catálogo com produtos aprovados é obrigatório). Tudo segue a documentação oficial v1.3 (conferida na API pública de documentação):
 
+- **Detalhe em sub-abas** (`public/js/views/catalog/`): **Produtos · Adicionar produtos · Sincronização · Conjuntos · Campanha**, cada uma começando por uma frase que explica para que serve, com um resumo de produtos aprovados/em análise/reprovados no topo.
+  O botão **Salvar anúncio padrão** fica no rodapé do cartão (não flutua). Todas as telas de carregamento usam o indicador no estilo TikTok (bolinha ciano e vermelha indo de um lado a outro; só `transform` anima e respeita "reduzir movimento"): `loader()`/`spinner()` em `public/js/ui.js`.
 - **Listar** (`GET /catalog/get/`, paginado): nome, ID, BC, país/moeda e se o catálogo já serve para anúncios (`ad_creation_eligible`). Falha em uma BC (ex.: o acesso não inclui “Catálogo”) aparece
   naquela BC e as outras seguem. O cache de 60 s inclui as conexões, então conectar uma BC mostra os catálogos na hora.
 - **Filtros** na lista: **Business Center** (UMA opção por BC, com o nome e a quantidade de catálogos; várias conexões da mesma BC não repetem a opção), **situação** (prontos para anúncios / sem produtos disponíveis), **país e moeda** e busca por nome, ID ou
@@ -477,6 +495,8 @@ suspenso por 5 minutos. Com dezenas de contas isso aparecia no Gerenciador (“O
 
 ## Campanhas (assistente passo a passo)
 
+- Cada etapa começa com uma frase simples dizendo o que fazer ali, cada bloco do formulário tem uma explicação curta (`GROUP_HELP` em `shared/campaign-spec.js`) e os campos que mais confundem têm dica própria (`help`).
+
 - O botão flutuante **Publicar campanha** (canto inferior direito, em todas as telas) abre o assistente em um **pop-up**, já no passo
   Objetivo, com 5 etapas: **Objetivo → Campanha → Grupo de anúncios → Anúncio → Revisão e publicação**, espelhando a hierarquia do TikTok
   (campanha, grupo de anúncios, anúncio). Fechar com alterações não salvas pede confirmação; clicar fora não fecha. A lista de rascunhos e
@@ -532,7 +552,8 @@ src/
     tiktok/            Business Centers (cliente da API, conexão por link/OAuth, repositórios, serviço, rotas) e gasto por hora (coleta + leitura)
     creatives/         biblioteca de criativos (armazenamento, validação por conteúdo, rotas)
     team/              colaboradores: convites, aceite, áreas de acesso (repositório, serviço, rotas)
-    profile/           Minha conta: foto de perfil (recodificada no FFmpeg) e nome
+    activity/          registro de atividades da equipe (observador de rotas, regras, repositório, serviço)
+    profile/           Minha conta: foto de perfil (recodificada no FFmpeg), nome e nível de gasto
     files/             arquivos anexados da conta (criptografados, só download)
     mail/              envio de e-mail pelo Resend e modelo do convite
     hooks/             Hook com IA: cliente da Kling, geração em segundo plano, FFmpeg (cortar e juntar ao vídeo), rotas

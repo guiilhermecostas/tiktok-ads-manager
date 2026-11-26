@@ -4,6 +4,7 @@ import { h, setChildren } from '../../dom.js';
 import { formatCurrency, formatNumber } from '../../format.js';
 import { can } from '../../state.js';
 import { alertBox, badge, button, emptyState, spinner } from '../../ui.js';
+import { subTabs, tabIntro } from '../subtabs.js';
 import { addProductsTab } from './add-products.js';
 import { catalogCampaignTab } from './campaign-tab.js';
 import { feedsTab } from './feeds.js';
@@ -18,41 +19,42 @@ const PAGE_SIZE = 25;
 export const refQuery = (catalog) => `connectionId=${catalog.connectionId}&bcId=${encodeURIComponent(catalog.bcId)}`;
 export const catalogUrl = (catalog, path = '') => `/tiktok/catalogs/${encodeURIComponent(catalog.id)}${path}`;
 
+const TABS = [
+  ['products', 'Produtos'],
+  ['add', 'Adicionar produtos'],
+  ['sync', 'Sincronização'],
+  ['sets', 'Conjuntos'],
+  ['campaign', 'Campanha'],
+];
+
 /**
- * Detalhe de um catálogo: situação dos produtos (aprovados / reprovados / em análise) e três abas:
- * Produtos (lista com aprovação e elegibilidade para anúncios), Adicionar produtos (formulário ou CSV) e Conjuntos de produtos.
+ * Detalhe de um catálogo: situação dos produtos (aprovados / em análise / reprovados) e cinco abas, cada uma começando por uma frase que
+ * explica para que serve: Produtos, Adicionar produtos, Sincronização, Conjuntos e Campanha (anúncio padrão).
  */
 export function catalogDetail({ ctx, catalog, tab = 'products', canWrite, onBack }) {
   const root = h('div', { class: 'catalog-detail' });
-  const summary = h('div', { class: 'catalog-detail__summary' });
+  const summary = h('div', { class: 'cat-stats', 'aria-live': 'polite' });
   const content = h('div', { class: 'catalog-detail__content' });
-  const tabs = h('div', { class: 'tabs tabs--hub', role: 'tablist' });
-  let active = tab;
   let productsRefresh = null;
 
+  const stat = (kind, label, value) => h('div', { class: `cat-stat cat-stat--${kind}` }, h('strong', { class: 'cat-stat__value' }, formatNumber(value)), h('span', { class: 'cat-stat__label' }, label));
+
   async function loadSummary() {
-    setChildren(summary, h('span', { class: 'muted' }, 'Carregando situação dos produtos…'));
+    setChildren(summary, h('span', { class: 'muted' }, 'Carregando a situação dos produtos…'));
     try {
       const o = await get(`${catalogUrl(catalog, '/overview')}?${refQuery(catalog)}`);
       setChildren(summary,
-        h('div', { class: 'kpi' }, h('span', { class: 'kpi__label' }, 'Aprovados'), h('strong', { class: 'kpi__value' }, formatNumber(o.approved))),
-        h('div', { class: 'kpi' }, h('span', { class: 'kpi__label' }, 'Em análise'), h('strong', { class: 'kpi__value' }, formatNumber(o.processing))),
-        h('div', { class: 'kpi' }, h('span', { class: 'kpi__label' }, 'Reprovados'), h('strong', { class: 'kpi__value' }, formatNumber(o.rejected))),
-        o.approved === 0 ? h('p', { class: 'muted catalog-detail__hint' }, o.processing ? 'Os produtos estão em análise: a aprovação costuma levar alguns minutos. O catálogo só serve para anúncios com produtos aprovados e disponíveis.' : 'Adicione produtos para poder usar este catálogo em campanhas.') : null);
+        stat('ok', 'Aprovados', o.approved), stat('wait', 'Em análise', o.processing), stat('bad', 'Reprovados', o.rejected),
+        o.approved === 0 ? h('p', { class: 'cat-stats__hint' }, o.processing ? 'Seus produtos estão em análise (costuma levar alguns minutos). O catálogo só serve para anúncios com produtos aprovados.' : 'Ainda não há produtos. Vá em "Adicionar produtos" para enviar os primeiros.') : null);
     } catch (err) {
       setChildren(summary, alertBox(err.message, 'warning'));
     }
   }
 
-  function drawTabs() {
-    const items = [['products', 'Produtos'], ['add', 'Adicionar produtos'], ['sync', 'Sincronização'], ['sets', 'Conjuntos de produtos'], ['campaign', 'Campanha']];
-    setChildren(tabs, items.map(([id, label]) => h('button', {
-      type: 'button', role: 'tab', class: `tab${active === id ? ' is-active' : ''}`, 'aria-selected': String(active === id),
-      onClick: () => { active = id; drawTabs(); drawContent(); },
-    }, label)));
-  }
+  const tabsView = subTabs({ items: TABS.map(([id, label]) => ({ id, label })), active: tab, label: 'Seções do catálogo', onChange: () => drawContent() });
 
   function drawContent() {
+    const active = tabsView.active();
     if (active === 'products') {
       const view = productsTab({ catalog });
       productsRefresh = view.refresh;
@@ -73,12 +75,11 @@ export function catalogDetail({ ctx, catalog, tab = 'products', canWrite, onBack
       button('← Catálogos', { small: true, onClick: onBack }),
       h('div', { class: 'catalog-detail__title' },
         h('h1', { class: 'page-title' }, catalog.name || catalog.id),
-        h('p', { class: 'muted' }, `ID ${catalog.id} · BC ${catalog.bcId} · ${catalog.regionCode ?? '—'} · ${catalog.currency ?? '—'}`)),
+        h('p', { class: 'muted', title: `Business Center ${catalog.bcId}` }, `${catalog.regionCode ?? '—'} · ${catalog.currency ?? '—'} · ID ${catalog.id}`)),
       catalog.adCreationEligible ? badge('Pronto para anúncios', 'success') : badge('Sem produtos disponíveis', 'warning'),
       can('campaigns') ? button('Criar campanha com este catálogo', { variant: 'primary', small: true, onClick: () => openCatalogCampaign(ctx, catalog) }) : null),
     !canWrite ? alertBox('Você pode ver este catálogo, mas só o dono da conexão altera produtos e conjuntos.', 'warning') : null,
-    summary, tabs, content);
-  drawTabs();
+    summary, tabsView.element, content);
   drawContent();
   loadSummary();
   return root;
@@ -133,7 +134,7 @@ function productsTab({ catalog }) {
         ? h('div', { class: 'card table-wrap' }, h('table', { class: 'table table--stack' },
           h('thead', null, h('tr', null, ['SKU', 'Produto', 'Preço', 'Estoque', 'Aprovação', 'Anúncios'].map((t) => h('th', { scope: 'col', class: t === 'Preço' ? 'num' : '' }, t)))),
           h('tbody', null, products.map(row))))
-        : h('div', { class: 'card' }, emptyState({ title: st.sku || st.available ? 'Nenhum produto com esse filtro' : 'Nenhum produto ainda', text: st.sku || st.available ? 'Mude a busca ou o filtro.' : 'Use a aba "Adicionar produtos" para enviar o seu primeiro lote (formulário ou CSV).' })),
+        : h('div', { class: 'card' }, emptyState({ title: st.sku || st.available ? 'Nenhum produto com esse filtro' : 'Nenhum produto ainda', text: st.sku || st.available ? 'Mude a busca ou o filtro.' : 'Abra a aba "Adicionar produtos" e envie os primeiros (em lote, por planilha ou um a um).' })),
       products.length ? h('div', { class: 'manager__footer' },
         h('span', { class: 'muted' }, `${formatNumber(st.data.total)} ${st.data.total === 1 ? 'produto' : 'produtos'}`),
         pages > 1 ? h('div', { class: 'manager__pager' },
@@ -147,7 +148,7 @@ function productsTab({ catalog }) {
     h('input', { class: 'input toolbar__search', type: 'search', maxlength: 100, placeholder: 'Buscar por SKU exato…', 'aria-label': 'Buscar produto por SKU', onChange: (e) => { st.sku = e.target.value.trim(); st.page = 1; load(); } }),
     h('label', { class: 'check' }, h('input', { type: 'checkbox', onChange: (e) => { st.available = e.target.checked; st.page = 1; load(); } }), h('span', null, 'Só os que servem para anúncios')),
     button('Atualizar', { small: true, onClick: () => load() }));
-  setChildren(root, filters, body);
+  setChildren(root, tabIntro('Produtos do catálogo', 'Aqui estão os produtos que o TikTok recebeu e se cada um foi aprovado. Só os aprovados e disponíveis entram nos anúncios.'), filters, body);
   load();
   return { element: root, refresh: () => { st.page = 1; load(); } };
 }

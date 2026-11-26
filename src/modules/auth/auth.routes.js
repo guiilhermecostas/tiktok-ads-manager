@@ -6,7 +6,7 @@ import { requireAuth } from '../../middleware/guards.js';
 import { sessionCookieOptions } from '../../middleware/session.js';
 import { presentSession } from './session-view.js';
 
-export function createAuthRouter({ authService, sessions, impersonation, config, limits = {} }) {
+export function createAuthRouter({ authService, sessions, impersonation, activity = null, config, limits = {} }) {
   const router = Router();
   const registerLimiter = new RateLimiter({ max: limits.register ?? 10, windowMs: 60 * 60 * 1000 });
   const emailSendLimiter = new RateLimiter({ max: limits.registerEmail ?? 5, windowMs: 60 * 60 * 1000 });
@@ -74,6 +74,8 @@ export function createAuthRouter({ authService, sessions, impersonation, config,
     if (req.sessionToken) await sessions.destroy(req.sessionToken);
     res.cookie(config.cookieName, session.token, sessionCookieOptions(config, session.expiresAt));
     const found = await sessions.resolve(session.token); // inclui o espaço de trabalho (colaborador ou dono)
+    // Colaborador que entra: fica no registro de atividades do dono (o dono entrando na própria conta não é "atividade da equipe").
+    if (found?.member) await activity?.record({ workspaceId: found.member.ownerId, actor: { id: found.user.id, name: found.user.name }, action: 'session.login' });
     res.json({ ...presentSession(found?.user ?? user, found?.member ?? null), csrfToken: session.csrfToken });
   });
 

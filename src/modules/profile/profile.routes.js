@@ -18,10 +18,18 @@ function limiter(max, windowMs) {
  *  - PATCH /api/profile         { name }
  *  - POST  /api/profile/avatar  foto no corpo (binário, image/jpeg ou image/png)
  *  - DELETE /api/profile/avatar
+ *  - GET   /api/profile/level   nível de gasto em anúncios (só o dono do espaço; os outros recebem `level: null`)
  */
-export function createProfileRouter({ service, limits = {} }) {
+export function createProfileRouter({ service, levels, limits = {} }) {
   const router = Router();
   const write = limiter(limits.profileWrite ?? 20, 60 * 1000);
+  const read = limiter(limits.profileRead ?? 30, 60 * 1000);
+
+  // Nível de gasto em anúncios: só o dono do espaço (colaborador não vê o gasto do dono; o admin vendo a conta de alguém também não).
+  router.get('/level', read.middleware, async (req, res) => {
+    if (req.actor.id !== req.user.id) return res.json({ level: null });
+    res.json({ level: await levels.forOwner(req.actor) });
+  });
 
   router.patch('/', write.middleware, async (req, res) => {
     const name = parseText(asObject(req.body).name, 'Nome');
@@ -44,7 +52,7 @@ export function createProfileRouter({ service, limits = {} }) {
     res.status(204).end();
   });
 
-  router.stop = () => write.instance.stop();
+  router.stop = () => [write.instance, read.instance].forEach((l) => l.stop());
   return router;
 }
 

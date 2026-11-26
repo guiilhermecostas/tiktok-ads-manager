@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   ACCOUNT_FIELDS, COUNTRIES, FIELDS, OBJECTIVES, STEPS, defaultConfig, fieldsOfStep, findField, getOptions, isRequired, isVisible,
-  applyAccountOverrides, pruneConfig, reconcileConfig, stepOfPath, summarize, validateConfig,
+  GROUP_HELP, SECTION_KEYS, applyAccountOverrides, pruneConfig, reconcileConfig, stepOfPath, summarize, validateConfig,
 } from '../shared/campaign-spec.js';
 import { completeConfig } from './campaign-fixtures.js';
 
@@ -387,5 +387,28 @@ describe('grupo de anúncios: meta, pixel e evento de conversão ficam JUNTOS', 
 
   it('há ajuda curta e clara nos três campos', () => {
     for (const key of ['optimizationGoal', 'pixelId', 'optimizationEvent']) assert.ok(findField('adGroup', key).help.length > 20, key);
+  });
+});
+
+describe('Textos de ajuda do assistente de campanha (cada etapa simples e explicada)', () => {
+  it('toda etapa tem uma frase simples dizendo o que fazer ali', () => {
+    for (const step of STEPS) assert.ok(step.description.length >= 30 && step.description.length <= 160, `${step.id}: ${step.description}`);
+  });
+
+  it('todo bloco do formulário tem uma explicação curta e nenhuma explicação sobra sem uso', () => {
+    const used = new Set(SECTION_KEYS.flatMap((section) => FIELDS[section].filter((f) => f.type !== 'objective').map((f) => f.group ?? f.label)));
+    for (const group of used) assert.ok(GROUP_HELP[group], `bloco sem explicação: ${group}`);
+    for (const group of Object.keys(GROUP_HELP)) assert.ok(used.has(group), `explicação de bloco que não existe: ${group}`);
+    for (const [group, text] of Object.entries(GROUP_HELP)) assert.ok(text.length >= 15 && text.length <= 200, `${group}: ${text.length} caracteres`);
+    assert.ok(Object.isFrozen(GROUP_HELP));
+  });
+
+  it('os campos que mais confundem têm dica própria (texto, nunca HTML)', () => {
+    const labelsWithoutHelp = ['Nome da campanha', 'Países', 'Estratégia de lance', 'Texto do anúncio', 'URL de destino', 'Tipo de orçamento', 'Posicionamentos'];
+    for (const label of labelsWithoutHelp) {
+      const field = SECTION_KEYS.flatMap((s) => FIELDS[s]).find((f) => f.label === label);
+      assert.ok(field?.help, `${label} sem dica`);
+    }
+    for (const field of SECTION_KEYS.flatMap((s) => FIELDS[s])) if (field.help) assert.doesNotMatch(field.help, /[<>]/, field.key);
   });
 });

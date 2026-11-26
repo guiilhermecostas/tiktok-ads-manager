@@ -779,6 +779,30 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['catalog_hidden'], revoke: ['catalog_hidden'], identity: [] })}
     `,
   },
+  {
+    version: 25,
+    description: 'Registro de atividades da equipe (quem fez o quê e quando); só se acrescenta, nunca se altera',
+    sql: `
+      -- Cada linha é uma ação feita dentro do espaço de trabalho de um dono (workspace_id). O nome de quem fez fica COPIADO na linha: se o colaborador for
+      -- removido (a conta dele é apagada), o registro continua mostrando quem foi (actor_id vira nulo). Os detalhes são só os campos permitidos pela aplicação
+      -- (nunca token, senha nem textos longos). O código só INSERE e LÊ: não há rota para alterar uma linha (apenas a limpeza dos registros com mais de um ano).
+      CREATE TABLE workspace_activity (
+        id             BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        workspace_id   INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        actor_id       INTEGER     REFERENCES users(id) ON DELETE SET NULL,
+        actor_name     TEXT        NOT NULL CHECK (char_length(actor_name) BETWEEN 1 AND 200),
+        actor_is_owner BOOLEAN     NOT NULL,
+        action         TEXT        NOT NULL CHECK (action ~ '^[a-z_]+[.][a-z_]+$' AND char_length(action) <= 40),
+        target_name    TEXT        CHECK (target_name IS NULL OR char_length(target_name) <= 200),
+        details        JSONB       NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(details) = 'object' AND octet_length(details::text) <= 4000),
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX idx_workspace_activity_feed ON workspace_activity (workspace_id, created_at DESC, id DESC);
+      CREATE INDEX idx_workspace_activity_actor ON workspace_activity (workspace_id, actor_id, created_at DESC);
+
+      ${protectTables({ rls: ['workspace_activity'], revoke: ['workspace_activity'], identity: ['workspace_activity'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

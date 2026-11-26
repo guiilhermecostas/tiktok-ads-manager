@@ -114,12 +114,34 @@ const WEB_LIKE = ['TRAFFIC', 'WEB_CONVERSIONS', 'LEAD_GENERATION', 'PRODUCT_SALE
 // Etapas do assistente
 // ---------------------------------------------------------------------------
 export const STEPS = [
-  { id: 'objective', title: 'Objetivo', description: 'Escolha o que você quer alcançar.' },
-  { id: 'campaign', title: 'Campanha', description: 'Nome e orçamento no nível da campanha.' },
-  { id: 'adGroup', title: 'Grupo de anúncios', description: 'Público, posicionamentos, orçamento, agenda e lances.' },
-  { id: 'ad', title: 'Anúncio', description: 'Identidade, criativo, texto e destino.' },
-  { id: 'review', title: 'Revisão e publicação', description: 'Confira tudo e escolha em quais contas de anúncio publicar.' },
+  { id: 'objective', title: 'Objetivo', description: 'Escolha o que você quer que as pessoas façam. Em dúvida, “Conversões no site” serve para vender.' },
+  { id: 'campaign', title: 'Campanha', description: 'Dê um nome à campanha. Se quiser, já limite quanto ela pode gastar.' },
+  { id: 'adGroup', title: 'Grupo de anúncios', description: 'Quem vai ver, onde, por quanto tempo e quanto você paga. Cada bloco abaixo explica o que fazer.' },
+  { id: 'ad', title: 'Anúncio', description: 'O anúncio em si: quem assina, o vídeo, o texto e para onde a pessoa vai ao clicar.' },
+  { id: 'review', title: 'Revisão e publicação', description: 'Confira o resumo e escolha em quais contas de anúncio publicar. Nada vai ao ar antes de você confirmar.' },
 ];
+
+/** Uma frase simples sobre cada bloco do formulário (aparece sob o título do bloco). */
+export const GROUP_HELP = Object.freeze({
+  Identificação: 'Só um nome para você se organizar.',
+  Orçamento: 'Quanto você aceita gastar. Pode deixar sem limite aqui e definir no grupo de anúncios.',
+  Conformidade: 'Só marque se o seu anúncio se encaixa: o TikTok tem regras extras para esses assuntos.',
+  Aplicativo: 'Dados do aplicativo que você quer promover.',
+  Catálogo: 'De qual catálogo vêm os produtos que serão mostrados.',
+  Leads: 'Como você quer receber os contatos.',
+  'Meta e conversão': 'O que o TikTok deve buscar: mais cliques, compras, cadastros… Ele mostra o anúncio para quem tem mais chance de fazer isso.',
+  Posicionamentos: 'Em quais telas o anúncio pode aparecer. Se não tiver certeza, deixe automático.',
+  Público: 'Para quem o anúncio será mostrado. Quanto menos filtros, mais pessoas e mais dados para o TikTok aprender.',
+  'Orçamento e agenda': 'Quanto gastar e quando rodar.',
+  'Lance e cobrança': 'Como o TikTok compra a atenção das pessoas. O padrão já funciona bem para começar.',
+  Frequência: 'Evita mostrar o mesmo anúncio vezes demais para a mesma pessoa.',
+  Criativo: 'O vídeo ou as imagens que as pessoas vão ver.',
+  Identidade: 'Quem aparece como autor do anúncio.',
+  'Produtos do catálogo': 'Quais produtos do catálogo entram neste anúncio.',
+  'Texto e chamada': 'A mensagem do anúncio e o botão que convida a pessoa a agir.',
+  Destino: 'Para onde a pessoa vai ao clicar.',
+  Rastreamento: 'Opcional: links para medir o anúncio em ferramentas externas.',
+});
 
 // ---------------------------------------------------------------------------
 // Campos
@@ -138,11 +160,11 @@ export const FIELDS = {
       options: toOptions(OBJECTIVES.map((o) => [o.value, o.label])),
     },
     {
-      key: 'appPromotionType', label: 'Tipo de promoção do app', type: 'enum', step: 'objective', group: 'Aplicativo',
+      key: 'appPromotionType', label: 'Tipo de promoção do app', help: 'Instalações trazem gente nova para o app. Reengajamento chama de volta quem já instalou.', type: 'enum', step: 'objective', group: 'Aplicativo',
       options: [{ value: 'APP_INSTALL', label: 'Novas instalações' }, { value: 'APP_RETARGETING', label: 'Reengajamento de usuários' }],
       showWhen: { 'campaign.objective': ['APP_PROMOTION'] }, requiredWhen: { 'campaign.objective': ['APP_PROMOTION'] },
     },
-    { key: 'name', label: 'Nome da campanha', type: 'string', step: 'campaign', required: true, min: 2, max: 100, placeholder: 'Ex.: Black Friday – Conversões', group: 'Identificação' },
+    { key: 'name', label: 'Nome da campanha', help: 'Só para você se achar depois: o público nunca vê este nome.', type: 'string', step: 'campaign', required: true, min: 2, max: 100, placeholder: 'Ex.: Black Friday – Conversões', group: 'Identificação' },
     {
       key: 'budgetMode', label: 'Orçamento da campanha', type: 'enum', step: 'campaign', group: 'Orçamento', default: 'BUDGET_MODE_INFINITE',
       // Campanha de catálogo: o orçamento da CAMPANHA exige otimização de orçamento (CBO), que o TikTok só libera por allowlist. O orçamento fica no grupo de anúncios.
@@ -155,7 +177,7 @@ export const FIELDS = {
       ],
     },
     {
-      key: 'budget', label: 'Valor do orçamento', type: 'money', step: 'campaign', group: 'Orçamento', min: 1, max: 100_000_000,
+      key: 'budget', label: 'Valor do orçamento', help: 'O máximo que a campanha pode gastar, na moeda da conta de anúncio.', type: 'money', step: 'campaign', group: 'Orçamento', min: 1, max: 100_000_000,
       showWhen: { 'campaign.budgetMode': ['BUDGET_MODE_DAY', 'BUDGET_MODE_TOTAL'] },
       requiredWhen: { 'campaign.budgetMode': ['BUDGET_MODE_DAY', 'BUDGET_MODE_TOTAL'] },
     },
@@ -168,13 +190,13 @@ export const FIELDS = {
   ],
 
   adGroup: [
-    { key: 'name', label: 'Nome do grupo de anúncios', type: 'string', step: 'adGroup', required: true, min: 2, max: 100, group: 'Identificação' },
+    { key: 'name', label: 'Nome do grupo de anúncios', help: 'Um nome curto que lembre o público, ex.: “Brasil · 18 a 34”.', type: 'string', step: 'adGroup', required: true, min: 2, max: 100, group: 'Identificação' },
 
     // Específicos do objetivo
-    { key: 'appPlatform', label: 'Plataforma do app', type: 'enum', step: 'adGroup', group: 'Aplicativo',
+    { key: 'appPlatform', label: 'Plataforma do app', help: 'Em qual loja o seu app está.', type: 'enum', step: 'adGroup', group: 'Aplicativo',
       options: [{ value: 'APP_ANDROID', label: 'Android' }, { value: 'APP_IOS', label: 'iOS' }],
       showWhen: { 'campaign.objective': ['APP_PROMOTION'] }, requiredWhen: { 'campaign.objective': ['APP_PROMOTION'] } },
-    { key: 'appId', perAccount: true, label: 'ID do app', type: 'string', step: 'adGroup', group: 'Aplicativo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+    { key: 'appId', perAccount: true, label: 'ID do app', help: 'O número do app no TikTok (aparece em Ativos → Eventos).', type: 'string', step: 'adGroup', group: 'Aplicativo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': ['APP_PROMOTION'] }, requiredWhen: { 'campaign.objective': ['APP_PROMOTION'] } },
     { key: 'catalogId', perAccount: true, label: 'ID do catálogo', type: 'string', step: 'adGroup', group: 'Catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': CATALOG }, requiredWhen: { 'campaign.objective': CATALOG },
@@ -182,10 +204,10 @@ export const FIELDS = {
     { key: 'catalogBcId', perAccount: true, label: 'ID da Business Center dona do catálogo', type: 'string', step: 'adGroup', group: 'Catálogo', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': CATALOG }, requiredWhen: { 'campaign.objective': CATALOG },
       help: 'O catálogo é um ativo de uma Business Center; o TikTok exige o ID dela (catalog_authorized_bc_id).' },
-    { key: 'leadDestination', label: 'Destino dos leads', type: 'enum', step: 'adGroup', group: 'Leads', default: 'WEBSITE',
+    { key: 'leadDestination', label: 'Destino dos leads', help: 'Onde a pessoa deixa o contato: no próprio TikTok (mais fácil) ou no seu site.', type: 'enum', step: 'adGroup', group: 'Leads', default: 'WEBSITE',
       options: [{ value: 'INSTANT_FORM', label: 'Formulário instantâneo do TikTok' }, { value: 'WEBSITE', label: 'Site' }],
       showWhen: { 'campaign.objective': ['LEAD_GENERATION'] } },
-    { key: 'leadFormId', perAccount: true, label: 'ID da página/formulário instantâneo', type: 'string', step: 'adGroup', group: 'Leads', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
+    { key: 'leadFormId', perAccount: true, label: 'ID da página/formulário instantâneo', help: 'O número do formulário que você criou no TikTok.', type: 'string', step: 'adGroup', group: 'Leads', pattern: ID_PATTERN, patternMessage: 'Use apenas números.', max: 24,
       showWhen: { 'campaign.objective': ['LEAD_GENERATION'], 'adGroup.leadDestination': ['INSTANT_FORM'] },
       requiredWhen: { 'campaign.objective': ['LEAD_GENERATION'], 'adGroup.leadDestination': ['INSTANT_FORM'] } },
 
@@ -207,18 +229,18 @@ export const FIELDS = {
       requiredWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'], 'adGroup.optimizationGoal': CONVERSION_GOALS } },
 
     // Posicionamentos
-    { key: 'placementType', label: 'Posicionamentos', type: 'enum', step: 'adGroup', group: 'Posicionamentos', default: 'PLACEMENT_TYPE_AUTOMATIC',
+    { key: 'placementType', label: 'Posicionamentos', help: 'Automático deixa o TikTok escolher onde o anúncio rende mais. É o jeito mais simples.', type: 'enum', step: 'adGroup', group: 'Posicionamentos', default: 'PLACEMENT_TYPE_AUTOMATIC',
       options: [{ value: 'PLACEMENT_TYPE_AUTOMATIC', label: 'Automáticos (recomendado)' }, { value: 'PLACEMENT_TYPE_NORMAL', label: 'Selecionar manualmente' }] },
-    { key: 'placements', label: 'Onde exibir', type: 'enumList', step: 'adGroup', group: 'Posicionamentos', maxItems: 5,
+    { key: 'placements', label: 'Onde exibir', help: 'Marque onde o anúncio pode aparecer.', type: 'enumList', step: 'adGroup', group: 'Posicionamentos', maxItems: 5,
       options: [{ value: 'PLACEMENT_TIKTOK', label: 'TikTok' }, { value: 'PLACEMENT_PANGLE', label: 'Pangle (rede de audiência)' }],
       showWhen: { 'adGroup.placementType': ['PLACEMENT_TYPE_NORMAL'] }, requiredWhen: { 'adGroup.placementType': ['PLACEMENT_TYPE_NORMAL'] } },
-    { key: 'commentDisabled', label: 'Desativar comentários', type: 'bool', step: 'adGroup', group: 'Posicionamentos' },
-    { key: 'videoDownloadDisabled', label: 'Impedir download do vídeo', type: 'bool', step: 'adGroup', group: 'Posicionamentos' },
+    { key: 'commentDisabled', label: 'Desativar comentários', help: 'Marque se não quer que ninguém comente no anúncio.', type: 'bool', step: 'adGroup', group: 'Posicionamentos' },
+    { key: 'videoDownloadDisabled', label: 'Impedir download do vídeo', help: 'Marque para ninguém baixar o seu vídeo.', type: 'bool', step: 'adGroup', group: 'Posicionamentos' },
 
     // Público
-    { key: 'locations', label: 'Países', type: 'enumList', step: 'adGroup', group: 'Público', required: true, maxItems: 20,
+    { key: 'locations', label: 'Países', help: 'Onde o anúncio será mostrado. Escolha só os países onde você vende.', type: 'enumList', step: 'adGroup', group: 'Público', required: true, maxItems: 20,
       options: COUNTRIES.map(({ value, label }) => ({ value, label })) },
-    { key: 'gender', label: 'Gênero', type: 'enum', step: 'adGroup', group: 'Público', default: 'GENDER_UNLIMITED',
+    { key: 'gender', label: 'Gênero', help: 'Para quem mostrar. “Todos” é a opção mais simples.', type: 'enum', step: 'adGroup', group: 'Público', default: 'GENDER_UNLIMITED',
       options: [{ value: 'GENDER_UNLIMITED', label: 'Todos' }, { value: 'GENDER_MALE', label: 'Masculino' }, { value: 'GENDER_FEMALE', label: 'Feminino' }] },
     { key: 'ageGroups', label: 'Faixas etárias', type: 'enumList', step: 'adGroup', group: 'Público', maxItems: 6, help: 'Vazio = todas as idades.', options: toOptions(AGE_GROUPS) },
     { key: 'languages', label: 'Idiomas', type: 'enumList', step: 'adGroup', group: 'Público', maxItems: 14, help: 'Vazio = todos os idiomas.', options: toOptions(LANGUAGES) },
@@ -230,45 +252,45 @@ export const FIELDS = {
       help: 'Um ID numérico por linha (públicos criados no TikTok).' },
 
     // Orçamento e agenda
-    { key: 'budgetMode', label: 'Tipo de orçamento', type: 'enum', step: 'adGroup', group: 'Orçamento e agenda', default: 'BUDGET_MODE_DAY',
+    { key: 'budgetMode', label: 'Tipo de orçamento', help: 'Diário: gasta até esse valor por dia. Total: esse valor para toda a duração do grupo.', type: 'enum', step: 'adGroup', group: 'Orçamento e agenda', default: 'BUDGET_MODE_DAY',
       options: [{ value: 'BUDGET_MODE_DAY', label: 'Diário' }, { value: 'BUDGET_MODE_TOTAL', label: 'Total (vitalício)' }],
       showWhen: { 'campaign.budgetMode': ['BUDGET_MODE_INFINITE'] } },
-    { key: 'budget', label: 'Valor do orçamento', type: 'money', step: 'adGroup', group: 'Orçamento e agenda', min: 1, max: 100_000_000,
+    { key: 'budget', label: 'Valor do orçamento', help: 'Quanto você aceita gastar. Comece pequeno e aumente o que der resultado.', type: 'money', step: 'adGroup', group: 'Orçamento e agenda', min: 1, max: 100_000_000,
       showWhen: { 'campaign.budgetMode': ['BUDGET_MODE_INFINITE'] }, requiredWhen: { 'campaign.budgetMode': ['BUDGET_MODE_INFINITE'] } },
-    { key: 'scheduleType', label: 'Agenda', type: 'enum', step: 'adGroup', group: 'Orçamento e agenda', default: 'SCHEDULE_FROM_NOW',
+    { key: 'scheduleType', label: 'Agenda', help: 'Quase sempre “Começar imediatamente”. Só marque datas se a campanha tem dia para acabar.', type: 'enum', step: 'adGroup', group: 'Orçamento e agenda', default: 'SCHEDULE_FROM_NOW',
       options: [{ value: 'SCHEDULE_FROM_NOW', label: 'Começar imediatamente, sem data final' }, { value: 'SCHEDULE_START_END', label: 'Definir início e fim' }] },
     { key: 'scheduleStart', label: 'Início', type: 'datetime', step: 'adGroup', group: 'Orçamento e agenda',
       showWhen: { 'adGroup.scheduleType': ['SCHEDULE_START_END'] }, requiredWhen: { 'adGroup.scheduleType': ['SCHEDULE_START_END'] },
       help: 'No fuso horário da conta de anúncio.' },
-    { key: 'scheduleEnd', label: 'Fim', type: 'datetime', step: 'adGroup', group: 'Orçamento e agenda',
+    { key: 'scheduleEnd', label: 'Fim', help: 'Depois desta data o anúncio para sozinho.', type: 'datetime', step: 'adGroup', group: 'Orçamento e agenda',
       showWhen: { 'adGroup.scheduleType': ['SCHEDULE_START_END'] }, requiredWhen: { 'adGroup.scheduleType': ['SCHEDULE_START_END'] } },
 
     // Lance e cobrança
-    { key: 'billingEvent', label: 'Evento de cobrança', type: 'enum', step: 'adGroup', group: 'Lance e cobrança', required: true,
+    { key: 'billingEvent', label: 'Evento de cobrança', help: 'Quando o TikTok cobra você. Na dúvida, fique com a opção sugerida.', type: 'enum', step: 'adGroup', group: 'Lance e cobrança', required: true,
       optionsBy: { path: 'adGroup.optimizationGoal', map: optionsMap(BILLING_BY_GOAL) } },
-    { key: 'bidType', label: 'Estratégia de lance', type: 'enum', step: 'adGroup', group: 'Lance e cobrança', default: 'BID_TYPE_NO_BID',
+    { key: 'bidType', label: 'Estratégia de lance', help: 'Menor custo: o TikTok busca o melhor preço sozinho (mais simples). Limite de custo: você define um teto.', type: 'enum', step: 'adGroup', group: 'Lance e cobrança', default: 'BID_TYPE_NO_BID',
       options: [{ value: 'BID_TYPE_NO_BID', label: 'Menor custo (automático)' }, { value: 'BID_TYPE_CUSTOM', label: 'Limite de custo / lance manual' }] },
-    { key: 'bidPrice', label: 'Valor do lance', type: 'money', step: 'adGroup', group: 'Lance e cobrança', min: 1, max: 100_000_000,
+    { key: 'bidPrice', label: 'Valor do lance', help: 'O máximo que você aceita pagar por resultado.', type: 'money', step: 'adGroup', group: 'Lance e cobrança', min: 1, max: 100_000_000,
       showWhen: { 'adGroup.bidType': ['BID_TYPE_CUSTOM'] }, requiredWhen: { 'adGroup.bidType': ['BID_TYPE_CUSTOM'] } },
-    { key: 'pacing', label: 'Ritmo de entrega', type: 'enum', step: 'adGroup', group: 'Lance e cobrança', default: 'PACING_MODE_SMOOTH',
+    { key: 'pacing', label: 'Ritmo de entrega', help: 'Padrão gasta o orçamento com calma ao longo do dia. Acelerado gasta mais rápido.', type: 'enum', step: 'adGroup', group: 'Lance e cobrança', default: 'PACING_MODE_SMOOTH',
       options: [{ value: 'PACING_MODE_SMOOTH', label: 'Padrão (distribuído ao longo do dia)' }, { value: 'PACING_MODE_FAST', label: 'Acelerado (gasta mais rápido)' }] },
-    { key: 'frequency', label: 'Limite de frequência (impressões por pessoa)', type: 'int', step: 'adGroup', group: 'Frequência', min: 1, max: 10,
+    { key: 'frequency', label: 'Limite de frequência (impressões por pessoa)', help: 'Quantas vezes, no máximo, a mesma pessoa vê o anúncio.', type: 'int', step: 'adGroup', group: 'Frequência', min: 1, max: 10,
       showWhen: { 'campaign.objective': ['REACH', 'VIDEO_VIEWS'] } },
-    { key: 'frequencyDays', label: 'Em quantos dias', type: 'int', step: 'adGroup', group: 'Frequência', min: 1, max: 7,
+    { key: 'frequencyDays', label: 'Em quantos dias', help: 'O período em que esse limite vale.', type: 'int', step: 'adGroup', group: 'Frequência', min: 1, max: 7,
       showWhen: { 'campaign.objective': ['REACH', 'VIDEO_VIEWS'] } },
   ],
 
   ad: [
-    { key: 'name', label: 'Nome do anúncio', type: 'string', step: 'ad', required: true, min: 2, max: 100, group: 'Identificação' },
-    { key: 'format', label: 'Formato', type: 'enum', step: 'ad', group: 'Criativo', default: 'SINGLE_VIDEO',
+    { key: 'name', label: 'Nome do anúncio', help: 'Só para você identificar este anúncio no Gerenciador.', type: 'string', step: 'ad', required: true, min: 2, max: 100, group: 'Identificação' },
+    { key: 'format', label: 'Formato', help: 'Vídeo é o mais comum e costuma render mais. Imagens servem para anúncios simples.', type: 'enum', step: 'ad', group: 'Criativo', default: 'SINGLE_VIDEO',
       optionsBy: { path: 'campaign.objective', map: AD_FORMATS_BY_OBJECTIVE } },
-    { key: 'identityType', perAccount: true, label: 'Tipo de identidade', type: 'enum', step: 'ad', group: 'Identidade', default: 'CUSTOMIZED_USER', required: true,
+    { key: 'identityType', perAccount: true, label: 'Tipo de identidade', help: 'Quem aparece como autor do anúncio. “Identidade personalizada” é a mais simples: só nome e foto.', type: 'enum', step: 'ad', group: 'Identidade', default: 'CUSTOMIZED_USER', required: true,
       options: [
         { value: 'CUSTOMIZED_USER', label: 'Identidade personalizada' }, { value: 'AUTH_CODE', label: 'Conta do TikTok (código de autorização)' },
         { value: 'TT_USER', label: 'Conta do TikTok vinculada' }, { value: 'BC_AUTH_TT', label: 'Conta do TikTok da Business Center' },
       ] },
-    { key: 'identityId', perAccount: true, label: 'ID da identidade', type: 'string', step: 'ad', group: 'Identidade', required: true, pattern: MEDIA_ID_PATTERN, patternMessage: 'Use letras, números, _ ou - (4 a 100 caracteres).', max: 100 },
-    { key: 'displayName', label: 'Nome exibido (identidade personalizada)', type: 'string', step: 'ad', group: 'Identidade', min: 1, max: 40, showWhen: { 'ad.identityType': ['CUSTOMIZED_USER'] } },
+    { key: 'identityId', perAccount: true, label: 'ID da identidade', help: 'O número da conta do TikTok que vai assinar o anúncio.', type: 'string', step: 'ad', group: 'Identidade', required: true, pattern: MEDIA_ID_PATTERN, patternMessage: 'Use letras, números, _ ou - (4 a 100 caracteres).', max: 100 },
+    { key: 'displayName', label: 'Nome exibido (identidade personalizada)', help: 'O nome que as pessoas veem acima do vídeo, ex.: o nome da sua marca.', type: 'string', step: 'ad', group: 'Identidade', min: 1, max: 40, showWhen: { 'ad.identityType': ['CUSTOMIZED_USER'] } },
     // Criativos vêm da BIBLIOTECA do usuário (ids inteiros). No momento da publicação o servidor envia o arquivo ao TikTok
     // (ou reaproveita o envio anterior para a mesma conta de anúncio) e usa o ID que o TikTok devolver.
     { key: 'videoCreativeId', label: 'Vídeo', type: 'creative', creativeKind: 'video', step: 'ad', group: 'Criativo',
@@ -289,18 +311,18 @@ export const FIELDS = {
     { key: 'imageCreativeIds', label: 'Imagens', type: 'creativeList', creativeKind: 'image', step: 'ad', group: 'Criativo', maxItems: 10,
       showWhen: { 'ad.format': ['SINGLE_IMAGE', 'CAROUSEL_ADS'] }, requiredWhen: { 'ad.format': ['SINGLE_IMAGE', 'CAROUSEL_ADS'] },
       help: 'Imagem única: 1 imagem. Carrossel: de 2 a 10, na ordem em que serão exibidas.' },
-    { key: 'text', label: 'Texto do anúncio', type: 'string', step: 'ad', group: 'Texto e chamada', required: true, min: 1, max: 100, multiline: true },
+    { key: 'text', label: 'Texto do anúncio', help: 'O texto que aparece junto do vídeo. Seja direto: o que a pessoa ganha ao clicar.', type: 'string', step: 'ad', group: 'Texto e chamada', required: true, min: 1, max: 100, multiline: true },
     { key: 'callToAction', label: 'Botão de chamada para ação', type: 'enum', step: 'ad', group: 'Texto e chamada', options: toOptions(CALLS_TO_ACTION), help: 'Vazio = sem botão (em campanha de catálogo o botão é obrigatório).',
       requiredWhen: { 'campaign.objective': CATALOG } },
-    { key: 'landingPageUrl', label: 'URL de destino', type: 'url', step: 'ad', group: 'Destino', max: 2000, urlSchemes: ['https:', 'http:'],
+    { key: 'landingPageUrl', label: 'URL de destino', help: 'Para onde a pessoa vai ao clicar. Precisa começar com https://.', type: 'url', step: 'ad', group: 'Destino', max: 2000, urlSchemes: ['https:', 'http:'],
       showWhen: { 'campaign.objective': WEB_LIKE },
       requiredWhen: { 'campaign.objective': ['TRAFFIC', 'WEB_CONVERSIONS', ...CATALOG] } },
-    { key: 'deeplinkUrl', label: 'Deeplink do app', type: 'url', step: 'ad', group: 'Destino', max: 2000, urlSchemes: ['https:', 'http:', '*'],
+    { key: 'deeplinkUrl', label: 'Deeplink do app', help: 'Abre uma tela específica dentro do seu app. Opcional.', type: 'url', step: 'ad', group: 'Destino', max: 2000, urlSchemes: ['https:', 'http:', '*'],
       showWhen: { 'campaign.objective': ['APP_PROMOTION', 'TRAFFIC'] } },
     { key: 'utmParams', label: 'Parâmetros UTM', type: 'string', step: 'ad', group: 'Destino', max: 300, pattern: /^[\w\-.~%=&+]*$/, patternMessage: 'Use o formato utm_source=tiktok&utm_medium=cpc (sem espaços).',
       showWhen: { 'campaign.objective': WEB_LIKE }, help: 'Adicionados ao final da URL de destino.' },
-    { key: 'impressionTrackingUrl', label: 'URL de rastreamento de impressões', type: 'url', step: 'ad', group: 'Rastreamento', max: 2000, urlSchemes: ['https:'] },
-    { key: 'clickTrackingUrl', label: 'URL de rastreamento de cliques', type: 'url', step: 'ad', group: 'Rastreamento', max: 2000, urlSchemes: ['https:'] },
+    { key: 'impressionTrackingUrl', label: 'URL de rastreamento de impressões', help: 'Opcional: link de uma ferramenta externa para contar as exibições.', type: 'url', step: 'ad', group: 'Rastreamento', max: 2000, urlSchemes: ['https:'] },
+    { key: 'clickTrackingUrl', label: 'URL de rastreamento de cliques', help: 'Opcional: link de uma ferramenta externa para contar os cliques.', type: 'url', step: 'ad', group: 'Rastreamento', max: 2000, urlSchemes: ['https:'] },
   ],
 };
 

@@ -16,7 +16,7 @@ export const newInviteToken = () => randomBytes(32).toString('base64url'); // 43
  * Colaboradores: o dono convida pessoas por e-mail e escolhe as áreas. Cada colaborador entra com a PRÓPRIA senha
  * (ninguém compartilha login) e trabalha dentro do espaço do dono. `actor` é sempre o dono logado: { id, name, email }.
  */
-export function createTeamService({ repo, mailer, sessions, config, log = console }) {
+export function createTeamService({ repo, mailer, sessions, activity = null, config, log = console }) {
   const link = (token) => `${config.mail.appUrl}/invite#${token}`;
 
   async function sendInvite(owner, invite, token) {
@@ -94,7 +94,10 @@ export function createTeamService({ repo, mailer, sessions, config, log = consol
       const result = await repo.acceptInvite(tokenHash, { name: name ?? invite.name, passwordHash: await hashPassword(password) });
       if (result.status === 'invalid') throw notFound(INVALID_INVITE);
       if (result.status === 'email_taken') throw new HttpError(409, 'Este e-mail já tem uma conta no sistema. Entre com ela ou peça outro convite com outro e-mail.', 'email_taken');
-      return { session: await sessions.create(result.userId) };
+      const session = await sessions.create(result.userId);
+      // Entrou para a equipe: fica no registro de atividades do dono (nunca atrapalha o aceite se não conseguir registrar).
+      await activity?.record({ workspaceId: result.ownerId, actor: { id: result.userId, name: name ?? invite.name }, action: 'team.member_join', targetName: name ?? invite.name, details: { email: invite.email } });
+      return { session };
     },
   };
 }

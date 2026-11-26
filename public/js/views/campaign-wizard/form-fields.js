@@ -1,4 +1,4 @@
-import { ACCOUNT_FIELDS, OBJECTIVES, fieldsOfStep, findField, getOptions, getPath, isRequired, isVisible } from '/shared/campaign-spec.js';
+import { ACCOUNT_FIELDS, GROUP_HELP, OBJECTIVES, fieldsOfStep, findField, getOptions, getPath, isRequired, isVisible } from '/shared/campaign-spec.js';
 import { h } from '../../dom.js';
 import { toast } from '../../ui.js';
 import { centsToInput, parseMoneyToCents } from '../../format.js';
@@ -37,6 +37,7 @@ export function renderStepForm(stepId, ctx) {
         'section',
         { class: 'form-section' },
         group.title ? h('h3', { class: 'form-section__title' }, group.title) : null,
+        GROUP_HELP[group.title] ? h('p', { class: 'form-section__help' }, GROUP_HELP[group.title]) : null,
         h('div', { class: 'form-grid' }, group.entries.map((entry) => renderField(entry, ctx))),
       ),
     ),

@@ -9,6 +9,11 @@ import { createBillingRepository } from './modules/billing/billing.repository.js
 import { createAdminBillingRouter, createBillingRouter } from './modules/billing/billing.routes.js';
 import { createBillingService } from './modules/billing/billing.service.js';
 import { createImpersonationService } from './modules/admin/impersonation.service.js';
+import { createActivityLookups } from './modules/activity/activity.lookups.js';
+import { createActivityRepository } from './modules/activity/activity.repository.js';
+import { createActivityRules } from './modules/activity/activity.rules.js';
+import { createActivityService } from './modules/activity/activity.service.js';
+import { createActivityTrail } from './modules/activity/activity.trail.js';
 import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createAuthService } from './modules/auth/auth.service.js';
 import { createRegistrationsRepository } from './modules/auth/registrations.repository.js';
@@ -20,6 +25,7 @@ import { createCampaignsRouter } from './modules/campaigns/campaigns.routes.js';
 import { createAvatarProcessor } from './modules/profile/avatar-processor.js';
 import { createAvatarsRepository } from './modules/profile/avatars.repository.js';
 import { createAvatarsRouter, createProfileRouter } from './modules/profile/profile.routes.js';
+import { createLevelService } from './modules/profile/level.service.js';
 import { createProfileService } from './modules/profile/profile.service.js';
 import { createFilesRepository } from './modules/files/files.repository.js';
 import { createFilesRouter } from './modules/files/files.routes.js';
@@ -90,7 +96,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Sem TOKEN_ENCRYPTION_KEY a chave é nula: o serviço recusa cadastros (ensureConfigured) e nada é gravado.
   const businessCenters = createBusinessCentersRepository(db, { encryptionKey: config.tiktok.encryptionKey });
   // Proxies do usuário: com uma ativa, TODAS as chamadas ao TikTok feitas com as BCs dele saem por ela.
-  const proxiesService = createProxiesService({ repo: createProxiesRepository(db, { encryptionKey: config.tiktok.encryptionKey }), config, fetchFn: fetchFn ?? fetch, log });
+  const proxiesRepo = createProxiesRepository(db, { encryptionKey: config.tiktok.encryptionKey });
+  const proxiesService = createProxiesService({ repo: proxiesRepo, config, fetchFn: fetchFn ?? fetch, log });
   // Ganchos das assinaturas (ligados mais abaixo): recusar BC bloqueada por débito e guardar o gasto/bloquear ao remover uma BC.
   const tiktokGuards = {};
   const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, guards: tiktokGuards, config, log });
@@ -130,14 +137,18 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
     intervalMs: hooksIntervalMs,
   });
 
-  const teamService = createTeamService({ repo: createTeamRepository(db), mailer: mail, sessions, config, log });
+  // Registro de atividades da equipe (quem fez o quê e quando). Só o dono lê; as ações entram por um observador central (activity.trail) e por dois pontos explícitos (login e entrada na equipe).
+  const activity = createActivityService({ repo: createActivityRepository(db), log, now: clock });
+  const teamRepo = createTeamRepository(db);
+  const teamService = createTeamService({ repo: teamRepo, mailer: mail, sessions, activity, config, log });
 
   // Foto de perfil: o arquivo enviado é sempre recodificado no servidor (JPEG 256x256, sem metadados). Mesmo FFmpeg dos criativos.
   const avatarsProcessor = avatarProcessor ?? createAvatarProcessor({ ffmpegPath: cleaning.ffmpegPath ?? null, tmpDir: creativeStorage.tmpDir });
   const profileService = createProfileService({ avatars: createAvatarsRepository(db), users, storage: creativeStorage, processor: avatarsProcessor });
 
   // Anexos da conta (ex.: logins para a equipe): criptografados em repouso; desligados sem TOKEN_ENCRYPTION_KEY.
-  const filesService = createFilesService({ repo: createFilesRepository(db), encryptionKey: config.tiktok.encryptionKey });
+  const filesRepo = createFilesRepository(db);
+  const filesService = createFilesService({ repo: filesRepo, encryptionKey: config.tiktok.encryptionKey });
 
   const app = express();
   app.set('trust proxy', config.trustProxy ?? 0); // 0: ignora X-Forwarded-*; N: confia nos N proxies à frente (IP real do cliente)
@@ -192,7 +203,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
 
   api.use(loadSession({ sessions, config }));
 
-  const authRouter = createAuthRouter({ authService, sessions, impersonation, config, limits });
+  const authRouter = createAuthRouter({ authService, sessions, impersonation, activity, config, limits });
   api.use('/auth', authRouter);
 
   // Retorno da autorização do TikTok: público (vem de outro site/aba), protegido pelo `state` de uso único.
@@ -209,6 +220,9 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const protectedApi = express.Router();
   // Um admin que está vendo a conta de outra pessoa só consulta: qualquer alteração (POST/PATCH/PUT/DELETE) é barrada aqui, antes de qualquer módulo.
   protectedApi.use(requireAuth, requireApproved, readOnlyWhenImpersonating, resolveWorkspace);
+  // Registro de atividades: observa as ações que ALTERAM algo e as anota com quem fez (a pessoa), em qual espaço e quando. Não muda nenhuma resposta.
+  const activityLookups = createActivityLookups({ campaigns, creatives: creativesRepo, businessCenters, proxies: proxiesRepo, files: filesRepo, team: teamRepo });
+  protectedApi.use(createActivityTrail({ activity, rules: createActivityRules(), lookups: activityLookups, log }));
   const campaignsRouter = createCampaignsRouter({ campaigns, tiktok: tiktokService, creatives: creativesService, limits });
   protectedApi.use('/campaigns', requireArea('campaigns'), campaignsRouter);
   const proxiesRouter = createProxiesRouter({ service: proxiesService, limits });
@@ -234,12 +248,13 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const filesRouter = createFilesRouter({ service: filesService, limits });
   protectedApi.use('/files', noImpersonation, requireArea('accounts'), filesRouter); // arquivos com logins: nem leitura para o admin na conta de outra pessoa
   // Perfil (nome e foto) é da PESSOA logada, qualquer que seja o espaço onde ela trabalha: sem exigir área.
-  const profileRouter = createProfileRouter({ service: profileService, limits });
+  const levelService = createLevelService({ spend: (actor) => balanceActivity.spend(actor), billing: billingService, log });
+  const profileRouter = createProfileRouter({ service: profileService, levels: levelService, limits });
   protectedApi.use('/profile', profileRouter);
   const avatarsRouter = createAvatarsRouter({ service: profileService, limits });
   protectedApi.use('/avatars', avatarsRouter);
   // Equipe e administração: nunca para colaboradores (a administração usa a conta real da pessoa, não o espaço).
-  const teamRouter = createTeamRouter({ service: teamService, limits });
+  const teamRouter = createTeamRouter({ service: teamService, activity, limits });
   protectedApi.use('/team', requireOwner, teamRouter);
   // O sino é da PESSOA logada (não do espaço de trabalho): qualquer conta aprovada, inclusive colaboradores.
   const notificationsRouter = createNotificationsRouter({ repo: notifications, limits });
@@ -288,6 +303,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
     creativeCleaner,
     hourly: hourlyService,
     billing: billingService,
+    activity,
     hooks: hooksService,
     close: () => {
       hourlyService.stop();

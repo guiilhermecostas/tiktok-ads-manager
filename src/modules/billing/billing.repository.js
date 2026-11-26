@@ -60,6 +60,12 @@ export function createBillingRepository(db) {
       return rows.map((r) => ({ month: r.month, currency: r.currency, spend: r.spend }));
     },
 
+    /** Gasto de toda a vida de uma pessoa, por moeda (o livro permanente não some quando a BC é removida). */
+    async spendTotals(ownerId) {
+      const { rows } = await db.query('SELECT currency, SUM(spend)::float8 AS spend FROM spend_ledger WHERE owner_id = $1 GROUP BY currency ORDER BY currency', [ownerId]);
+      return rows.map((r) => ({ currency: r.currency, spend: r.spend }));
+    },
+
     // ---------- fechamentos ----------
     async listStatements(userId) {
       const { rows } = await db.query(

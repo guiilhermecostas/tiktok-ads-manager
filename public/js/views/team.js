@@ -1,10 +1,13 @@
 import { AREAS, hasFullAccess } from '/shared/permissions.js';
 import { del, get, patch, post } from '../api.js';
 import { h, setChildren } from '../dom.js';
+import { state } from '../state.js';
 import { alertBox, badge, button, confirmDialog, emptyState, openModal, toast, field } from '../ui.js';
 import { createAreaPicker } from './area-picker.js';
 import { avatarEl } from './avatar.js';
 import { pageHeader } from './layout.js';
+import { subTabs, tabIntro } from './subtabs.js';
+import { createActivityPanel } from './team-activity.js';
 
 const AREA_LABEL = Object.fromEntries(AREAS.map((a) => [a.id, a.label]));
 const formatDate = (iso) => new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -18,12 +21,17 @@ function accessBadges(areas) {
 
 /**
  * Colaboradores: o dono convida pessoas por e-mail e escolhe o que cada uma acessa. Cada colaborador entra com o PRÓPRIO
- * e-mail e senha (ninguém compartilha login). Só o dono da conta vê esta tela (o servidor também exige).
+ * e-mail e senha (ninguém compartilha login). Três abas: quem já está no time, convites pendentes e a atividade da equipe (quem fez o quê,
+ * e quando). Só o dono da conta vê esta tela (o servidor também exige).
  */
 export async function teamView() {
   const data = await get('/team');
   const body = h('div');
   let busy = false;
+  let tab = 'members';
+  let activitySignature = data.members.map((m) => m.userId).join(',');
+  let activity = null; // criada na primeira vez que a aba é aberta (e refeita se a equipe mudar)
+  let tabs = null;
 
   async function reload() {
     Object.assign(data, await get('/team'));
@@ -146,46 +154,83 @@ export async function teamView() {
   const person = (p) =>
     h('div', { class: 'team__person' }, avatarEl({ id: p.userId, name: p.name, avatarVersion: p.avatarVersion ?? null }, { size: 'md' }), h('div', null, h('span', { class: 'cell-strong' }, p.name), h('span', { class: 'hub-meta' }, p.email)));
 
-  function draw() {
-    const { members, invites } = data;
-    if (!members.length && !invites.length) {
-      setChildren(body, h('div', { class: 'card' }, emptyState({
-        title: 'Nenhum colaborador ainda',
+  function membersTab() {
+    const { members } = data;
+    if (!members.length) {
+      return h('div', { class: 'card' }, emptyState({
+        title: 'Ninguém no time ainda',
         text: 'Convide alguém pelo e-mail e escolha o que a pessoa pode acessar (criativos, campanhas, relatórios, contas ou tudo). Ela entra com o próprio e-mail e senha: você nunca precisa compartilhar o seu login.',
         action: data.emailEnabled ? button('Convidar colaborador', { variant: 'primary', onClick: inviteForm }) : null,
-      })));
-      return;
+      }));
     }
-    setChildren(
-      body,
-      members.length
-        ? h('div', { class: 'card table-wrap' }, h('table', { class: 'table table--stack' }, head('Colaborador', 'Acesso', 'Desde', 'Ações'), h('tbody', null, members.map((m) =>
-            h('tr', null,
-              h('td', { 'data-label': 'Colaborador' }, person(m)),
-              h('td', { 'data-label': 'Acesso' }, accessBadges(m.areas)),
-              h('td', { class: 'muted', 'data-label': 'Desde' }, formatDate(m.createdAt)),
-              h('td', { 'data-label': 'Ações' }, h('div', { class: 'team__actions' },
-                button('Editar acesso', { small: true, disabled: busy, ariaLabel: `Editar acesso de ${m.name}`, onClick: () => editAccess(m) }),
-                button('Remover', { small: true, variant: 'danger-ghost', disabled: busy, ariaLabel: `Remover ${m.name}`, onClick: () => removeMember(m) }),
-              )),
-            )))))
-        : null,
-      invites.length ? h('h2', { class: 'card__title section-title' }, 'Convites pendentes') : null,
-      invites.length
-        ? h('div', { class: 'card table-wrap' }, h('table', { class: 'table table--stack' }, head('Convidado', 'Acesso', 'Situação', 'Ações'), h('tbody', null, invites.map((i) =>
-            h('tr', null,
-              h('td', { 'data-label': 'Convidado' }, person(i)),
-              h('td', { 'data-label': 'Acesso' }, accessBadges(i.areas)),
-              h('td', { 'data-label': 'Situação' }, expired(i) ? badge('Expirado', 'danger') : badge(`Vale até ${formatDate(i.expiresAt)}`, 'warning')),
-              h('td', { 'data-label': 'Ações' }, h('div', { class: 'team__actions' },
-                button('Reenviar', { small: true, disabled: busy || !data.emailEnabled, ariaLabel: `Reenviar convite para ${i.email}`, onClick: () => run(() => post(`/team/invites/${i.id}/resend`), `Convite reenviado para ${i.email}.`) }),
-                button('Cancelar', { small: true, variant: 'danger-ghost', disabled: busy, ariaLabel: `Cancelar convite de ${i.email}`, onClick: () => cancelInvite(i) }),
-              )),
-            )))))
-        : null,
+    return h(
+      'div',
+      null,
+      tabIntro('Quem já está no time', 'Estas pessoas já entraram. Você escolhe o que cada uma acessa e pode tirar o acesso quando quiser.'),
+      h('div', { class: 'card table-wrap' }, h('table', { class: 'table table--stack' }, head('Colaborador', 'Acesso', 'Desde', 'Ações'), h('tbody', null, members.map((m) =>
+        h('tr', null,
+          h('td', { 'data-label': 'Colaborador' }, person(m)),
+          h('td', { 'data-label': 'Acesso' }, accessBadges(m.areas)),
+          h('td', { class: 'muted', 'data-label': 'Desde' }, formatDate(m.createdAt)),
+          h('td', { 'data-label': 'Ações' }, h('div', { class: 'team__actions' },
+            button('Editar acesso', { small: true, disabled: busy, ariaLabel: `Editar acesso de ${m.name}`, onClick: () => editAccess(m) }),
+            button('Remover', { small: true, variant: 'danger-ghost', disabled: busy, ariaLabel: `Remover ${m.name}`, onClick: () => removeMember(m) }),
+          )),
+        ))))),
     );
   }
 
+  function pendingTab() {
+    const { invites } = data;
+    if (!invites.length) {
+      return h('div', { class: 'card' }, emptyState({
+        title: 'Nenhum convite pendente',
+        text: 'Os convites que você enviar aparecem aqui até a pessoa aceitar. Se o link expirar, é só reenviar.',
+        action: data.emailEnabled ? button('Convidar colaborador', { variant: 'primary', onClick: inviteForm }) : null,
+      }));
+    }
+    return h(
+      'div',
+      null,
+      tabIntro('Esperando para entrar', 'Estas pessoas já receberam o convite por e-mail, mas ainda não criaram a senha.'),
+      h('div', { class: 'card table-wrap' }, h('table', { class: 'table table--stack' }, head('Convidado', 'Acesso', 'Situação', 'Ações'), h('tbody', null, invites.map((i) =>
+        h('tr', null,
+          h('td', { 'data-label': 'Convidado' }, person(i)),
+          h('td', { 'data-label': 'Acesso' }, accessBadges(i.areas)),
+          h('td', { 'data-label': 'Situação' }, expired(i) ? badge('Expirado', 'danger') : badge(`Vale até ${formatDate(i.expiresAt)}`, 'warning')),
+          h('td', { 'data-label': 'Ações' }, h('div', { class: 'team__actions' },
+            button('Reenviar', { small: true, disabled: busy || !data.emailEnabled, ariaLabel: `Reenviar convite para ${i.email}`, onClick: () => run(() => post(`/team/invites/${i.id}/resend`), `Convite reenviado para ${i.email}.`) }),
+            button('Cancelar', { small: true, variant: 'danger-ghost', disabled: busy, ariaLabel: `Cancelar convite de ${i.email}`, onClick: () => cancelInvite(i) }),
+          )),
+        ))))),
+    );
+  }
+
+  function activityTab() {
+    if (!activity) {
+      activity = createActivityPanel({ members: data.members, owner: state.user });
+      activity.load();
+    }
+    return h('div', null, tabIntro('Atividade da equipe', 'Tudo o que a equipe faz na plataforma: quem ativou, pausou e publicou, com qual link, criativo, catálogo ou conta, e a que horas. O registro guarda 1 ano.'), activity.element);
+  }
+
+  function draw() {
+    tabs?.setCount('members', data.members.length);
+    tabs?.setCount('pending', data.invites.length);
+    // A lista da equipe mudou (convite aceito, remoção): o filtro por pessoa da atividade precisa da equipe nova.
+    const signature = data.members.map((m) => m.userId).join(',');
+    if (signature !== activitySignature) activity = null;
+    activitySignature = signature;
+    const views = { members: membersTab, pending: pendingTab, activity: activityTab };
+    setChildren(body, views[tab]());
+  }
+
+  tabs = subTabs({
+    items: [{ id: 'members', label: 'No time', count: data.members.length }, { id: 'pending', label: 'Pendentes', count: data.invites.length }, { id: 'activity', label: 'Atividade' }],
+    active: tab,
+    label: 'Colaboradores',
+    onChange: (id) => { tab = id; draw(); },
+  });
   draw();
   return {
     element: h(
@@ -193,6 +238,7 @@ export async function teamView() {
       null,
       pageHeader('Colaboradores', 'Dê acesso à sua conta para outras pessoas, só ao que cada uma precisa. Cada colaborador entra com o próprio e-mail e senha.', data.emailEnabled ? button('Convidar colaborador', { variant: 'primary', onClick: inviteForm }) : null),
       data.emailEnabled ? null : alertBox('O envio de e-mails não está configurado neste servidor, por isso não é possível convidar agora. Peça ao administrador para configurar o Resend (RESEND_API_KEY e APP_URL).', 'warning'),
+      tabs.element,
       body,
     ),
   };

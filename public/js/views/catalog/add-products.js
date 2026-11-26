@@ -4,6 +4,7 @@ import { h, setChildren } from '../../dom.js';
 import { formatCurrency, formatNumber } from '../../format.js';
 import { alertBox, badge, button, toast } from '../../ui.js';
 import { bulkGenerator } from './bulk-generator.js';
+import { subTabs, tabIntro } from '../subtabs.js';
 import { catalogUrl, refQuery } from './detail.js';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -31,6 +32,9 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
   const queueSlot = h('div');
   const resultSlot = h('div');
   let sending = false;
+  let tabs = null; // sub-abas (criadas no fim)
+  const queueHint = h('p', { class: 'catalog-add__queue-hint', 'aria-live': 'polite' });
+  const goToQueue = () => tabs?.select('queue');
 
   // ---------- CSV ----------
   function downloadTemplate() {
@@ -60,6 +64,7 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
     const bad = parsed.rows.filter((r) => r.errors.length);
     setChildren(csvSlot,
       alertBox(`${formatNumber(parsed.products.length)} ${parsed.products.length === 1 ? 'produto válido foi' : 'produtos válidos foram'} para a lista de envio${bad.length ? `; ${formatNumber(bad.length)} com problema ${bad.length === 1 ? 'ficou' : 'ficaram'} de fora (veja abaixo)` : ''}.`, bad.length ? 'warning' : 'success'),
+      parsed.products.length ? button('Ver lista de envio →', { small: true, variant: 'primary', onClick: goToQueue }) : null,
       parsed.unknownColumns.length ? h('p', { class: 'field__hint' }, `Colunas ignoradas: ${parsed.unknownColumns.join(', ')}.`) : null,
       bad.length ? errorTable(['Linha', 'Problema'], bad.slice(0, 20).map((r) => [String(r.line), r.errors.map((e) => `${PRODUCT_FIELDS.find((f) => f.key === e.path)?.label ?? e.path}: ${e.message}`).join(' · ')])) : null,
       bad.length > 20 ? h('p', { class: 'muted catalog-add__more' }, `… e mais ${bad.length - 20} linhas com problema.`) : null);
@@ -123,8 +128,9 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
   // ---------- lista de envio ----------
   function drawQueue() {
     const products = [...queue.values()];
+    tabs?.setCount('queue', products.length);
+    setChildren(queueHint, products.length ? [`${formatNumber(products.length)} ${products.length === 1 ? 'produto na lista de envio' : 'produtos na lista de envio'}. `, button('Ver lista →', { small: true, onClick: goToQueue })] : null);
     setChildren(queueSlot,
-      h('h3', { class: 'form-section__title' }, `Lista de envio (${formatNumber(products.length)})`),
       products.length
         ? h('div', { class: 'card table-wrap catalog-add__queue' }, h('table', { class: 'table' },
           h('thead', null, h('tr', null, ['SKU', 'Produto', 'Preço', 'Estoque', ''].map((t) => h('th', { scope: 'col' }, t)))),
@@ -132,7 +138,7 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
             h('td', null, h('span', { class: 'cell-strong' }, p.skuId)), h('td', null, p.title), h('td', { class: 'num' }, formatCurrency(p.price, catalog.currency ?? 'USD')), h('td', null, p.availability),
             h('td', null, button('Remover', { small: true, disabled: sending, ariaLabel: `Remover ${p.skuId}`, onClick: () => { queue.delete(p.skuId); drawQueue(); } }))))),
           ))
-        : h('p', { class: 'muted' }, 'Importe uma planilha ou adicione produtos pelo formulário. Eles aparecem aqui antes do envio.'),
+        : h('p', { class: 'muted' }, 'A lista está vazia. Gere, importe ou adicione produtos nas outras abas: eles aparecem aqui antes do envio.'),
       products.length > 100 ? h('p', { class: 'muted catalog-add__more' }, `… e mais ${formatNumber(products.length - 100)} produtos (todos serão enviados).`) : null,
       products.length ? h('div', { class: 'catalog-add__send' },
         button(sending ? 'Enviando…' : `Enviar ${formatNumber(products.length)} ${products.length === 1 ? 'produto' : 'produtos'} ao TikTok`, { variant: 'primary', disabled: sending || !canWrite, onClick: send }),
@@ -157,6 +163,7 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
     if (sending || !queue.size) return;
     sending = true;
     drawQueue();
+    goToQueue(); // o andamento e o resultado do envio aparecem na lista de envio
     const batches = toBatches([...queue.values()]);
     const total = { add: 0, update: 0, errors: 0, warn: 0, pending: 0, problems: [] };
     let sent = 0;
@@ -203,23 +210,39 @@ export function addProductsTab({ catalog, canWrite, onUploaded }) {
   }
 
   const fileInput = h('input', { type: 'file', accept: '.csv,text/csv,text/plain', class: 'catalog-add__file', 'aria-label': 'Escolher planilha CSV', disabled: !canWrite, onChange: (e) => onFile(e.target.files[0], e.target) });
-  setChildren(root,
-    h('div', { class: 'card card--pad catalog-add__intro' },
-      h('p', null, 'Cada produto precisa de SKU, título, descrição, disponibilidade (ou a quantidade em estoque), marca, imagem, condição, preço e página do produto.'),
-      h('p', { class: 'muted' }, 'Quer preço e estoque sempre atualizados sem enviar nada? Use a aba "Sincronização": o TikTok busca o feed da sua loja sozinho. O TikTok guarda só a disponibilidade, não o número do estoque.'),
-      h('p', { class: 'muted' }, 'As imagens devem ser JPG ou PNG com pelo menos 500 × 500 px e abrir sem login (o TikTok as baixa). O mesmo SKU enviado de novo atualiza o produto.')),
-    bulkGenerator({ catalog, disabled: !canWrite, onGenerate: generate }),
-    h('section', { class: 'form-section' },
-      h('h3', { class: 'form-section__title' }, 'Importar planilha (CSV)'),
-      h('p', { class: 'muted' }, `Até ${formatNumber(MAX_IMPORT_PRODUCTS)} produtos por importação. Aceita as colunas do modelo, do Google Merchant e do Meta (id, title, description, availability, condition, price, brand, image_link, link…).`),
-      h('div', { class: 'catalog-add__file-row' }, fileInput, button('Baixar modelo', { small: true, onClick: downloadTemplate })), csvSlot),
-    h('section', { class: 'form-section' },
-      h('h3', { class: 'form-section__title' }, 'Adicionar um produto'),
+  const panels = {
+    bulk: h('div', { class: 'catalog-add__panel' },
+      h('p', { class: 'catalog-add__lead' }, 'Cria vários produtos de uma vez (cada um com SKU e título numerados) e já envia ao TikTok. Bom para testar anúncios rápido.'),
+      bulkGenerator({ catalog, disabled: !canWrite, onGenerate: generate })),
+    csv: h('div', { class: 'catalog-add__panel' },
+      h('p', { class: 'catalog-add__lead' }, `Tem uma planilha (.csv) com seus produtos? Escolha o arquivo: o sistema confere tudo antes de enviar. Até ${formatNumber(MAX_IMPORT_PRODUCTS)} produtos por vez.`),
+      h('div', { class: 'catalog-add__file-row' }, fileInput, button('Baixar planilha modelo', { small: true, onClick: downloadTemplate })),
+      h('p', { class: 'field__hint' }, 'Aceita o nosso modelo e também as colunas do Google Merchant e do Meta.'),
+      csvSlot),
+    one: h('div', { class: 'catalog-add__panel' },
+      h('p', { class: 'catalog-add__lead' }, 'Preencha os campos com * e adicione à lista. Você pode adicionar vários produtos antes de enviar.'),
       h('form', { class: 'form', novalidate: true, onSubmit: addFromForm },
         h('div', { class: 'form-grid' }, requiredFields),
         h('details', { class: 'catalog-add__more-fields' }, h('summary', null, 'Mais campos (opcionais)'), h('div', { class: 'form-grid' }, optionalFields)),
-        button('Adicionar à lista de envio', { variant: 'primary', type: 'submit', disabled: !canWrite }))),
-    h('section', { class: 'form-section' }, queueSlot, resultSlot));
+        button('Adicionar à lista de envio', { variant: 'primary', type: 'submit', disabled: !canWrite })),
+      queueHint),
+    queue: h('div', { class: 'catalog-add__panel' },
+      h('p', { class: 'catalog-add__lead' }, 'Confira os produtos e clique em Enviar. A aprovação do TikTok leva alguns minutos; o mesmo SKU enviado de novo atualiza o produto.'),
+      queueSlot, resultSlot),
+  };
+  const showPanel = (id) => { for (const [key, panel] of Object.entries(panels)) panel.hidden = key !== id; };
+  tabs = subTabs({
+    items: [{ id: 'bulk', label: 'Gerar em lote' }, { id: 'csv', label: 'Importar planilha' }, { id: 'one', label: 'Um produto' }, { id: 'queue', label: 'Lista de envio', count: 0 }],
+    active: 'bulk', label: 'Como adicionar produtos', onChange: showPanel,
+  });
+  setChildren(root,
+    tabIntro('Adicionar produtos', 'Escolha como enviar seus produtos ao TikTok. Depois confira a lista de envio e envie.'),
+    h('details', { class: 'catalog-add__tips' }, h('summary', null, 'Dicas para o TikTok aprovar'), h('ul', null,
+      h('li', null, 'Cada produto precisa de SKU, título, descrição, marca, imagem, condição, preço, página do produto e disponibilidade (ou a quantidade em estoque).'),
+      h('li', null, 'A imagem deve ser JPG ou PNG, ter pelo menos 500 × 500 px e abrir sem login (o TikTok baixa a imagem).'),
+      h('li', null, 'Quer preço e estoque sempre atualizados, sem enviar nada? Use a aba "Sincronização".'))),
+    tabs.element, panels.bulk, panels.csv, panels.one, panels.queue);
+  showPanel('bulk');
   drawQueue();
   return root;
 }

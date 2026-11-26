@@ -5,9 +5,19 @@ import { del, get, put } from '../../api.js';
 import { h, setChildren } from '../../dom.js';
 import { alertBox, button, confirmDialog, spinner, toast } from '../../ui.js';
 import { renderFields } from '../campaign-wizard/form-fields.js';
+import { tabIntro } from '../subtabs.js';
 import { pickCreatives } from '../creatives/picker.js';
 import { catalogUrl, refQuery } from './detail.js';
 import { openCatalogCampaign } from './open-campaign.js';
+
+/** Uma frase simples sobre cada bloco do anúncio padrão (o que a pessoa está escolhendo ali). */
+const GROUP_HELP = {
+  'Criativo e produtos': 'O vídeo e os produtos que vão aparecer no anúncio.',
+  'Texto e destino': 'O que a pessoa lê e para onde ela vai quando clica.',
+  'Identidade do anúncio': 'O perfil que aparece como autor do anúncio.',
+  'Conversão e orçamento': 'O resultado que você quer conseguir e quanto quer gastar.',
+  Público: 'Quem vai ver o seu anúncio.',
+};
 
 /**
  * Aba "Campanha": o ANÚNCIO PADRÃO do catálogo. A pessoa escolhe uma vez os criativos da biblioteca (vídeo e capa), quais produtos mostrar, o texto,
@@ -72,7 +82,7 @@ export function catalogCampaignTab({ ctx, catalog }) {
   function drawForm() {
     setChildren(formSlot, CATALOG_DEFAULT_GROUPS.map((group) => {
       const fields = renderFields(group.paths, formCtx);
-      return fields.childElementCount ? h('section', { class: 'form-section' }, h('h3', { class: 'form-section__title' }, group.title), fields) : null;
+      return fields.childElementCount ? h('section', { class: 'form-section' }, h('h3', { class: 'form-section__title' }, group.title), GROUP_HELP[group.title] ? h('p', { class: 'form-section__help' }, GROUP_HELP[group.title]) : null, fields) : null;
     }));
   }
 
@@ -135,9 +145,7 @@ export function catalogCampaignTab({ ctx, catalog }) {
       const missing = [...new Set(collectCreativeRefs(config).map((r) => r.id))].filter((id) => !creativeMap.has(id));
       await Promise.allSettled(missing.map(async (id) => creativeMap.set(id, (await get(`/creatives/${id}`)).creative)));
       setChildren(root,
-        h('div', { class: 'card card--pad catalog-add__intro' },
-          h('p', null, h('strong', null, 'Monte uma vez, publique quando quiser.')),
-          h('p', { class: 'muted' }, 'Escolha aqui os criativos da biblioteca, os produtos, o texto e o destino. Ao criar uma campanha com este catálogo (ou escolhê-lo no assistente e usar "o anúncio padrão"), tudo já vem preenchido e é enviado certo para o TikTok. Só falta escolher as contas de anúncio na hora de publicar.')),
+        tabIntro('Anúncio padrão do catálogo', 'Monte o anúncio uma vez (vídeo, produtos, texto e destino). Nas próximas campanhas deste catálogo, tudo já vem preenchido: só falta escolher as contas.'),
         readinessSlot, errorSlot, formSlot,
         h('div', { class: 'catalog-campaign__footer' }, saveButton, clearButton));
       drawForm();

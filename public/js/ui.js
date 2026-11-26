@@ -140,7 +140,14 @@ export function emptyState({ title, text, action }) {
   return h('div', { class: 'empty' }, h('h3', { class: 'empty__title' }, title), h('p', { class: 'empty__text' }, text), action);
 }
 
-export const spinner = () => h('div', { class: 'loading', role: 'status' }, h('span', { class: 'spinner' }), 'Carregando…');
+/**
+ * Indicador de carregamento no estilo do TikTok: duas bolinhas (ciano e vermelha) que vão de um lado ao outro, se cruzando.
+ * Só `transform` anima (leve, sem recalcular layout). `small` serve para dentro de botões, linhas e textos. Decorativo: quem lê a tela
+ * recebe o texto "Carregando…" (ver `spinner`) ou o texto ao lado.
+ */
+export const loader = ({ small = false, large = false } = {}) => h('span', { class: `ttl${small ? ' ttl--sm' : ''}${large ? ' ttl--lg' : ''}`, 'aria-hidden': 'true' }, h('span', { class: 'ttl__dot ttl__dot--cyan' }), h('span', { class: 'ttl__dot ttl__dot--red' }));
+
+export const spinner = (text = 'Carregando…') => h('div', { class: 'loading', role: 'status' }, loader(), h('span', { class: 'loading__text' }, text));
 
 /**
  * Indicador de etapas (círculos ligados por uma linha). `steps`: [{ title }]. Etapas até `maxStep` são clicáveis (voltar/avançar sem perder o
