@@ -1,3 +1,4 @@
+import { OPERATIONS } from '/shared/assistant-intents.js';
 import { EXTRA_TOPICS, TOPICS } from '/shared/chat-topics.js';
 import { buildInsights, percentChange } from '/shared/report-insights.js';
 import { get } from '../../api.js';
@@ -219,8 +220,9 @@ export async function spendAnswer() {
 function helpAnswer() {
   return [
     { type: 'p', text: 'Ainda não consigo conversar livremente. Eu respondo, com dados reais das suas contas ou com tutoriais passo a passo, estes assuntos:' },
-    { type: 'ul', items: [...TOPICS, ...EXTRA_TOPICS].map((t) => `${t.title}: ${t.text}`) },
-    { type: 'actions', items: [...TOPICS, ...EXTRA_TOPICS].map((t) => ({ label: t.title, ask: t.text })) },
+    { type: 'ul', items: [...Object.values(OPERATIONS), ...TOPICS, ...EXTRA_TOPICS].map((t) => `${t.title}: ${t.text}`) },
+    { type: 'p', text: 'Nas perguntas sobre a sua operação dá para citar o período: "hoje", "ontem", "nos últimos 7 dias", "este mês"…' },
+    { type: 'actions', items: [...Object.values(OPERATIONS), ...TOPICS, ...EXTRA_TOPICS].map((t) => ({ label: t.title, ask: t.text })) },
   ];
 }
 

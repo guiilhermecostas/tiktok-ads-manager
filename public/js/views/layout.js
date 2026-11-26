@@ -16,6 +16,7 @@ const NAV = [
   { path: '/business-centers', label: 'Contas TikTok', icon: 'building', areas: ['accounts'], section: 'BC e CA' },
   { path: '/balance', label: 'Saldo', icon: 'wallet', areas: ['accounts'], section: 'BC e CA' },
   { path: '/team', label: 'Colaboradores', icon: 'users', ownerOnly: true, section: 'Gestão' },
+  { path: '/billing', label: 'Plano e cobrança', icon: 'wallet', ownerOnly: true, section: 'Gestão' },
   { path: '/admin', label: 'Administração', icon: 'shield', adminOnly: true, section: 'Gestão' },
   { path: '/reports', label: 'Relatórios', icon: 'chart', areas: ['reports'], section: 'KPI' },
 ];

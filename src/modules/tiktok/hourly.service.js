@@ -18,20 +18,23 @@ const MAX_FUTURE_MS = 2 * HOUR_MS; // linhas "do futuro" (relógio da conta adia
  *  - Leitura: série contínua por moeda, com os totais e o pico, para o gráfico da aba Relatórios → Por hora.
  * Falha de uma conta nunca interrompe as outras; token revogado marca a conexão com erro (o serviço do TikTok faz isso).
  */
-export function createHourlyService({ tiktok, connections, repo, log = console, now = () => new Date(), intervalMs = COLLECT_EVERY_MS, pauseMs = 200 }) {
+export function createHourlyService({ tiktok, connections, repo, ledger = null, statusLog = null, reconcileDays = 3, log = console, now = () => new Date(), intervalMs = COLLECT_EVERY_MS, pauseMs = 200 }) {
   let running = false;
   const loaded = new Set(); // contas que já tiveram a carga inicial neste processo (conta parada, sem nenhuma linha, não repete a carga a cada ciclo)
+  const reconciled = new Set(); // `conexão:conta:dia` já reconferidos hoje (cobrança: recupera horas perdidas se o servidor ficou fora do ar)
   let timer = null;
   let firstTimer = null;
   const sleep = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
 
   /** Dias (YYYY-MM-DD no fuso da conta) a consultar para esta conta agora. */
-  function datesFor(advertiser, hasHistory) {
+  function datesFor(advertiser, hasHistory, reconcile = false) {
     const local = localParts(now(), advertiser.timezone);
     const dates = [local.date];
     if (!hasHistory) for (let back = 1; back < BACKFILL_DAYS; back += 1) dates.unshift(previousDate(local.date, back));
     else if (local.hour < YESTERDAY_UNTIL_HOUR) dates.unshift(previousDate(local.date));
-    return dates;
+    // Uma vez por dia por conta, reconfere os últimos dias: o gasto guardado para a cobrança não pode ficar com buracos.
+    if (reconcile) for (let back = 1; back <= reconcileDays; back += 1) if (!dates.includes(previousDate(local.date, back))) dates.unshift(previousDate(local.date, back));
+    return dates.sort();
   }
 
   /** Linhas do TikTok -> linhas do banco (hora em UTC). Descarta o que não converte ou está no futuro. */
@@ -54,10 +57,15 @@ export function createHourlyService({ tiktok, connections, repo, log = console, 
           batch.map(async (advertiser) => {
             let written = 0;
             const key = `${connection.id}:${advertiser.id}`;
-            for (const date of datesFor(advertiser, withData.has(advertiser.id) || loaded.has(key))) {
+            const reconcileKey = `${key}:${localParts(now(), advertiser.timezone).date}`;
+            for (const date of datesFor(advertiser, withData.has(advertiser.id) || loaded.has(key), reconcileDays > 0 && !reconciled.has(reconcileKey))) {
               const fetched = await api.getHourlyReport(token, advertiser.id, date);
-              written += await repo.upsertHours(connection.id, advertiser.id, advertiser.currency, toRows(fetched, advertiser.timezone));
+              const rows = toRows(fetched, advertiser.timezone);
+              written += await repo.upsertHours(connection.id, advertiser.id, advertiser.currency, rows);
+              // Livro permanente do gasto (assinaturas): não some quando a BC é removida.
+              if (ledger) await ledger.recordSpend(connection.ownerId, advertiser.id, advertiser.currency, rows);
             }
+            if (reconcileDays > 0) reconciled.add(reconcileKey);
             loaded.add(key);
             return written;
           }),
@@ -74,6 +82,15 @@ export function createHourlyService({ tiktok, connections, repo, log = console, 
           log.warn?.(`[por hora] conta falhou: ${err?.code ?? 'erro'}`); // nunca registra token nem dados da conta
         }
         await sleep(pauseMs);
+      }
+      // Situação das contas (conta caiu? foi punida?): UMA chamada por até 100 contas; falhar aqui nunca atrapalha a coleta do gasto.
+      if (statusLog && !stop) {
+        try {
+          await statusLog.record(connection.ownerId, await api.getAdvertiserStatuses(token, connection.advertisers.map((a) => a.id)), now());
+        } catch (err) {
+          if (err instanceof HttpError && err.code === 'tiktok_reauth') throw err;
+          log.warn?.(`[por hora] situação das contas não lida: ${err?.code ?? 'erro'}`);
+        }
       }
     });
     return stats;
@@ -113,6 +130,12 @@ export function createHourlyService({ tiktok, connections, repo, log = console, 
       log.error?.('[por hora] falha na coleta:', err?.code ?? err?.message);
       return { skipped: false, connections: 0, advertisers: 0, rows: 0, failed: 0, error: true };
     }
+  }
+
+  /** Coleta AGORA uma conexão (usado antes de removê-la, para o último gasto entrar no livro). Se já há coleta rodando, não faz nada. */
+  async function collectNow(connectionId, ownerId) {
+    const list = (await connections.listCollectable({ ownerId })).filter((c) => c.id === connectionId);
+    if (list.length) await collect(list);
   }
 
   /** Série contínua por hora, por moeda, das contas visíveis a `actor`. */
@@ -170,6 +193,7 @@ export function createHourlyService({ tiktok, connections, repo, log = console, 
 
   return {
     collectAll,
+    collectNow,
     refresh,
     report,
     /** Liga a coleta automática (a cada 30 min; a primeira logo após a subida). Chamado só pelo servidor, nunca pelos testes. */

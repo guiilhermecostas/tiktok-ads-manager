@@ -195,6 +195,11 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
       );
       return rows[0] ? { id: rows[0].advertiser_id, currency: rows[0].currency, timezone: rows[0].timezone } : null;
     },
+    /** IDs (do TikTok) das contas de anúncio de uma conexão. */
+    async advertiserIds(bcRowId) {
+      const { rows } = await db.query('SELECT advertiser_id FROM tiktok_advertisers WHERE business_center_id = $1 ORDER BY advertiser_id', [bcRowId]);
+      return rows.map((r) => r.advertiser_id);
+    },
     async markError(id, message) {
       await db.query("UPDATE tiktok_business_centers SET status = 'error', last_error = $1 WHERE id = $2", [String(message).slice(0, 300), id]);
     },

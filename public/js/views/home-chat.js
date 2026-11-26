@@ -4,7 +4,9 @@ import { toast } from '../ui.js';
 import { avatarEl } from './avatar.js';
 import { TOPICS, blocksToText, detectTopic } from '/shared/chat-topics.js';
 import { openCampaignWizard } from './campaign-wizard/index.js';
+import { OPERATIONS, detectOperation } from '/shared/assistant-intents.js';
 import { answerFor } from './chat/answers.js';
+import { operationAnswer } from './chat/ops-answers.js';
 import { renderBlocks } from './chat/rich.js';
 
 const MAX_LENGTH = 4000;
@@ -52,6 +54,8 @@ export function homeChatView(ctx) {
       h('h1', { class: 'chat__title' }, `Olá, ${firstName}. Como posso ajudar?`),
       h('p', { class: 'muted chat__subtitle' }, 'Pergunte sobre suas campanhas, contas e relatórios, ou escolha uma sugestão.'),
       h('div', { class: 'chat__suggestions' }, SUGGESTIONS.map((s) => h('button', { type: 'button', class: 'chat__suggestion', onClick: () => submit(s.text, s.id) }, h('strong', null, s.title), h('span', { class: 'muted' }, s.text)))),
+      h('p', { class: 'chat__group muted' }, 'Sobre a sua operação'),
+      h('div', { class: 'chat__chips' }, Object.values(OPERATIONS).map((op) => h('button', { type: 'button', class: 'chat__chip', onClick: () => submit(op.text, null, { id: op.id, period: 'today' }) }, op.title))),
     );
   }
 
@@ -62,7 +66,7 @@ export function homeChatView(ctx) {
   }
 
   // ---------- envio ----------
-  function submit(text, topicId = null) {
+  function submit(text, topicId = null, operation = null) {
     const value = String(text ?? '').trim();
     if (!value || waiting) return;
     waiting = true;
@@ -72,9 +76,11 @@ export function homeChatView(ctx) {
     resize();
     draw();
     const owner = conversation;
+    // Pergunta sobre a operação (BCs, contas que caíram, rejeitados, criativos, gasto…) tem prioridade; o resto cai nos assuntos antigos.
+    const op = topicId ? null : (operation ?? detectOperation(value));
     const topic = topicId ?? detectTopic(value);
     const pause = new Promise((resolve) => { setTimeout(resolve, TYPING_MS); }); // o "digitando…" aparece por um instante: a resposta não "bate" de uma vez
-    answerFor(topic).then(
+    (op ? operationAnswer(op) : answerFor(topic)).then(
       (blocks) => ({ blocks, text: blocksToText(blocks) }),
       (err) => ({ blocks: null, text: `Não consegui buscar isso agora: ${err.message || 'erro desconhecido'}. Tente de novo em instantes.` }),
     ).then((reply) => pause.then(() => reply)).then((reply) => {

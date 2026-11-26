@@ -7,7 +7,7 @@ const config = loadConfig();
 const db = await openDatabase(config.database);
 console.log(`[db] ${config.database.url ? 'PostgreSQL (DATABASE_URL)' : `PGlite de desenvolvimento em ${config.database.devDataDir}`}`);
 
-const { app, authService, sessions, creativeStorage, creativeCleaner, hourly, hooks, close } = createApp({ config, db });
+const { app, authService, sessions, creativeStorage, creativeCleaner, hourly, billing, hooks, close } = createApp({ config, db });
 await creativeStorage.init(); // pastas privadas da biblioteca de criativos + limpeza de temporários antigos
 // A limpeza dos criativos depende do FFmpeg: confere na subida e avisa alto se não executa (não derruba o sistema).
 // O mesmo para as proxies: o fetch precisa aceitar os dispatchers (HTTP e SOCKS) neste ambiente.
@@ -25,6 +25,9 @@ const purge = () => sessions.purgeExpired().catch((err) => console.error('[sess�
 await purge();
 const purgeTimer = setInterval(purge, 60 * 60 * 1000);
 purgeTimer.unref();
+
+// Assinaturas: fecha os meses vencidos (uma vez cada) a cada hora.
+billing.start();
 
 // Coleta do gasto por hora (TikTok) a cada 30 minutos; só roda com a integração configurada. Erros são só registrados.
 if (config.tiktok.configured) {

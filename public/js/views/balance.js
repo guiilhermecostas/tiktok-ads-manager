@@ -4,7 +4,6 @@ import { get } from '../api.js';
 import { h, icon, setChildren } from '../dom.js';
 import { formatCurrency } from '../format.js';
 import { alertBox, badge, button, emptyState, spinner, toast } from '../ui.js';
-import { currencyBadge } from './account-filter.js';
 import { openTransferDialog } from './balance-transfer.js';
 import { pageHeader } from './layout.js';
 
@@ -15,7 +14,6 @@ import { pageHeader } from './layout.js';
  * Todo texto (nomes, IDs, mensagens do TikTok) entra como nó de texto, nunca como HTML.
  */
 
-const STATUS_FILTERS = [['', 'Todos'], ['with', 'Com saldo'], ['without', 'Sem saldo'], ['unknown', 'Sem informação']];
 /** "Ver contas" na aba das BCs leva para a aba das contas já buscando por aquela BC. */
 const handoff = { q: '' };
 const AUTO_REFRESH_MS = 60 * 1000; // o servidor guarda o saldo por 1 minuto: atualizar mais rápido só devolveria o mesmo valor
@@ -53,7 +51,7 @@ function balanceLayout({ active, counts, children }) {
 }
 
 /** Tabela com linhas que se expandem em "Detalhes" (todos os valores do TikTok). */
-function table({ columns, rows, renderCells, renderDetails, renderActions = null, emptyText, open = new Set() }) {
+function table({ columns, rows, renderCells, renderDetails, renderActions = null, emptyText, open = new Set(), rowClass = () => '' }) {
   const body = h('tbody');
   function paint() {
     if (!rows.length) return setChildren(body, h('tr', null, h('td', { colspan: columns.length + 1, class: 'muted' }, emptyText)));
@@ -64,7 +62,7 @@ function table({ columns, rows, renderCells, renderDetails, renderActions = null
         type: 'button', class: 'balance__toggle', 'aria-expanded': String(isOpen), 'aria-label': `${isOpen ? 'Ocultar' : 'Ver'} detalhes`,
         onClick: () => { if (open.has(row.key)) open.delete(row.key); else open.add(row.key); paint(); },
       }, isOpen ? 'Ocultar' : 'Detalhes');
-      nodes.push(h('tr', { class: isOpen ? 'is-open' : null }, renderCells(row), h('td', { 'data-label': 'Detalhes', class: 'balance__cell-toggle' }, h('div', { class: 'balance__actions' }, renderActions?.(row, { showDetails: () => { open.add(row.key); paint(); } }) ?? null, toggle))));
+      nodes.push(h('tr', { class: `${rowClass(row)}${isOpen ? ' is-open' : ''}`.trim() || null }, renderCells(row), h('td', { 'data-label': 'Detalhes', class: 'balance__cell-toggle' }, h('div', { class: 'balance__actions' }, renderActions?.(row, { showDetails: () => { open.add(row.key); paint(); } }) ?? null, toggle))));
       if (isOpen) nodes.push(h('tr', { class: 'balance__details-row' }, h('td', { colspan: columns.length + 1 }, renderDetails(row))));
     }
     setChildren(body, nodes);
@@ -174,7 +172,6 @@ async function balanceScreen(tabName) {
       placeholder: tabName === 'bc' ? 'Buscar por ID da BC ou conexão…' : 'Buscar por nome ou ID da conta…',
       onInput: (e) => { state.q = e.target.value; drawContent(); },
     });
-    const status = h('div', { class: 'segmented', role: 'group', 'aria-label': 'Situação' }, STATUS_FILTERS.map(([value, label]) => h('button', { type: 'button', class: `segmented__btn${state.status === value ? ' is-on' : ''}`, 'aria-pressed': String(state.status === value), onClick: () => { state.status = value; drawFilters(); drawContent(); } }, label)));
     const select = (label, value, options, onChange) => {
       const el = h('select', { class: 'input input--filter', 'aria-label': label, onChange: (e) => onChange(e.target.value) }, options.map(([v, text]) => h('option', { value: v }, text)));
       el.value = value;
@@ -190,20 +187,34 @@ async function balanceScreen(tabName) {
       else trigger.disabled = false;
     } });
     refresh.classList.add('reports__refresh');
-    setChildren(filtersBar, search, status, currency, connection, state.data ? updatedAt : null, refresh);
+    setChildren(filtersBar, search, currency, connection, state.data ? updatedAt : null, refresh);
   }
 
-  function summaryCards() {
-    const s = state.data.summary;
-    const card = (label, value, hint, tone) => h('div', { class: `kpi kpi--static${tone ? ` kpi--${tone}` : ''}` }, h('span', { class: 'kpi__label' }, label), h('strong', { class: 'kpi__value' }, value), h('span', { class: 'kpi__hint muted' }, hint ?? ''));
-    const cards = tabName === 'bc'
-      ? [card('BCs com saldo', `${s.bcsWithBalance} de ${s.bcs}`, 'têm saldo disponível'), card('BCs sem saldo', String(s.bcsWithoutBalance), 'o TikTok informou saldo zero'), card('Sem informação', String(s.bcsWithError), 'erro ou sem permissão')]
-      : [card('Contas com saldo', `${s.accountsWithBalance} de ${s.accounts}`, 'têm saldo disponível'), card('Contas sem saldo', String(s.accountsWithoutBalance), 'o TikTok informou saldo zero'), card('Sem informação', String(s.accountsUnknown), 'erro ou não informado')];
-    for (const t of state.data.totals) {
-      const value = tabName === 'bc' ? t.bc : t.accounts;
-      if (value > 0 || state.data.totals.length === 1) cards.push(card(`Disponível${state.data.totals.length > 1 ? ` (${t.currency === 'UNKNOWN' ? '?' : t.currency})` : ''}`, money(value, t.currency), tabName === 'bc' ? 'somando as BCs' : 'somando as contas'));
-    }
-    return h('div', { class: 'kpis', role: 'group', 'aria-label': 'Resumo do saldo' }, cards);
+  /**
+   * Três quadros grandes e coloridos: quantas contas COM saldo (verde), SEM saldo (vermelho) e SEM informação (amarelo). Clicar num deles mostra só aquele
+   * grupo (clicar de novo mostra tudo). Ao lado, quanto há de saldo no total (uma linha por moeda: dólar e real nunca se somam).
+   */
+  function tiles() {
+    const all = rowsOf();
+    const noun = tabName === 'bc' ? 'Business Centers' : 'contas';
+    const defs = [
+      ['with', 'Com saldo', `${noun} que podem gastar agora`],
+      ['without', 'Sem saldo', `${noun} com saldo zerado`],
+      ['unknown', 'Sem informação', 'o TikTok não mostrou o saldo'],
+    ];
+    const buttons = defs.map(([kind, label, hint]) => {
+      const count = all.filter((r) => situationOf(r) === kind).length;
+      const on = state.status === kind;
+      return h('button', {
+        type: 'button', class: `balance__tile balance__tile--${kind}${on ? ' is-on' : ''}`, 'aria-pressed': String(on), 'aria-label': `${label}: ${count}. ${on ? 'Mostrar todas' : 'Mostrar só estas'}`,
+        onClick: () => { state.status = on ? '' : kind; drawContent(); },
+      }, h('span', { class: 'balance__tile-count' }, String(count)), h('span', { class: 'balance__tile-label' }, label), h('span', { class: 'balance__tile-hint' }, hint));
+    });
+    const totals = state.data.totals
+      .map((t) => [t.currency, tabName === 'bc' ? t.bc : t.accounts])
+      .filter(([, value]) => value > 0 || state.data.totals.length === 1)
+      .map(([currency, value]) => h('div', { class: 'balance__total' }, h('span', { class: 'balance__total-label' }, `Saldo total${state.data.totals.length > 1 ? ` em ${currency === 'UNKNOWN' ? 'moeda não informada' : currency}` : ''}`), h('strong', { class: 'balance__total-value' }, money(value, currency)), h('span', { class: 'balance__tile-hint' }, tabName === 'bc' ? 'somando as Business Centers' : 'somando as contas')));
+    return h('div', { class: 'balance__top' }, h('div', { class: 'balance__tiles', role: 'group', 'aria-label': 'Filtrar por saldo' }, buttons), totals.length ? h('div', { class: 'balance__totals' }, totals) : null);
   }
 
   // ---------- transferência de saldo (BC ↔ conta) ----------
@@ -266,37 +277,47 @@ async function balanceScreen(tabName) {
       return;
     }
     const rows = filtered();
-    const note = h('p', { class: 'hub__note' }, 'O saldo vem direto do TikTok (atualiza a cada 1 minuto). “Sem informação” quer dizer que o TikTok não deixou ver o saldo (por exemplo, falta permissão financeira na Business Center): passe o mouse sobre o aviso para ver o motivo.');
-    const bcTable = () => table({
-      columns: ['Business Center', 'Moeda', 'Saldo disponível', 'Situação', 'Contas'],
-      rows,
-      emptyText: 'Nenhuma Business Center encontrada com esses filtros.',
-      renderCells: (r) => [
-        h('td', { 'data-label': 'Business Center' }, h('span', { class: 'cell-strong' }, r.bcId ?? 'BC não identificada'), h('span', { class: 'acc-id' }, `Conexão: ${r.connectionName}`)),
-        h('td', { 'data-label': 'Moeda' }, currencyBadge(r.currency) ?? h('span', { class: 'muted' }, '—')),
-        h('td', { 'data-label': 'Saldo disponível', class: 'num' }, h('strong', null, money(r.main, r.currency)), r.portfolioType ? h('span', { class: 'acc-id balance__source' }, PORTFOLIO_TYPE_LABELS[r.portfolioType]) : null),
-        h('td', { 'data-label': 'Situação' }, situationBadge(r)),
-        h('td', { 'data-label': 'Contas' }, r.accountsError ? h('span', { class: 'muted', title: r.accountsError }, `${r.accountsTotal} · sem informação`) : `${r.accountsWithBalance} com saldo de ${r.accountsTotal}`),
-      ],
+    const note = h('p', { class: 'hub__note' }, 'O saldo vem direto do TikTok e se atualiza sozinho a cada minuto.');
+    const sortRows = (list) => [...list].sort((x, y) => (y.main ?? -1) - (x.main ?? -1) || String(x.name ?? x.bcId ?? '').localeCompare(String(y.name ?? y.bcId ?? ''), 'pt-BR'));
+    const rowClass = (r) => `balance__row balance__row--${situationOf(r)}`;
+    const amountCell = (r) => h('td', { 'data-label': 'Saldo', class: 'num' }, h('strong', { class: `balance__big balance__big--${situationOf(r)}` }, situationOf(r) === 'unknown' ? '—' : money(r.main, r.currency)), situationBadge(r), sourceCaption(r));
+    const bcTable = (list) => table({
+      columns: ['Business Center', 'Saldo', 'Contas'],
+      rows: list,
+      rowClass,
       open: state.open.bc,
       renderActions: (r) => (r.bcId ? h('a', { href: '/balance/accounts', 'data-link': '', class: 'btn btn--secondary btn--sm', 'aria-label': `Ver as contas da BC ${r.bcId}`, onClick: () => { handoff.q = r.bcId; } }, 'Ver contas') : null),
+      renderCells: (r) => [
+        h('td', { 'data-label': 'Business Center' }, h('span', { class: 'cell-strong' }, r.bcId ?? 'BC não identificada'), h('span', { class: 'acc-id' }, `Conexão: ${r.connectionName}`)),
+        amountCell(r),
+        h('td', { 'data-label': 'Contas' }, r.accountsError ? h('span', { class: 'muted', title: r.accountsError }, `${r.accountsTotal} · sem informação`) : `${r.accountsWithBalance} com saldo de ${r.accountsTotal}`),
+      ],
       renderDetails: (r) => details(r, [r.accountsError ? alertBox(`Contas desta BC: ${r.accountsError}`, 'warning') : null]),
     });
-    const accountsTable = () => table({
-      columns: ['Conta de anúncio', 'Business Center', 'Moeda', 'Saldo disponível', 'Situação'],
-      rows,
-      emptyText: 'Nenhuma conta de anúncio encontrada com esses filtros.',
+    const accountsTable = (list) => table({
+      columns: ['Conta de anúncio', 'Saldo'],
+      rows: list,
+      rowClass,
+      open: state.open.accounts,
       renderCells: (r) => [
-        h('td', { 'data-label': 'Conta' }, h('div', { class: 'acc-name' }, h('span', { class: 'cell-strong' }, r.name), h('span', { class: 'acc-id' }, `ID ${r.advertiserId}`))),
-        h('td', { 'data-label': 'Business Center' }, h('span', { class: 'cell-strong' }, r.bcId ?? '—'), h('span', { class: 'acc-id' }, r.bcHasBalance === null ? 'Saldo da BC desconhecido' : r.bcHasBalance ? 'BC com saldo' : 'BC sem saldo')),
-        h('td', { 'data-label': 'Moeda' }, currencyBadge(r.currency) ?? h('span', { class: 'muted' }, '—')),
-        h('td', { 'data-label': 'Saldo disponível', class: 'num' }, h('strong', null, money(r.main, r.currency)), sourceCaption(r)),
-        h('td', { 'data-label': 'Situação' }, situationBadge(r)),
+        h('td', { 'data-label': 'Conta' }, h('div', { class: 'acc-name' }, h('span', { class: 'cell-strong' }, r.name), h('span', { class: 'acc-id' }, `ID ${r.advertiserId} · BC ${r.bcId ?? '—'}`))),
+        amountCell(r),
       ],
       renderActions: transferButton,
-      open: state.open.accounts,
       renderDetails: (r) => details(r, [transferNote(r), h('p', { class: 'muted balance__meta' }, `Conexão: ${r.connectionName}${r.advertiserStatus ? ` · Situação da conta no TikTok: ${accountStatus(r.advertiserStatus)}` : ''}`)]),
     });
+    const noun = tabName === 'bc' ? 'Business Centers' : 'contas';
+    const GROUPS = [
+      { kind: 'with', title: 'Com saldo', help: `Estas ${noun} podem gastar agora.` },
+      { kind: 'without', title: 'Sem saldo', help: `O saldo destas ${noun} está zerado: precisam de saldo para anunciar.` },
+      { kind: 'unknown', title: 'Sem informação', help: 'O TikTok não deixou ver o saldo (erro ou falta de permissão). Passe o mouse no aviso "Sem informação" para ver o motivo.' },
+    ];
+    const sections = GROUPS.map((g) => ({ ...g, list: sortRows(rows.filter((r) => situationOf(r) === g.kind)) })).filter((g) => g.list.length && (!state.status || state.status === g.kind))
+      .map((g) => h('section', { class: `balance__group balance__group--${g.kind}` },
+        h('h2', { class: 'balance__group-title' }, h('span', { class: `balance__dot balance__dot--${g.kind}`, 'aria-hidden': 'true' }), `${g.title} (${g.list.length})`),
+        h('p', { class: 'balance__group-help muted' }, g.help),
+        tabName === 'bc' ? bcTable(g.list) : accountsTable(g.list)));
+    const listing = sections.length ? sections : [h('div', { class: 'card' }, emptyState({ title: 'Nada encontrado', text: `Nenhuma ${tabName === 'bc' ? 'Business Center' : 'conta'} com esses filtros.` }))];
     const s = data.summary;
     const accountNotes = tabName === 'accounts' && (s.accountsOnBudget || s.accountsSharedPortfolio)
       ? h('p', { class: 'hub__note' }, [
@@ -304,7 +325,7 @@ async function balanceScreen(tabName) {
         s.accountsOnBudget ? `${s.accountsOnBudget} conta(s) gastam do saldo da BC dentro de um orçamento: o valor mostrado é o orçamento restante e não entra na soma (já está no saldo da BC).` : '',
       ].join(''))
       : null;
-    setChildren(content, summaryCards(), tabName === 'bc' ? bcTable() : accountsTable(), accountNotes, tabName === 'accounts' ? transferHistory() : null, note);
+    setChildren(content, tiles(), ...listing, accountNotes, tabName === 'accounts' ? transferHistory() : null, note);
   }
 
   shell = balanceLayout({ active: tabName === 'bc' ? '/balance' : '/balance/accounts', counts: null, children: [filtersBar, content] });

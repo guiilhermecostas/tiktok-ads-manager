@@ -31,6 +31,19 @@ const escapeLike = (text) => text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 
 export function createCreativesRepository(db) {
   return {
+    /** Quantos criativos o dono enviou entre `from` e `to` (por tipo) e os nomes dos 5 mais recentes: usado pelo assistente do Início. */
+    async countBetween(userId, from, to) {
+      const { rows } = await db.query(
+        `SELECT kind, COUNT(*)::int AS total FROM creatives WHERE user_id = $1 AND source = 'upload' AND created_at >= $2 AND created_at < $3 GROUP BY kind`,
+        [userId, from.toISOString(), to.toISOString()],
+      );
+      const latest = await db.query(
+        `SELECT name FROM creatives WHERE user_id = $1 AND source = 'upload' AND created_at >= $2 AND created_at < $3 ORDER BY created_at DESC, id DESC LIMIT 5`,
+        [userId, from.toISOString(), to.toISOString()],
+      );
+      const count = (kind) => rows.find((r) => r.kind === kind)?.total ?? 0;
+      return { total: count('image') + count('video'), images: count('image'), videos: count('video'), latest: latest.rows.map((r) => r.name) };
+    },
     /** `folderId`: número = só essa pasta; 'none' = só os sem pasta; ausente = todos. */
     async list(userId, { kind, q, folderId, limit = 60, offset = 0 } = {}) {
       const where = ['c.user_id = $1'];

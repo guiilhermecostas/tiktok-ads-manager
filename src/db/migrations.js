@@ -611,6 +611,131 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['notifications', 'notification_reads'], revoke: ['notifications', 'notification_reads'], identity: ['notifications'] })}
     `,
   },
+  {
+    version: 21,
+    description: 'Assinaturas (tudo em dólar): plano de cada pessoa, gasto guardado para sempre, fechamentos mensais, pagamentos e bloqueio de BC com débito',
+    sql: `
+      -- Plano de cada pessoa (negociável): mensalidade em CENTAVOS de dólar + percentual do gasto em pontos-base (1 = 0,01%). Cada linha vale a partir de
+      -- um mês (sempre dia 1); o plano de um mês é a linha mais recente com início até aquele mês. Mudar o plano de um mês já existente substitui a linha.
+      CREATE TABLE billing_plans (
+        id                INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id           INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        monthly_fee_cents INTEGER     NOT NULL CHECK (monthly_fee_cents BETWEEN 0 AND 1000000),
+        percent_bp        INTEGER     NOT NULL CHECK (percent_bp BETWEEN 0 AND 10000),
+        effective_month   DATE        NOT NULL CHECK (EXTRACT(DAY FROM effective_month) = 1),
+        note              TEXT        CHECK (note IS NULL OR char_length(note) <= 200),
+        created_by        INTEGER     REFERENCES users(id) ON DELETE SET NULL,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (user_id, effective_month)
+      );
+
+      -- Gasto por hora de cada conta de anúncio, POR DONO. NÃO tem ligação com a conexão da Business Center: remover a BC não apaga nada daqui, e a
+      -- pessoa não consegue "zerar" o que gastou. O valor de uma hora só sobe (o TikTok ajusta, mas apagar anúncios não pode diminuir a cobrança).
+      -- A pessoa dona não pode ser excluída enquanto houver histórico (RESTRICT).
+      CREATE TABLE spend_ledger (
+        owner_id      INTEGER       NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+        advertiser_id TEXT          NOT NULL CHECK (advertiser_id ~ '^[0-9]{1,24}$'),
+        hour_start    TIMESTAMPTZ   NOT NULL,
+        currency      TEXT          NOT NULL DEFAULT 'UNKNOWN' CHECK (currency ~ '^[A-Z]{3}$' OR currency = 'UNKNOWN'),
+        spend         NUMERIC(16,4) NOT NULL CHECK (spend >= 0),
+        updated_at    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+        PRIMARY KEY (owner_id, advertiser_id, hour_start)
+      );
+      CREATE INDEX idx_spend_ledger_owner_hour ON spend_ledger (owner_id, hour_start);
+
+      -- Fechamento de cada mês (uma vez só): guarda o plano e as cotações daquele momento, para mudanças futuras não alterarem o passado.
+      CREATE TABLE billing_statements (
+        id                INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id           INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        period            DATE        NOT NULL CHECK (EXTRACT(DAY FROM period) = 1),
+        monthly_fee_cents INTEGER     NOT NULL CHECK (monthly_fee_cents >= 0),
+        percent_bp        INTEGER     NOT NULL CHECK (percent_bp BETWEEN 0 AND 10000),
+        spend_cents       BIGINT      NOT NULL CHECK (spend_cents >= 0),
+        percent_fee_cents BIGINT      NOT NULL CHECK (percent_fee_cents >= 0),
+        total_cents       BIGINT      NOT NULL CHECK (total_cents >= 0),
+        unconverted       JSONB       NOT NULL DEFAULT '[]'::jsonb,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (user_id, period)
+      );
+
+      -- Pagamentos recebidos (registrados pelo admin). Só acrescenta; o saldo devedor = tudo que foi cobrado menos tudo que foi pago.
+      CREATE TABLE billing_payments (
+        id            INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id       INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount_cents  BIGINT      NOT NULL CHECK (amount_cents > 0),
+        paid_at       DATE        NOT NULL DEFAULT CURRENT_DATE,
+        note          TEXT        CHECK (note IS NULL OR char_length(note) <= 200),
+        registered_by INTEGER     REFERENCES users(id) ON DELETE SET NULL,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX idx_billing_payments_user ON billing_payments (user_id, paid_at DESC, id DESC);
+
+      -- Bloqueio de Business Center / conta de anúncio: criado quando a pessoa REMOVE a BC com débito. Enquanto a dona devedora tiver débito, ninguém
+      -- mais (só ela mesma) consegue conectar a mesma BC ou as mesmas contas. Cai sozinho quando a dívida zera, quando a dona reconecta ou por liberação do admin.
+      CREATE TABLE billing_locks (
+        id             INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        owner_id       INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind           TEXT        NOT NULL CHECK (kind IN ('bc', 'advertiser')),
+        value          TEXT        NOT NULL CHECK (value ~ '^[0-9]{1,24}$'),
+        debt_cents     BIGINT      NOT NULL CHECK (debt_cents >= 0),
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        released_at    TIMESTAMPTZ,
+        released_by    INTEGER     REFERENCES users(id) ON DELETE SET NULL,
+        release_reason TEXT        CHECK (release_reason IS NULL OR release_reason IN ('paid', 'owner_reconnected', 'admin')),
+        CHECK ((released_at IS NULL AND release_reason IS NULL) OR (released_at IS NOT NULL AND release_reason IS NOT NULL))
+      );
+      CREATE UNIQUE INDEX billing_locks_active_key ON billing_locks (owner_id, kind, value) WHERE released_at IS NULL;
+      CREATE INDEX idx_billing_locks_value ON billing_locks (kind, value) WHERE released_at IS NULL;
+
+      -- Cotação para converter gasto de contas em outra moeda para dólar (só moeda estrangeira; o dólar vale 1).
+      CREATE TABLE billing_rates (
+        currency     TEXT          PRIMARY KEY CHECK (currency ~ '^[A-Z]{3}$' AND currency <> 'USD'),
+        usd_per_unit NUMERIC(14,6) NOT NULL CHECK (usd_per_unit > 0),
+        updated_by   INTEGER       REFERENCES users(id) ON DELETE SET NULL,
+        updated_at   TIMESTAMPTZ   NOT NULL DEFAULT now()
+      );
+
+      ALTER TABLE admin_audit_log DROP CONSTRAINT admin_audit_log_action_check;
+      ALTER TABLE admin_audit_log ADD CONSTRAINT admin_audit_log_action_check
+        CHECK (action IN ('impersonation_start', 'impersonation_end', 'status_change', 'notification_send', 'notification_change',
+                          'billing_plan', 'billing_payment', 'billing_lock_release', 'billing_rate'));
+
+      ${protectTables({
+        rls: ['billing_plans', 'spend_ledger', 'billing_statements', 'billing_payments', 'billing_locks', 'billing_rates'],
+        revoke: ['billing_plans', 'spend_ledger', 'billing_statements', 'billing_payments', 'billing_locks', 'billing_rates'],
+        identity: ['billing_plans', 'billing_statements', 'billing_payments', 'billing_locks'],
+      })}
+    `,
+  },
+  {
+    version: 22,
+    description: 'Assistente: histórico da situação das contas de anúncio (conta caiu, foi punida, encerrada) observado a cada coleta',
+    sql: `
+      -- Situação mais recente de cada conta de anúncio (por dono) e, a cada MUDANÇA observada, uma linha de evento. A coleta roda a cada 30 min, então
+      -- "caiu hoje" é o que foi visto mudar desde que o monitoramento começou. O status é o do TikTok (STATUS_ENABLE, STATUS_LIMIT…).
+      CREATE TABLE advertiser_status (
+        owner_id      INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        advertiser_id TEXT        NOT NULL CHECK (advertiser_id ~ '^[0-9]{1,24}$'),
+        name          TEXT        NOT NULL CHECK (char_length(name) <= 120),
+        status        TEXT        NOT NULL CHECK (status ~ '^STATUS_[A-Z_]{2,60}$'),
+        since         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        checked_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (owner_id, advertiser_id)
+      );
+      CREATE TABLE advertiser_status_events (
+        id              INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        owner_id        INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        advertiser_id   TEXT        NOT NULL CHECK (advertiser_id ~ '^[0-9]{1,24}$'),
+        name            TEXT        NOT NULL CHECK (char_length(name) <= 120),
+        previous_status TEXT        CHECK (previous_status IS NULL OR previous_status ~ '^STATUS_[A-Z_]{2,60}$'),
+        status          TEXT        NOT NULL CHECK (status ~ '^STATUS_[A-Z_]{2,60}$'),
+        observed_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX idx_advertiser_status_events_owner ON advertiser_status_events (owner_id, observed_at DESC);
+
+      ${protectTables({ rls: ['advertiser_status', 'advertiser_status_events'], revoke: ['advertiser_status', 'advertiser_status_events'], identity: ['advertiser_status_events'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

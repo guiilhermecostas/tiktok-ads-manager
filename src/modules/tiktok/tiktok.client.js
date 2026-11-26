@@ -361,6 +361,22 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
     },
 
     /**
+     * Situação de cada conta de anúncio (`status` de /advertiser/info/, tabela "Advertiser Status" da documentação oficial: STATUS_ENABLE,
+     * STATUS_LIMIT = conta punida, STATUS_DISABLE = encerrada…). Só leitura; até 100 contas por chamada. Devolve [{ id, name, status }].
+     */
+    async getAdvertiserStatuses(token, advertiserIds) {
+      const result = [];
+      for (const ids of chunk(advertiserIds, INFO_CHUNK)) {
+        const data = await call('/advertiser/info/', { token, query: { advertiser_ids: ids, fields: ['advertiser_id', 'name', 'status'] } });
+        for (const a of data.list ?? []) {
+          const id = digitsOrNull(a.advertiser_id);
+          if (id && /^STATUS_[A-Z_]{2,60}$/.test(String(a.status ?? ''))) result.push({ id, name: String(a.name ?? id).slice(0, 120), status: a.status });
+        }
+      }
+      return result;
+    },
+
+    /**
      * Dados de UMA Business Center (`/bc/get/?bc_id=`), conforme a documentação oficial: tipo (NORMAL, DIRECT, AGENCY, SELF_SERVICE,
      * SELF_SERVICE_AGENCY), moeda, fuso, país de registro, empresa e o papel do usuário (ADMIN/STANDARD). Devolve null se o TikTok não
      * listar essa BC para o token. O tipo decide o que a criação de contas exige (ex.: BC de agência exige o site da empresa).

@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import helmet from 'helmet';
 import { createAdminRouter } from './modules/admin/admin.routes.js';
+import { createAssistantRouter } from './modules/assistant/assistant.routes.js';
 import { createAuditRepository } from './modules/admin/audit.repository.js';
+import { createBillingRepository } from './modules/billing/billing.repository.js';
+import { createAdminBillingRouter, createBillingRouter } from './modules/billing/billing.routes.js';
+import { createBillingService } from './modules/billing/billing.service.js';
 import { createImpersonationService } from './modules/admin/impersonation.service.js';
 import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createAuthService } from './modules/auth/auth.service.js';
@@ -49,6 +53,7 @@ import { createBalanceService } from './modules/tiktok/balance.service.js';
 import { createCatalogDefaultsRepository } from './modules/catalog/catalog-defaults.repository.js';
 import { createCatalogRouter } from './modules/catalog/catalog.routes.js';
 import { createCatalogService } from './modules/catalog/catalog.service.js';
+import { createAdvertiserStatusRepository } from './modules/tiktok/advertiser-status.repository.js';
 import { createHourlyRepository } from './modules/tiktok/hourly.repository.js';
 import { createHourlyRouter } from './modules/tiktok/hourly.routes.js';
 import { createHourlyService } from './modules/tiktok/hourly.service.js';
@@ -66,7 +71,7 @@ const SHARED_DIR = path.join(ROOT_DIR, 'shared');
 /**
  * Monta a aplicação Express. Recebe dependências (config, db, log) para facilitar testes.
  */
-export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer, avatarProcessor, clock, hourlyPauseMs, klingFetch, hooksIntervalMs }) {
+export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer, avatarProcessor, clock, hourlyPauseMs, hourlyReconcileDays, hourlyMonitorStatuses, klingFetch, hooksIntervalMs }) {
   const users = createUsersRepository(db);
   const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
   const campaigns = createCampaignsRepository(db);
@@ -80,18 +85,30 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const businessCenters = createBusinessCentersRepository(db, { encryptionKey: config.tiktok.encryptionKey });
   // Proxies do usuário: com uma ativa, TODAS as chamadas ao TikTok feitas com as BCs dele saem por ela.
   const proxiesService = createProxiesService({ repo: createProxiesRepository(db, { encryptionKey: config.tiktok.encryptionKey }), config, fetchFn: fetchFn ?? fetch, log });
-  const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, config, log });
+  // Ganchos das assinaturas (ligados mais abaixo): recusar BC bloqueada por débito e guardar o gasto/bloquear ao remover uma BC.
+  const tiktokGuards = {};
+  const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, guards: tiktokGuards, config, log });
   // Saldo (BCs e contas de anúncio) direto da API do TikTok, em cache curto.
   const balanceService = createBalanceService({ tiktok: tiktokService, connections: businessCenters, transfers: createBalanceTransfersRepository(db), users, log, now: clock });
   // Gerenciador de anúncios: todos os anúncios de todas as contas, com desempenho, ativar/pausar e visualizações salvas por pessoa.
   const managerService = createManagerService({ tiktok: tiktokService, connections: businessCenters, views: createManagerViewsRepository(db), log, now: clock });
   // Gasto por hora: coleta a cada 30 min (ligada só pelo servidor, em server.js) e leitura para a aba Relatórios → Por hora.
-  const hourlyService = createHourlyService({ tiktok: tiktokService, connections: businessCenters, repo: createHourlyRepository(db), log, now: clock, pauseMs: hourlyPauseMs });
+  // Assinaturas (tudo em dólar): o gasto coletado por hora também vai para um livro permanente (não some se a BC for removida).
+  const billingRepo = createBillingRepository(db);
+  const advertiserStatus = createAdvertiserStatusRepository(db); // situação das contas (a coleta a cada 30 min anota quando uma conta cai)
+  const billingService = createBillingService({ repo: billingRepo, users, log, now: clock });
+  const hourlyService = createHourlyService({ tiktok: tiktokService, connections: businessCenters, repo: createHourlyRepository(db), ledger: billingRepo, statusLog: hourlyMonitorStatuses === false ? null : advertiserStatus, reconcileDays: hourlyReconcileDays, log, now: clock, pauseMs: hourlyPauseMs });
+  tiktokGuards.beforeConnect = (ownerId, ids) => billingService.assertConnectable(ownerId, ids);
+  tiktokGuards.beforeRemove = async (connection) => {
+    await hourlyService.collectNow(connection.id, connection.ownerId).catch(() => {}); // última coleta (melhor esforço: o token pode já ter caído)
+    await billingService.onRemoving(connection.ownerId, { bcIds: [connection.bcId, ...connection.ownerBcIds], advertiserIds: await businessCenters.advertiserIds(connection.id) });
+  };
   const creativeStorage = createLocalCreativeStorage({ dir: config.creatives.dir });
   // Limpeza dos criativos a cada publicação (metadados, hash e cantos). `cleaner` pode ser injetado nos testes.
   const cleaning = config.creatives.cleaning ?? {};
   const creativeCleaner = cleaner ?? createCreativeCleaner({ ffmpegPath: cleaning.ffmpegPath ?? null, tmpDir: creativeStorage.tmpDir, concurrency: cleaning.concurrency, timeoutMs: cleaning.timeoutMs, threads: cleaning.threads, log });
-  const creativesService = createCreativesService({ repo: createCreativesRepository(db), storage: creativeStorage, cleaner: creativeCleaner, tiktok: tiktokService, config, log });
+  const creativesRepo = createCreativesRepository(db);
+  const creativesService = createCreativesService({ repo: creativesRepo, storage: creativeStorage, cleaner: creativeCleaner, tiktok: tiktokService, config, log });
   const catalogService = createCatalogService({ tiktok: tiktokService, connections: businessCenters, defaults: createCatalogDefaultsRepository(db), creatives: creativesService, log }); // o de criativos só confere o dono dos criativos do anúncio padrão
   // Hook com IA (Kling): gera um começo de 2 a 3 s e o aplica a um vídeo da biblioteca. Sem KLING_API_KEY fica desligado.
   const hooksService = createHooksService({
@@ -222,6 +239,14 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // O sino é da PESSOA logada (não do espaço de trabalho): qualquer conta aprovada, inclusive colaboradores.
   const notificationsRouter = createNotificationsRouter({ repo: notifications, limits });
   protectedApi.use('/notifications', notificationsRouter);
+  // Plano e cobrança: a própria conta (só o dono) e, no admin, todos os planos, pagamentos, bloqueios e cotações.
+  const billingRouter = createBillingRouter({ service: billingService, limits });
+  protectedApi.use('/billing', requireOwner, billingRouter);
+  const adminBillingRouter = createAdminBillingRouter({ service: billingService, audit, now: clock, limits });
+  protectedApi.use('/admin/billing', requireAdmin, requireOwner, adminBillingRouter);
+  // Perguntas do assistente do Início que dependem do servidor (contas que caíram, criativos enviados no período).
+  const assistantRouter = createAssistantRouter({ status: advertiserStatus, creatives: creativesRepo, limits });
+  protectedApi.use('/assistant', assistantRouter);
   const adminNotificationsRouter = createAdminNotificationsRouter({ repo: notifications, users, audit, now: clock, limits });
   protectedApi.use('/admin/notifications', requireAdmin, requireOwner, adminNotificationsRouter); // antes de /admin: este caminho é mais específico
   const adminRouter = createAdminRouter({ users, sessions, impersonation, audit, config, limits });
@@ -256,6 +281,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
     creativeStorage,
     creativeCleaner,
     hourly: hourlyService,
+    billing: billingService,
     hooks: hooksService,
     close: () => {
       hourlyService.stop();
@@ -268,6 +294,10 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
       authRouter.stop();
       adminRouter.stop();
       notificationsRouter.stop();
+      billingRouter.stop();
+      assistantRouter.stop();
+      adminBillingRouter.stop();
+      billingService.stop();
       adminNotificationsRouter.stop();
       tiktokRouter.stop();
       proxiesRouter.stop();

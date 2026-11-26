@@ -41,7 +41,9 @@ const isoDate = (date) => date.toISOString().slice(0, 10);
  * ou ao admin. Os dados (contas, campanhas, desempenho) usam apenas as BCs visíveis para quem pede.
  * `actor` é sempre o usuário autenticado: { id, role }.
  */
-export function createTiktokService({ client, repo, attempts, users, proxies = null, config, log = console }) {
+export function createTiktokService({ client, repo, attempts, users, proxies = null, guards = {}, config, log = console }) {
+  // `guards`: ganchos ligados depois da montagem (assinaturas): `beforeConnect(ownerId, { bcIds, advertiserIds })` pode recusar a conexão;
+  // `beforeRemove(connection)` roda antes de apagar uma conexão. Sem ganchos, nada acontece (a integração com o TikTok não depende deles).
   const creating = new Set(); // conexões com criação de contas em andamento (evita clique duplo / pedidos simultâneos)
   const dataCache = new TtlCache({ ttlMs: 60_000 });
   const overviewCache = new TtlCache({ ttlMs: 5 * 60_000, maxEntries: 200 });
@@ -140,6 +142,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       if (err.code === 'tiktok_rate_limited') return 'O TikTok limitou as requisições. Aguarde um pouco e gere um novo link.';
       if (err.code === 'proxy_error') return 'A proxy configurada falhou e nada foi enviado fora dela. Verifique em Contas TikTok → Proxy e gere um novo link.';
       if (/app_id|secret/i.test(err.message)) return 'O app do TikTok não está configurado corretamente no servidor (App ID/Secret). Avise o administrador.';
+      if (err.code === 'billing_locked') return err.message;
       if (err.code === 'tiktok_error' || err.code === 'tiktok_reauth') return 'O TikTok recusou a autorização (o link pode ter expirado ou já ter sido usado). Gere um novo link.';
     }
     return 'Não foi possível concluir a autorização. Gere um novo link e tente de novo.';
@@ -263,6 +266,8 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       } catch (err) {
         throw asValidationError(err);
       }
+      // Débito de outra conta nesta BC (ou nas contas dela): recusa antes de gravar qualquer coisa.
+      await guards.beforeConnect?.(actor.id, { bcIds: [bcId, ...advertisers.map((a) => a.ownerBcId)], advertiserIds: advertisers.map((a) => a.id) });
       let id;
       try {
         id = await repo.create({ ownerId: actor.id, bcId, name, accessToken, shared, advertisers });
@@ -405,7 +410,8 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
     },
 
     async removeBusinessCenter(actor, id) {
-      await requireManageable(actor, id);
+      const connection = await requireManageable(actor, id);
+      await guards.beforeRemove?.(connection); // guarda o gasto e, havendo débito, bloqueia a BC (se falhar, a remoção NÃO acontece)
       await repo.remove(id);
       invalidate();
     },
@@ -470,6 +476,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
 
         // Reautorizar as mesmas contas atualiza a conexão existente (novo token) em vez de duplicá-la.
         const existingId = await repo.findOauthByAdvertisers(owner.id, ids);
+        if (!existingId) await guards.beforeConnect?.(owner.id, { bcIds: advertisers.map((a) => a.ownerBcId), advertiserIds: advertisers.map((a) => a.id) });
         let connectionId = existingId;
         if (existingId) await repo.replaceToken(existingId, accessToken, advertisers);
         else connectionId = await repo.create({ ownerId: owner.id, name: attempt.name, accessToken, advertisers, authType: 'oauth' });

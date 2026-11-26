@@ -64,12 +64,35 @@ Em **Administração → Contas**, cada conta aprovada tem **Acessar conta** (um
 - **Bloquear/Reativar** derruba as sessões na hora (inclusive as abertas por admin).
 - **Registro de ações** (`admin_audit_log`, só acrescenta linhas): entrar/sair da conta de alguém, mudanças de status e envio/alteração de notificações. Aparece no fim da tela.
 
+### Assinaturas (planos em dólar, gasto guardado e bloqueio de BC com débito)
+
+**Tudo em dólar (US$)**, em centavos inteiros. Em **Administração → Assinaturas** cada pessoa tem o **próprio plano, negociável**: mensalidade + percentual do gasto em anúncios
+(ex.: A = US$ 0 + 10%, B = US$ 99,90 + 5%, C = US$ 199,90 + 0%). O plano vale "este mês" (o mês inteiro) ou "próximo mês"; o plano de cada mês é guardado, então mudar o acordo nunca
+altera o passado. A pessoa vê o próprio extrato em **Plano e cobrança** (só leitura).
+
+- **Gasto que não some:** a coleta por hora também grava o gasto em `spend_ledger` (por dono e conta, **sem ligação com a conexão da BC**): remover a BC não apaga nem reduz nada. O valor
+  de uma hora só sobe (apagar anúncios depois não baixa a cobrança). Uma vez por dia por conta o sistema reconfere os últimos 3 dias (recupera horas se o servidor ficou fora do ar), e **antes de
+  remover uma BC faz uma última coleta**. Quem tem histórico não pode ser excluído (`ON DELETE RESTRICT`).
+- **Meses:** em UTC; o mês fecha **uma vez**, 2 dias depois de acabar, guardando plano e cotações da época. O mês em andamento é calculado ao vivo. Saldo = cobrado − pago; débito = saldo positivo.
+  O admin registra pagamentos (não podem ser apagados) e vê o extrato de cada pessoa; tudo vai para o registro de ações.
+- **Bloqueio por débito:** se a pessoa **remove uma BC com débito**, a BC e as contas dela ficam bloqueadas para **outras pessoas** (`409 billing_locked`, sem revelar de quem é a dívida), tanto por token quanto por link.
+  Cai sozinho quando a dívida zera, quando a própria dona reconecta ou quando o admin libera. Falha fechada: se não der para gravar o bloqueio, a remoção da BC **não** acontece.
+- **Outras moedas:** contas em outra moeda só entram na conta com uma **cotação** cadastrada (1 unidade = US$ X); sem ela o valor aparece como "não convertido" para o admin acertar.
+- Não há cobrança automática (cartão/PIX): o sistema calcula, mostra e registra o que foi pago; quem cobra é o admin.
+
 ### Notificações (o sino do topo)
 
 O sino fica no canto direito do topo: selo com as não lidas e um painel com as 30 mais recentes (atualiza a cada minuto com a aba visível). Em **Administração → Notificações** o admin escreve
 título, mensagem, **tipo** (aviso, novidade, atenção, urgente), **quem recebe** (todos ou uma pessoa), um atalho para uma tela do sistema (só caminhos internos) e a **validade**; a lista mostra
 quantas pessoas já leram e permite desativar, reativar ou excluir. A leitura é de cada pessoa (`notification_reads`); o servidor só mostra e só marca o que é da pessoa (sem IDOR).
 Rotas: `GET /api/notifications`, `POST /api/notifications/read`; admin: `/api/admin/notifications`. Colaboradores recebem as notificações **deles** (a pessoa), não as do dono do espaço.
+
+### Assistente do Início: perguntas sobre a operação
+
+Além dos tutoriais, o chat responde, com os mesmos dados das telas e citando o período ("hoje", "ontem", "nos últimos 7 dias", "este mês"): **quantas BCs e contas**, **contas que caíram**, **anúncios reprovados**,
+**criativos enviados**, **gasto total**, **melhores criativos** e **melhores anúncios em custo**. Não há modelo de linguagem: a pergunta é reconhecida por palavras-chave (`shared/assistant-intents.js`) e as
+contas/rankings são funções puras (`shared/assistant-ops.js`). Limites ditos nas respostas: "caiu" = mudança de situação **vista** pela coleta a cada 30 min (`advertiser_status_events`, a partir de
+quando o acompanhamento começou); o TikTok não dá o horário exato da reprovação de um anúncio; "criativo" é o anúncio (o TikTok não liga o anúncio ao arquivo da biblioteca); valores de moedas diferentes não se misturam.
 
 ## Integração TikTok (Business Centers)
 
@@ -472,6 +495,8 @@ src/
     users/             repositório de usuários
     admin/             aprovação de contas, acesso do admin à conta de um usuário (somente leitura) e registro de auditoria
     notifications/     o sino do topo: notificações do admin (todos ou uma pessoa), leitura por pessoa
+    billing/           assinaturas em dólar: planos por pessoa, gasto guardado, fechamento mensal, pagamentos, bloqueio de BC com débito, cotações
+    assistant/         dados que o assistente do Início pede ao servidor (contas que caíram, criativos enviados)
     campaigns/         CRUD de campanhas internas (escopado por usuário)
     tiktok/            Business Centers (cliente da API, conexão por link/OAuth, repositórios, serviço, rotas) e gasto por hora (coleta + leitura)
     creatives/         biblioteca de criativos (armazenamento, validação por conteúdo, rotas)

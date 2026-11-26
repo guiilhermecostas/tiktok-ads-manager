@@ -15,7 +15,9 @@ import { reportsHourlyView } from './views/reports-hourly.js';
 import { campaignsView } from './views/campaigns.js';
 import { openCampaignWizard } from './views/campaign-wizard/index.js';
 import { adminView } from './views/admin.js';
+import { adminBillingView } from './views/admin-billing.js';
 import { adminNotificationsView } from './views/admin-notifications.js';
+import { billingView } from './views/billing.js';
 import { tiktokAdsView } from './views/tiktok-ads.js';
 import { businessCentersView } from './views/business-centers.js';
 import { creativesView } from './views/creatives/library.js';
@@ -48,6 +50,8 @@ const PROTECTED_ROUTES = {
   '/team': { title: 'Colaboradores', view: teamView, ownerOnly: true },
   '/admin': { title: 'Administração', view: adminView, adminOnly: true },
   '/admin/notifications': { title: 'Notificações', view: adminNotificationsView, adminOnly: true },
+  '/admin/billing': { title: 'Assinaturas', view: adminBillingView, adminOnly: true },
+  '/billing': { title: 'Plano e cobrança', view: billingView, ownerOnly: true },
 };
 const GUEST_ROUTES = { '/login': loginView, '/register': registerView };
 

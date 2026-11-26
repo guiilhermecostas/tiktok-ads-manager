@@ -371,7 +371,7 @@ export function createFakeTiktok() {
         if (state.rejectFields && query.fields) return reply({}, 40002, 'The value of fields is invalid');
         const ownerOf = (id) => state.ownerBc[id] ?? Object.entries(state.bcs).find(([, accounts]) => accounts.includes(id))?.[0];
         const wantsProfile = String(query.fields ?? '').includes('company');
-        return reply({ list: ids.map((id) => ({ advertiser_id: id, name: state.createdNames?.[id] ?? `Conta ${id}`, currency: state.currencies[id] ?? 'BRL', timezone: 'America/Sao_Paulo', ...(wantsProfile ? state.advertiserProfile : {}), ...(state.omitOwnerBc || !ownerOf(id) ? {} : { owner_bc_id: ownerOf(id) }) })) });
+        return reply({ list: ids.map((id) => ({ advertiser_id: id, status: state.advertiserStatus?.[id] ?? 'STATUS_ENABLE', name: state.createdNames?.[id] ?? `Conta ${id}`, currency: state.currencies[id] ?? 'BRL', timezone: 'America/Sao_Paulo', ...(wantsProfile ? state.advertiserProfile : {}), ...(state.omitOwnerBc || !ownerOf(id) ? {} : { owner_bc_id: ownerOf(id) }) })) });
       }
       case '/bc/advertiser/create/': {
         state.createdAdvertisers.push(body);
