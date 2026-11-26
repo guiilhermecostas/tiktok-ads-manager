@@ -762,18 +762,6 @@ body.modal-open { overflow: hidden; }
 .modal__actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 
 /* ============ Cartão da conexão: Business Centers do TikTok (ID + quantas contas) e legenda dos botões ============ */
-.hub-bcs { margin: 4px 0 2px; }
-.hub-bcs__title { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-.hub-bcs__hint { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); }
-.hub-bcs__list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; }
-.hub-bcs__row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
-.hub-bcs__row:last-child, .hub-bcs__more:last-child { border-bottom: 0; }
-.hub-bcs__row--muted { color: var(--muted); }
-.hub-bcs__id { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; background: #f1f1f2; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; cursor: copy; color: inherit; }
-.hub-bcs__id:hover { background: #e8e8ea; }
-.hub-bcs__count { font-weight: 600; white-space: nowrap; }
-.hub-bcs__more summary { cursor: pointer; padding: 8px 10px; font-size: 13px; color: var(--tt-red-dark); }
-.hub-bcs__list--inner { border: 0; border-top: 1px solid var(--border); border-radius: 0; }
 .hub-legend { max-width: 760px; margin: 4px auto 22px; padding: 14px 18px; border: 1px dashed var(--border); border-radius: 12px; background: #fff; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 24px; font-size: 13px; }
 .hub-legend div { display: flex; gap: 6px; }
 .hub-legend dt { font-weight: 700; white-space: nowrap; }
@@ -799,8 +787,6 @@ body.modal-open { overflow: hidden; }
 .team__person { display: flex; align-items: center; gap: 12px; min-width: 0; }
 
 /* Moeda das contas */
-.hub-currencies { display: flex; flex-wrap: wrap; gap: 6px 12px; }
-.hub-currencies__item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .field__hint--currency { color: #7a5200; background: #fff8e1; border: 1px solid #ffe08a; border-radius: 8px; padding: 6px 10px; }
 
 /* Seletor de pixel existente */
@@ -1482,3 +1468,34 @@ body.is-file-drag .explorer__main { outline: 3px dashed var(--tt-cyan-dark); out
   .catalog .table--stack thead { display: none; }
   .catalog__toolbar select.input--filter { flex: 1 1 100%; }
 }
+
+
+/* ============ Business Centers: cartões compactos e minimalistas ============ */
+.bc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); align-items: start; gap: 12px; margin-bottom: 22px; }
+.bc-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); transition: border-color 0.12s; }
+.bc-card:hover { border-color: #b9b9be; }
+.bc-card--error { border-color: #ffc2cf; background: #fffafb; }
+.bc-card__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bc-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--tt-cyan-dark); box-shadow: 0 0 0 3px rgba(37, 244, 238, 0.28); }
+.bc-dot--error { background: var(--tt-red); box-shadow: 0 0 0 3px rgba(254, 44, 85, 0.2); }
+.bc-card__name { flex: 1; min-width: 0; margin: 0; font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bc-count { flex: none; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.bc-count strong { font-size: 17px; letter-spacing: -0.02em; color: var(--text); }
+.bc-card__meta { margin: 0; font-size: 12px; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
+.bc-card__note { margin: 0; padding: 6px 8px; border-radius: 8px; font-size: 12px; line-height: 1.4; background: #fff1f4; color: #9d1033; }
+.bc-card__hint { margin: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
+.bc-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
+.bc-chips--inner { margin: 6px 0 0; }
+.bc-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 8px; font: inherit; color: inherit; background: #f4f4f5; border: 1px solid var(--border); border-radius: 999px; cursor: pointer; }
+.bc-chip:hover { background: #e8e8ea; }
+.bc-chip--muted { cursor: default; color: var(--muted); background: transparent; border-style: dashed; }
+.bc-chip--muted:hover { background: transparent; }
+.bc-chip__id { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bc-chip__n { flex: none; min-width: 20px; padding: 0 6px; font-size: 11px; font-weight: 700; text-align: center; background: #fff; border-radius: 999px; }
+.bc-more summary { display: inline-flex; padding: 2px 8px; font-size: 12px; font-weight: 600; color: var(--tt-red-dark); cursor: pointer; border-radius: 999px; list-style: none; }
+.bc-more summary::-webkit-details-marker { display: none; }
+.bc-more summary:hover { background: #fff1f4; }
+.bc-more[open] { flex-basis: 100%; }
+.bc-card__foot { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.bc-more-btn { margin-left: auto; padding: 2px 9px; font-size: 18px; line-height: 1; font-weight: 700; border: 1px solid var(--border); background: #fff; }
+.bc-chip:focus-visible, .bc-more summary:focus-visible, .bc-more-btn:focus-visible { outline: 2px solid var(--tt-cyan-dark); outline-offset: 2px; }

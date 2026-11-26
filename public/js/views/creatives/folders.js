@@ -1,7 +1,7 @@
 import { del, get, patch, post } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
 import { alertBox, button, confirmDialog, field, openModal, toast } from '../../ui.js';
-import { openContextMenu } from './context-menu.js';
+import { openContextMenu } from '../context-menu.js';
 import { DROP_ATTR } from './drop-upload.js';
 
 /** Valores do filtro de pasta: '' = todas, 'none' = sem pasta, número = uma pasta. */

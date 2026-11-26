@@ -1,4 +1,4 @@
-import { h, icon } from '../../dom.js';
+import { h, icon } from '../dom.js';
 
 let current = null;
 

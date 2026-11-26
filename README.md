@@ -108,7 +108,11 @@ quando o acompanhamento começou); o TikTok não dá o horário exato da reprova
    - **Por token (avançado):** informa o **ID da BC** e um **token de acesso** da Marketing API. O servidor valida o token no TikTok
      antes de gravar e sincroniza as contas de anúncio. Fica disponível em “Prefiro colar um token” e é o caminho usado quando o app
      do TikTok não está configurado.
-2. **Contas TikTok** tem três sub-abas, no mesmo layout centralizado (cabeçalho, abas segmentadas e cartões de largura igual; no celular as
+2. **Cartões compactos e minimalistas:** cada conexão da aba **Business Centers** é um cartão baixo (cerca de 130 px, vários por linha; antes ~330 px): uma bolinha de situação (verde = funcionando, vermelha = com erro), o nome, o número de contas, uma linha de detalhes
+   ("Por link/Por token · Só você/Compartilhada · Via proxy"), a moeda e a data da última atualização em texto simples, as Business Centers em fichinhas com o ID (clique copia; só as 2 primeiras aparecem e o resto fica em "+N") e **só dois botões à vista**
+   (**+ CA** e **Atualizar**) mais o menu **⋯** (Renovar acesso, Editar, Remover — o menu de contexto compartilhado `public/js/views/context-menu.js`). Com erro, o motivo aparece em destaque e o botão principal vira o que resolve (**Renovar acesso** ou **Editar**).
+   As telas de Proxy e Contas de anúncio seguem com o cartão padrão (`hubCard`).
+   **Contas TikTok** tem três sub-abas, no mesmo layout centralizado (cabeçalho, abas segmentadas e cartões de largura igual; no celular as
    listas viram cartões empilhados): **Business Centers** (as conexões), **Contas de anúncio** (todas as contas disponíveis, cada uma com
    a Business Center de origem, tipo de conexão, moeda, fuso e status; com busca por nome/ID e filtro por BC).
    **ID da BC em conexões por link:** a autorização do TikTok não devolve o ID da Business Center, por isso ele não é digitado nem

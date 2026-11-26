@@ -2,7 +2,7 @@ import { get, patch, post } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
 import { formatBytes } from '../../format.js';
 import { alertBox, button, confirmDialog, emptyState, field, openModal, spinner, toast } from '../../ui.js';
-import { closeContextMenu, openContextMenu } from './context-menu.js';
+import { closeContextMenu, openContextMenu } from '../context-menu.js';
 import { createFileDrop } from './drop-upload.js';
 import { fileCard, fileTable, folderTile } from './explorer-items.js';
 import { SORT_OPTIONS, defaultDirFor, loadPrefs, savePrefs } from './explorer-prefs.js';

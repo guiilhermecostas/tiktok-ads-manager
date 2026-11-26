@@ -2,11 +2,11 @@ import { del, get, patch, post } from '../api.js';
 import { h, icon } from '../dom.js';
 import { formatDate } from '../format.js';
 import { state } from '../state.js';
-import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, toast } from '../ui.js';
-import { currencyBadge } from './account-filter.js';
+import { alertBox, button, confirmDialog, emptyState, field, openModal, toast } from '../ui.js';
+import { openContextMenu } from './context-menu.js';
 import { connectByLink } from './connect-link.js';
 import { createAdvertisersDialog } from './create-advertisers.js';
-import { hubCard, hubGrid, hubLayout, plural } from './hub.js';
+import { hubLayout, plural } from './hub.js';
 
 const isAdmin = () => state.user.role === 'admin';
 
@@ -127,11 +127,6 @@ export async function businessCentersView() {
     }
   }
 
-  function visibilityBadge(bc) {
-    if (bc.shared) return badge('Compartilhada', 'success');
-    return badge(bc.owned ? 'Só você' : 'Privada', 'neutral');
-  }
-
   /** Copia o ID para a área de transferência (e avisa). */
   async function copyId(id) {
     try {
@@ -142,80 +137,83 @@ export async function businessCentersView() {
     }
   }
 
+  const visibilityLabel = (bc) => (bc.shared ? 'Compartilhada' : bc.owned ? 'Só você' : 'Privada');
+
+  /** Moeda(s) das contas em texto simples ("USD"; com mais de uma, "USD (20) · BRL (12)"). */
+  function currencyText(bc) {
+    const list = bc.currencies ?? [];
+    if (!list.length) return null;
+    return list.map((c) => `${c.code ?? 'sem moeda'}${list.length > 1 ? ` (${c.accounts})` : ''}`).join(' · ');
+  }
+
   /**
-   * "Business Centers do TikTok" desta conexão: UMA linha por BC com o ID (clique para copiar) e quantas contas de anúncio ela
-   * tem. Uma conexão por link pode cobrir várias BCs; antes só apareciam dois IDs e um "+1" escondido.
+   * Business Centers do TikTok desta conexão, em fichinhas (ID + quantas contas; clique copia o ID). Uma conexão por link pode cobrir várias BCs:
+   * as 2 primeiras aparecem, o resto fica atrás de "+N" (sem ocupar espaço).
    */
-  function bcList(bc) {
+  function bcChips(bc) {
     const groups = bc.bcGroups ?? [];
-    if (!groups.length) {
-      return h(
-        'div',
-        { class: 'hub-bcs' },
-        h('p', { class: 'hub-bcs__title' }, 'Business Center do TikTok'),
-        h('p', { class: 'hub-bcs__hint' }, bc.authType === 'oauth' ? 'O TikTok ainda não informou o ID. Clique em “Atualizar contas” para o sistema buscar de novo.' : 'ID não informado.'),
-      );
-    }
+    if (!groups.length) return h('p', { class: 'bc-card__hint' }, bc.authType === 'oauth' ? 'O TikTok ainda não informou o ID. Use “Atualizar” para buscar de novo.' : 'ID da BC não informado.');
     const known = groups.reduce((sum, g) => sum + g.accounts, 0);
     const unknown = Math.max(0, bc.advertiserCount - known);
-    const row = (g) =>
-      h(
-        'li',
-        { class: 'hub-bcs__row' },
-        h('button', { type: 'button', class: 'hub-bcs__id', title: 'Clique para copiar o ID', 'aria-label': `Copiar o ID ${g.id}`, onClick: () => copyId(g.id) }, g.id),
-        h('span', { class: 'hub-bcs__count' }, plural(g.accounts, 'conta', 'contas')),
-      );
-    const rows = groups.map(row);
-    if (unknown > 0) rows.push(h('li', { class: 'hub-bcs__row hub-bcs__row--muted' }, h('span', null, 'Sem Business Center informada'), h('span', { class: 'hub-bcs__count' }, plural(unknown, 'conta', 'contas'))));
-    const VISIBLE = 4;
+    const chip = (g) => h('button', { type: 'button', class: 'bc-chip', title: 'Clique para copiar o ID', 'aria-label': `Copiar o ID ${g.id} (${plural(g.accounts, 'conta', 'contas')})`, onClick: () => copyId(g.id) }, h('span', { class: 'bc-chip__id' }, g.id), h('span', { class: 'bc-chip__n' }, String(g.accounts)));
+    const chips = groups.map(chip);
+    if (unknown > 0) chips.push(h('span', { class: 'bc-chip bc-chip--muted', title: 'Contas sem Business Center informada' }, h('span', { class: 'bc-chip__id' }, 'Sem BC'), h('span', { class: 'bc-chip__n' }, String(unknown))));
+    const VISIBLE = 2;
     return h(
       'div',
-      { class: 'hub-bcs' },
-      h('p', { class: 'hub-bcs__title' }, groups.length === 1 ? 'Business Center do TikTok' : `Business Centers do TikTok (${groups.length})`),
-      h(
-        'ul',
-        { class: 'hub-bcs__list' },
-        rows.slice(0, VISIBLE),
-        rows.length > VISIBLE ? h('li', { class: 'hub-bcs__more' }, h('details', null, h('summary', null, `Ver mais ${rows.length - VISIBLE}`), h('ul', { class: 'hub-bcs__list hub-bcs__list--inner' }, rows.slice(VISIBLE)))) : null,
-      ),
+      { class: 'bc-chips', role: 'group', 'aria-label': groups.length === 1 ? 'Business Center do TikTok' : `Business Centers do TikTok (${groups.length})` },
+      chips.slice(0, VISIBLE),
+      chips.length > VISIBLE ? h('details', { class: 'bc-more' }, h('summary', { 'aria-label': `Ver mais ${chips.length - VISIBLE} Business Centers` }, `+${chips.length - VISIBLE}`), h('div', { class: 'bc-chips bc-chips--inner' }, chips.slice(VISIBLE))) : null,
     );
   }
 
-  /** Moeda das contas da conexão: um selo por moeda com quantas contas (BRL neutro; outra moeda, amarelo). */
-  function currencyValue(bc) {
-    const list = bc.currencies ?? [];
-    if (!list.length) return h('span', { class: 'muted' }, '—');
-    return h('span', { class: 'hub-currencies' }, list.map((c) => h('span', { class: 'hub-currencies__item' }, c.code ? currencyBadge(c.code) : badge('Não informada', 'neutral'), list.length > 1 ? h('span', { class: 'muted' }, plural(c.accounts, 'conta', 'contas')) : null)));
-  }
-
-  /** Cartão de uma conexão: nome e situação, quantas contas, de quais BCs, e botões com nomes que dizem o que fazem. */
+  /**
+   * Cartão compacto de uma conexão: situação (bolinha), nome e nº de contas; uma linha de detalhes; as BCs em fichinhas; e só duas ações à
+   * vista (a principal e "Atualizar"), com o resto no menu "⋯". Com erro, a ação principal vira a que resolve (renovar o acesso ou editar).
+   */
   function businessCenterCard(bc, oauth) {
     const active = bc.status === 'active';
-    const actions = bc.canManage
-      ? [
-          active ? button('+ CA', { small: true, variant: 'primary', ariaLabel: `Criar novas contas de anúncio em ${bc.name}`, onClick: () => createAdvertisersDialog({ bc, onDone: reload }) }) : null,
-          button('Atualizar contas', { small: true, ariaLabel: `Atualizar contas de ${bc.name}`, onClick: (e) => sync(bc, e.currentTarget) }),
-          bc.authType === 'oauth' && oauth.available ? button('Renovar acesso', { small: true, ariaLabel: `Renovar acesso de ${bc.name}`, onClick: () => connectByLink({ initialName: bc.name, onDone: reload }) }) : null,
-          button('Editar', { small: true, ariaLabel: `Editar ${bc.name}`, onClick: () => businessCenterForm(bc, reload, oauth) }),
-          button('Remover', { small: true, variant: 'danger-ghost', ariaLabel: `Remover ${bc.name}`, onClick: () => remove(bc) }),
-        ]
-      : [];
-    return hubCard({
-      title: bc.name,
-      tone: active ? 'ok' : 'error',
-      status: active ? badge('Funcionando', 'success') : badge('Com erro', 'danger'),
-      badges: [badge(bc.authType === 'oauth' ? 'Conexão por link' : 'Conexão por token', 'neutral'), visibilityBadge(bc), bc.viaProxy ? badge('Via proxy', 'success') : null],
-      note: bc.lastError ? { text: bc.lastError, tone: 'error' } : null,
-      stats: [
-        { label: 'Contas de anúncio', value: String(bc.advertiserCount), big: true },
-        { label: 'Atualizado em', value: bc.lastSyncedAt ? formatDate(bc.lastSyncedAt) : 'Ainda não' },
-        { label: (bc.currencies?.length ?? 0) > 1 ? 'Moedas das contas' : 'Moeda das contas', value: currencyValue(bc), wide: true },
-        isAdmin() ? { label: 'Dono', value: bc.owned ? 'Você' : (bc.ownerName ?? '—') } : null,
-      ],
-      body: bcList(bc),
-      actions,
-      footnote: bc.canManage ? null : 'Gerenciada pelo administrador',
-    });
+    const details = [bc.authType === 'oauth' ? 'Por link' : 'Por token', visibilityLabel(bc), bc.viaProxy ? 'Via proxy' : null, isAdmin() && !bc.owned ? `Dono: ${bc.ownerName ?? '—'}` : null].filter(Boolean).join(' · ');
+    const updated = [currencyText(bc), bc.lastSyncedAt ? `Atualizado ${formatDate(bc.lastSyncedAt)}` : 'Ainda não atualizado'].filter(Boolean).join(' · ');
+    const canRenew = bc.authType === 'oauth' && oauth.available;
+    const renew = () => connectByLink({ initialName: bc.name, onDone: reload });
+    const edit = () => businessCenterForm(bc, reload, oauth);
+
+    let foot = null;
+    if (bc.canManage) {
+      const primary = active
+        ? button('+ CA', { small: true, variant: 'primary', ariaLabel: `Criar novas contas de anúncio em ${bc.name}`, onClick: () => createAdvertisersDialog({ bc, onDone: reload }) })
+        : button(canRenew ? 'Renovar acesso' : 'Editar', { small: true, variant: 'primary', ariaLabel: `${canRenew ? 'Renovar acesso de' : 'Editar'} ${bc.name}`, onClick: canRenew ? renew : edit });
+      const more = h('button', { type: 'button', class: 'icon-btn bc-more-btn', 'aria-haspopup': 'menu', title: 'Mais ações', 'aria-label': `Mais ações de ${bc.name}`, onClick: (e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        openContextMenu({
+          x: rect.right - 210,
+          y: rect.bottom + 4,
+          label: `Ações de ${bc.name}`,
+          items: [
+            ...(canRenew && active ? [{ label: 'Renovar acesso', icon: 'link', onClick: renew }] : []),
+            ...(active || canRenew ? [{ label: 'Editar', icon: 'edit', onClick: edit }] : []),
+            'separator',
+            { label: 'Remover', icon: 'trash', danger: true, onClick: () => remove(bc) },
+          ].filter((item, i, all) => !(item === 'separator' && (i === 0 || all[i - 1] === 'separator'))),
+        });
+      } }, '⋯');
+      foot = h('div', { class: 'bc-card__foot' }, primary, button('Atualizar', { small: true, ariaLabel: `Atualizar contas de ${bc.name}`, onClick: (e) => sync(bc, e.currentTarget) }), more);
+    }
+    return h(
+      'article',
+      { class: `bc-card${active ? '' : ' bc-card--error'}` },
+      h('header', { class: 'bc-card__head' },
+        h('span', { class: `bc-dot bc-dot--${active ? 'ok' : 'error'}`, role: 'img', 'aria-label': active ? 'Funcionando' : 'Com erro', title: active ? 'Funcionando' : 'Com erro' }),
+        h('h2', { class: 'bc-card__name', title: bc.name }, bc.name),
+        h('span', { class: 'bc-count', title: 'Contas de anúncio nesta conexão' }, h('strong', null, String(bc.advertiserCount)), bc.advertiserCount === 1 ? ' conta' : ' contas')),
+      h('p', { class: 'bc-card__meta' }, details),
+      h('p', { class: 'bc-card__meta' }, updated),
+      bc.lastError ? h('p', { class: 'bc-card__note', role: 'alert' }, bc.lastError) : null,
+      bcChips(bc),
+      foot,
+      bc.canManage ? null : h('p', { class: 'bc-card__hint' }, 'Gerenciada pelo administrador'),
+    );
   }
 
   /** Legenda curta do que cada botão faz (para quem nunca usou). */
@@ -223,10 +221,10 @@ export async function businessCentersView() {
     'dl',
     { class: 'hub-legend' },
     h('div', null, h('dt', null, '+ CA'), h('dd', null, 'cria novas contas de anúncio dentro da Business Center, no TikTok.')),
-    h('div', null, h('dt', null, 'Atualizar contas'), h('dd', null, 'busca de novo, no TikTok, a lista de contas de anúncio.')),
-    h('div', null, h('dt', null, 'Renovar acesso'), h('dd', null, 'refaz a autorização pelo link (use se aparecer “Com erro”).')),
-    h('div', null, h('dt', null, 'Editar'), h('dd', null, 'muda o nome (e, na conexão por token, o token).')),
-    h('div', null, h('dt', null, 'Remover'), h('dd', null, 'apaga esta conexão do sistema. Nada é apagado no TikTok.')),
+    h('div', null, h('dt', null, 'Atualizar'), h('dd', null, 'busca de novo, no TikTok, a lista de contas de anúncio.')),
+    h('div', null, h('dt', null, '⋯ Renovar acesso'), h('dd', null, 'refaz a autorização pelo link (use se aparecer “Com erro”).')),
+    h('div', null, h('dt', null, '⋯ Editar'), h('dd', null, 'muda o nome (e, na conexão por token, o token).')),
+    h('div', null, h('dt', null, '⋯ Remover'), h('dd', null, 'apaga esta conexão do sistema. Nada é apagado no TikTok.')),
   );
 
   function draw(configured, oauth, businessCenters) {
@@ -267,7 +265,7 @@ export async function businessCentersView() {
       summary: `${plural(businessCenters.length, 'conexão', 'conexões')} · ${plural(accounts, 'conta de anúncio', 'contas de anúncio')}`,
       actions: connectButton,
       children: [
-        hubGrid(businessCenters.map((bc) => businessCenterCard(bc, oauth))),
+        h('div', { class: 'bc-grid' }, businessCenters.map((bc) => businessCenterCard(bc, oauth))),
         businessCenters.some((bc) => bc.canManage) ? legend : null,
         isAdmin() ? h('p', { class: 'hub__note' }, 'Como administrador você vê as Business Centers de todos os usuários e pode compartilhar uma BC com a equipe em Editar. Os dados de BCs privadas de outros usuários não aparecem nas suas telas.') : null,
       ],
