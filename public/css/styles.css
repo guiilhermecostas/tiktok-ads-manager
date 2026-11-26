@@ -1471,7 +1471,7 @@ body.is-file-drag .explorer__main { outline: 3px dashed var(--tt-cyan-dark); out
 
 
 /* ============ Business Centers: cartões compactos e minimalistas ============ */
-.bc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); align-items: start; gap: 12px; margin-bottom: 22px; }
+.bc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); align-items: stretch; gap: 12px; margin-bottom: 22px; } /* cartões da mesma linha com a mesma altura */
 .bc-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); transition: border-color 0.12s; }
 .bc-card:hover { border-color: #b9b9be; }
 .bc-card--error { border-color: #ffc2cf; background: #fffafb; }
@@ -1496,6 +1496,6 @@ body.is-file-drag .explorer__main { outline: 3px dashed var(--tt-cyan-dark); out
 .bc-more summary::-webkit-details-marker { display: none; }
 .bc-more summary:hover { background: #fff1f4; }
 .bc-more[open] { flex-basis: 100%; }
-.bc-card__foot { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.bc-card__foot { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 6px; } /* os botões ficam sempre na base, alinhados entre os cartões */
 .bc-more-btn { margin-left: auto; padding: 2px 9px; font-size: 18px; line-height: 1; font-weight: 700; border: 1px solid var(--border); background: #fff; }
 .bc-chip:focus-visible, .bc-more summary:focus-visible, .bc-more-btn:focus-visible { outline: 2px solid var(--tt-cyan-dark); outline-offset: 2px; }

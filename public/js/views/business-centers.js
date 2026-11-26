@@ -148,7 +148,7 @@ export async function businessCentersView() {
 
   /**
    * Business Centers do TikTok desta conexão, em fichinhas (ID + quantas contas; clique copia o ID). Uma conexão por link pode cobrir várias BCs:
-   * as 2 primeiras aparecem, o resto fica atrás de "+N" (sem ocupar espaço).
+   * a primeira aparece e o resto fica atrás de "+N" (sem ocupar espaço).
    */
   function bcChips(bc) {
     const groups = bc.bcGroups ?? [];
@@ -158,7 +158,7 @@ export async function businessCentersView() {
     const chip = (g) => h('button', { type: 'button', class: 'bc-chip', title: 'Clique para copiar o ID', 'aria-label': `Copiar o ID ${g.id} (${plural(g.accounts, 'conta', 'contas')})`, onClick: () => copyId(g.id) }, h('span', { class: 'bc-chip__id' }, g.id), h('span', { class: 'bc-chip__n' }, String(g.accounts)));
     const chips = groups.map(chip);
     if (unknown > 0) chips.push(h('span', { class: 'bc-chip bc-chip--muted', title: 'Contas sem Business Center informada' }, h('span', { class: 'bc-chip__id' }, 'Sem BC'), h('span', { class: 'bc-chip__n' }, String(unknown))));
-    const VISIBLE = 2;
+    const VISIBLE = 1; // uma fichinha à vista: a altura dos cartões não depende de quantas BCs a conexão tem
     return h(
       'div',
       { class: 'bc-chips', role: 'group', 'aria-label': groups.length === 1 ? 'Business Center do TikTok' : `Business Centers do TikTok (${groups.length})` },
