@@ -4,9 +4,11 @@ import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest } from '../../lib/http-error.js';
 import { verifyPassword } from '../../lib/password.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
+import { bcIdsOf, loadOwnScope } from './balance-scope.js';
 
 const CACHE_TTL_MS = 60_000;
 const CONCURRENCY = 4;
+const BC_NAME_TTL_MS = 60 * 60_000; // o nome de uma BC quase nunca muda: uma consulta por hora basta
 
 /** Mensagem segura para a tela quando o TikTok recusa a consulta (nunca token nem detalhes internos). */
 function friendly(err) {
@@ -56,6 +58,7 @@ function describeAccount(item, bcMain) {
  */
 export function createBalanceService({ tiktok, connections, transfers, users, log = console, now = () => new Date() }) {
   const cache = new TtlCache({ ttlMs: CACHE_TTL_MS, maxEntries: 100 });
+  const bcNames = new TtlCache({ ttlMs: BC_NAME_TTL_MS, maxEntries: 500 });
   const inflight = new Map();
   const transferring = new Set(); // contas com uma transferência em andamento (nunca duas ao mesmo tempo na mesma conta)
 
@@ -63,7 +66,15 @@ export function createBalanceService({ tiktok, connections, transfers, users, lo
   async function fetchBc(connection, bcId) {
     try {
       return await tiktok.withToken(connection.id, async (token, api) => {
+        const nameKey = `${connection.id}:${bcId}`;
         const [bc, accounts] = await Promise.allSettled([api.getBcBalance(token, bcId), api.listAdvertiserBalances(token, bcId)]);
+        if (bcNames.get(nameKey) === undefined) { // o nome é um extra: se falhar, a BC aparece só pelo ID
+          try {
+            bcNames.set(nameKey, (await api.getBcInfo(token, bcId))?.name ?? '');
+          } catch {
+            /* sem nome: segue */
+          }
+        }
         for (const r of [bc, accounts]) if (r.status === 'rejected' && r.reason instanceof HttpError && r.reason.code === 'tiktok_reauth') throw r.reason; // token caiu: a conexão já foi marcada com erro
         return {
           bc: bc.status === 'fulfilled' ? { ok: true, ...bc.value } : { ok: false, error: friendly(bc.reason) },
@@ -77,25 +88,18 @@ export function createBalanceService({ tiktok, connections, transfers, users, lo
     }
   }
 
-  /** Conexões e contas do PRÓPRIO usuário (lidas do banco, rápido). */
-  async function load(actor) {
-    const own = (await connections.listVisible(actor.id)).filter((c) => c.ownerId === actor.id);
-    const known = (await connections.advertisers(actor.id)).filter((a) => a.businessCenterOwned);
-    return { own, known };
-  }
-
   async function build(actor, { own, known }) {
     const bcs = [];
     const accounts = [];
     const tasks = [];
 
     for (const connection of own) {
-      const bcIds = connection.bcId ? [connection.bcId] : connection.ownerBcIds;
+      const bcIds = bcIdsOf(connection);
       const base = { connectionId: connection.id, connectionName: connection.name };
       const mine = known.filter((a) => a.businessCenterId === connection.id);
       if (connection.status !== 'active' || !bcIds.length) {
         const error = connection.status !== 'active' ? 'Esta conexão está com erro de acesso. Renove o acesso em Contas TikTok.' : 'O sistema ainda não sabe o ID da Business Center desta conexão. Use "Atualizar contas" em Contas TikTok.';
-        bcs.push({ ...base, key: `${connection.id}:-`, bcId: null, status: 'error', error, currency: null, amounts: [], main: null, hasBalance: false, accountsTotal: mine.length, accountsWithBalance: 0, accountsError: null });
+        bcs.push({ ...base, key: `${connection.id}:-`, bcId: null, name: null, status: 'error', error, currency: null, amounts: [], main: null, hasBalance: false, accountsTotal: mine.length, accountsWithBalance: 0, accountsError: null });
         for (const a of mine) accounts.push({ ...base, key: `${connection.id}:${a.id}`, advertiserId: a.id, name: a.name, advertiserStatus: null, bcId: a.ownerBcId, currency: a.currency, status: 'unknown', error, amounts: [], main: null, hasBalance: false, bcHasBalance: null });
         continue;
       }
@@ -142,7 +146,7 @@ export function createBalanceService({ tiktok, connections, transfers, users, lo
         });
       }
       bcs.push({
-        ...base, key: `${connection.id}:${bcId}`, bcId, status: bc.ok ? 'ok' : 'error', error: bc.ok ? null : bc.error, currency: bc.ok ? bc.currency : null,
+        ...base, key: `${connection.id}:${bcId}`, bcId, name: bcNames.get(`${connection.id}:${bcId}`) || null, status: bc.ok ? 'ok' : 'error', error: bc.ok ? null : bc.error, currency: bc.ok ? bc.currency : null,
         amounts: bcAmounts, main: bc.ok ? mainAmount(bcAmounts) : null, hasBalance: Boolean(bcHas),
         portfolioType: bc.ok ? bc.portfolioType ?? null : null, accountsTotal: Math.max(mine.length, listed.length), accountsWithBalance: accounts.filter((a) => a.connectionId === connection.id && a.bcId === bcId && a.status === 'ok' && a.hasBalance).length, accountsError: acc.ok ? null : acc.error,
       });
@@ -212,7 +216,7 @@ export function createBalanceService({ tiktok, connections, transfers, users, lo
   const service = {
     /** Visão completa (BCs e contas). `fresh` ignora o cache de 60 s. Consultas simultâneas do mesmo usuário compartilham o resultado. */
     async overview(actor, { fresh = false } = {}) {
-      const loaded = await load(actor);
+      const loaded = await loadOwnScope(connections, actor);
       // A chave do cache muda quando as conexões mudam (conectar, remover, sincronizar, erro de acesso): nunca mostra um resultado velho.
       const signature = loaded.own.map((c) => `${c.id}.${c.status}.${c.lastSyncedAt}.${c.ownerBcIds.join('-')}`).join('|');
       const key = `balance:${actor.id}:${signature}:${loaded.known.length}`;

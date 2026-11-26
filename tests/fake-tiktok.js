@@ -79,6 +79,11 @@ export function createFakeTiktok() {
     transferDelayMs: 0, // latência de /bc/transfer/ (testes de cliques repetidos)
     minRecharge: 0, // valor mínimo aceito em RECHARGE (documentação: há um mínimo que o /advertiser/balance/get/ informa)
     rejectBalanceFields: false, // true: /advertiser/balance/get/ recusa o parâmetro `fields`
+    transactions: {}, // BC -> [{ transaction_id, transaction_type, amount_type, amount, subtotal, tax_amount, currency, billing_type, timezone, create_time, account_id, account_name }] (/bc/account/transaction/get/)
+    failTransactionsBc: new Set(), // BCs cujo histórico de transações responde "sem permissão" (sem função financeira)
+    lifetimeSpend: {}, // conta -> { spend: '123.45', currency: 'USD' }: gasto vitalício devolvido pelo relatório com `query_lifetime`
+    failLifetimeFor: new Set(), // contas que, se estiverem no pedido, fazem o relatório inteiro responder erro (o resto do lote precisa ser isolado)
+    lifetimeRateLimited: false, // true: o relatório vitalício responde 40100 (limite de frequência)
     // Catálogo (Catalog API v1.3)
     catalogs: {}, // BC -> [{ catalog_id, catalog_name, catalog_type, ad_creation_eligible, create_time, update_time, bc_info, catalog_conf }]
     catalogRegions: ['US', 'BR', 'GB'], // /catalog/available_country/get/
@@ -482,6 +487,21 @@ export function createFakeTiktok() {
         adgroupsOf(body?.advertiser_id);
         return updateStatus(body, { list: state.adgroups[body?.advertiser_id], idField: 'adgroup_id', idsField: 'adgroup_ids', enabled: 'ADGROUP_STATUS_DELIVERY_OK', disabled: 'ADGROUP_STATUS_DISABLE', failFor: state.failAdgroupStatusFor });
       case '/report/integrated/get/': {
+        if (query.advertiser_ids !== undefined || query.query_lifetime !== undefined) { // gasto vitalício de várias contas (documentação oficial do relatório v1.3)
+          const ids = JSON.parse(query.advertiser_ids ?? '[]');
+          if (!Array.isArray(ids) || !ids.length || ids.length > 5) return reply({}, 40002, 'advertiser_ids: max size is 5');
+          if (!ids.every((id) => /^\d{1,24}$/.test(String(id)))) return reply({}, 40002, 'advertiser_ids is invalid');
+          if (query.advertiser_id !== undefined) return reply({}, 40002, 'Use advertiser_id OR advertiser_ids');
+          if (query.report_type !== 'BASIC' || query.data_level !== 'AUCTION_ADVERTISER') return reply({}, 40002, 'Lifetime metrics need report_type BASIC and data_level AUCTION_ADVERTISER');
+          if (JSON.stringify(JSON.parse(query.dimensions ?? '[]')) !== JSON.stringify(['advertiser_id'])) return reply({}, 40002, 'Use dimensions ["advertiser_id"] with advertiser_ids');
+          if (query.query_lifetime !== 'true') return reply({}, 40002, 'query_lifetime must be true');
+          if (query.start_date !== undefined || query.end_date !== undefined) return reply({}, 40002, 'start_date and end_date are ignored with query_lifetime');
+          if (Number(query.page_size) < 1 || Number(query.page_size) > 1000) return reply({}, 40002, 'page_size must be between 1 and 1000');
+          if (state.lifetimeRateLimited) return reply({}, 40100, 'Too many requests');
+          if (ids.some((id) => state.failLifetimeFor.has(String(id)))) return reply({}, 40002, 'No permission to access one of the advertisers');
+          const rows = ids.filter((id) => state.lifetimeSpend[id]).map((id) => ({ dimensions: { advertiser_id: String(id) }, metrics: { spend: String(state.lifetimeSpend[id].spend), currency: state.lifetimeSpend[id].currency } }));
+          return reply({ list: rows, page_info: { page: 1, page_size: Number(query.page_size), total_number: rows.length, total_page: 1 } });
+        }
         if (query.dimensions?.includes('stat_time_hour')) {
           if (state.hourlyDelayMs) await new Promise((r) => setTimeout(r, state.hourlyDelayMs));
           if (state.failHourlyFor.has(query.advertiser_id)) return reply({}, 50001, 'Internal error');
@@ -518,6 +538,32 @@ export function createFakeTiktok() {
             { dimensions: { stat_time_day: '2026-11-18 00:00:00' }, metrics: { spend: '4.50', impressions: '500', clicks: '10', conversion: '1' } },
           ],
         });
+      }
+      case '/bc/account/transaction/get/': {
+        if (!/^\d{1,24}$/.test(String(query.bc_id ?? ''))) return reply({}, 40002, 'bc_id is required');
+        if (state.failTransactionsBc.has(query.bc_id)) return reply({}, 40001, 'No permission: only a Finance Manager or Finance Analyst can get transaction records');
+        const level = query.transaction_level ?? 'ADVERTISER';
+        if (!['BC', 'ADVERTISER', 'PAYMENT_PORTFOLIO'].includes(level)) return reply({}, 40002, 'transaction_level is invalid');
+        const filtering = query.filtering ? JSON.parse(query.filtering) : {};
+        const TYPES = ['BILL_PAYMENT', 'ADD_BALANCE', 'CANCELLATION', 'PROMOTION_ISSUED', 'PROMOTION_EXPIRED', 'INCREASE_BALANCE', 'DECREASE_BALANCE', 'CARD_VERIFICATION', 'CARD_VERIFICATION_REFUND', 'ORDER_CREATION_PAYMENT', 'ORDER_EDIT_PAYMENT', 'RETURN_OF_REMAINING_BUDGET', 'REFUND'];
+        if (filtering.transaction_types && !(Array.isArray(filtering.transaction_types) && filtering.transaction_types.every((t) => TYPES.includes(t)))) return reply({}, 40002, 'transaction_types is invalid');
+        if (filtering.account_ids !== undefined && (level !== 'ADVERTISER' || !Array.isArray(filtering.account_ids) || filtering.account_ids.length > 100)) return reply({}, 40002, 'account_ids is only valid with transaction_level ADVERTISER (max size 100)');
+        const TIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+        if ((filtering.start_time && !TIME.test(filtering.start_time)) || (filtering.end_time && !TIME.test(filtering.end_time))) return reply({}, 40002, 'start_time/end_time format is YYYY-MM-DD HH:MM:SS');
+        const toMs = (t) => Date.parse(`${t.replace(' ', 'T')}Z`);
+        if (filtering.start_time && filtering.end_time && toMs(filtering.end_time) - toMs(filtering.start_time) > 365 * 86_400_000) return reply({}, 40002, 'The maximum query time range is 365 days');
+        const size = Number(query.page_size ?? 10);
+        if (!Number.isInteger(size) || size < 1 || size > 50) return reply({}, 40002, 'page_size must be between 1 and 50');
+        const page = Number(query.page ?? 1);
+        if (!Number.isInteger(page) || page < 1) return reply({}, 40002, 'page must be >= 1');
+        let all = (state.transactions[query.bc_id] ?? []).filter((t) => (level === 'BC' ? !t.account_id : Boolean(t.account_id)));
+        if (filtering.transaction_types) all = all.filter((t) => filtering.transaction_types.includes(t.transaction_type));
+        if (filtering.account_ids) all = all.filter((t) => filtering.account_ids.includes(t.account_id));
+        if (filtering.start_time) all = all.filter((t) => toMs(t.create_time) >= toMs(filtering.start_time));
+        if (filtering.end_time) all = all.filter((t) => toMs(t.create_time) <= toMs(filtering.end_time));
+        all = [...all].sort((a, b) => b.create_time.localeCompare(a.create_time));
+        const list = all.slice((page - 1) * size, page * size).map((t) => ({ ...t, bc_id: query.bc_id, payment_portfolio_id: null, payment_portfolio_name: null, invoice_id: null }));
+        return reply({ transaction_list: list, page_info: { page, page_size: size, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / size)) } });
       }
       case '/file/image/ad/upload/':
         state.uploadCalls.image = (state.uploadCalls.image ?? 0) + 1;

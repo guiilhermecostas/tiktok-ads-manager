@@ -49,6 +49,7 @@ import { createManagerRouter } from './modules/manager/manager.routes.js';
 import { createManagerService } from './modules/manager/manager.service.js';
 import { createManagerViewsRepository } from './modules/manager/manager-views.repository.js';
 import { createBalanceTransfersRepository } from './modules/tiktok/balance-transfers.repository.js';
+import { createBalanceActivityService } from './modules/tiktok/balance-activity.service.js';
 import { createBalanceRouter } from './modules/tiktok/balance.routes.js';
 import { createBalanceService } from './modules/tiktok/balance.service.js';
 import { createCatalogDefaultsRepository } from './modules/catalog/catalog-defaults.repository.js';
@@ -94,6 +95,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const tiktokGuards = {};
   const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, guards: tiktokGuards, config, log });
   // Saldo (BCs e contas de anúncio) direto da API do TikTok, em cache curto.
+  const balanceActivity = createBalanceActivityService({ tiktok: tiktokService, connections: businessCenters, log, now: clock });
   const balanceService = createBalanceService({ tiktok: tiktokService, connections: businessCenters, transfers: createBalanceTransfersRepository(db), users, log, now: clock });
   // Gerenciador de anúncios: todos os anúncios de todas as contas, com desempenho, ativar/pausar e visualizações salvas por pessoa.
   const managerService = createManagerService({ tiktok: tiktokService, connections: businessCenters, views: createManagerViewsRepository(db), log, now: clock });
@@ -216,7 +218,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const catalogRouter = createCatalogRouter({ service: catalogService, limits });
   protectedApi.use('/tiktok/catalogs', catalogRouter);
   protectedApi.use('/tiktok/manager', managerRouter);
-  const balanceRouter = createBalanceRouter({ service: balanceService, limits });
+  const balanceRouter = createBalanceRouter({ service: balanceService, activity: balanceActivity, limits });
   protectedApi.use('/tiktok/balance', balanceRouter);
   const hourlyRouter = createHourlyRouter({ service: hourlyService, limits });
   protectedApi.use('/tiktok/hourly', hourlyRouter);

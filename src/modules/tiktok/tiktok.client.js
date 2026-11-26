@@ -23,6 +23,9 @@ const BALANCE_EXTRA_FIELDS = ['budget_remaining']; // `fields` de /advertiser/ba
 const PORTFOLIO_FIELDS = ['account_balance', 'valid_account_balance', 'frozen_balance', 'tax', 'cash_balance', 'valid_cash_balance', 'transferable_amount'];
 const portfolioTypeOf = (value) => (['SHARED', 'NON_SHARED'].includes(value) ? value : null);
 const MAX_AMOUNT_FIELDS = 40;
+const LIFETIME_MAX_IDS = 5; // `advertiser_ids` do relatório aceita até 5 contas por pedido (documentação oficial)
+const TRANSACTION_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+const TRANSACTION_TYPE_RE = /^[A-Z_]{3,40}$/;
 const NUMERIC_TEXT_RE = /^-?\d{1,15}(?:\.\d{1,6})?$/;
 // Campos que são identificação, data, situação ou paginação (não são valores em dinheiro).
 const NOT_AMOUNT_RE = /(^|[_.])(id|ids|time|date|days|status|type|code|count|number|page|size|name|currency)($|[_.])/;
@@ -533,6 +536,67 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         if (!(err instanceof HttpError && err.code === 'tiktok_error')) throw err;
         return run(false); // o TikTok recusou `fields` (versão/permissão): lê o básico, sem o orçamento restante
       }
+    },
+
+    /**
+     * Gasto VITALÍCIO (desde sempre) de até 5 contas de anúncio, em UMA chamada: `/report/integrated/get/` com `report_type` BASIC,
+     * `data_level` AUCTION_ADVERTISER, `query_lifetime` e `advertiser_ids` (documentação oficial: as contas precisam ser do mesmo usuário do
+     * TikTok e a moeda de cada uma volta em `metrics`). Devolve Map(id → { spend, currency }); conta sem linha na resposta não aparece no Map.
+     */
+    async getLifetimeSpend(token, advertiserIds) {
+      const ids = [...new Set(advertiserIds.map(digitsOrNull).filter(Boolean))];
+      if (!ids.length || ids.length > LIFETIME_MAX_IDS || ids.length !== advertiserIds.length) throw new HttpError(400, `Informe de 1 a ${LIFETIME_MAX_IDS} contas de anúncio válidas.`, 'validation_error');
+      const out = new Map();
+      for (let page = 1; page <= 2; page += 1) {
+        const data = await call('/report/integrated/get/', {
+          token,
+          query: { advertiser_ids: ids, report_type: 'BASIC', data_level: 'AUCTION_ADVERTISER', dimensions: ['advertiser_id'], metrics: ['spend'], query_lifetime: true, page, page_size: 10 },
+        });
+        const list = Array.isArray(data.list) ? data.list : [];
+        for (const row of list) {
+          const id = digitsOrNull(row?.dimensions?.advertiser_id);
+          const spend = numOrNull(row?.metrics?.spend);
+          if (!id || !ids.includes(id) || spend === null || spend < 0) continue; // só as contas pedidas, e só valor numérico válido
+          const currency = /^[A-Z]{3}$/.test(String(row?.metrics?.currency ?? '')) ? row.metrics.currency : null;
+          out.set(id, { spend, currency });
+        }
+        if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
+      }
+      return out;
+    },
+
+    /**
+     * Transações (depósitos e demais movimentações) da Business Center (`level` 'BC') ou de contas de anúncio dela (`level` 'ADVERTISER'),
+     * em `/bc/account/transaction/get/`. Só quem tem função financeira (Finance Manager/Analyst) na BC lê isto. Janela de até 365 dias,
+     * página de 1 a 50. Lê a resposta de forma defensiva: cada campo é validado antes de sair daqui.
+     * Devolve { transactions: [{ id, type, amountType, amount, subtotal, taxAmount, currency, billingType, timezone, createdAt, accountId, invoiceSerial }], pageInfo }.
+     */
+    async listTransactions(token, { bcId, level, accountIds = null, types = null, startTime, endTime, page = 1, pageSize = 20 }) {
+      if (!/^\d{1,24}$/.test(bcId ?? '')) throw new HttpError(400, 'Business Center inválida.', 'validation_error');
+      if (!['BC', 'ADVERTISER'].includes(level)) throw new HttpError(400, 'Nível de consulta inválido.', 'validation_error');
+      if (!TRANSACTION_TIME_RE.test(startTime ?? '') || !TRANSACTION_TIME_RE.test(endTime ?? '')) throw new HttpError(400, 'Período inválido.', 'validation_error');
+      if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) throw new HttpError(400, 'Página inválida.', 'validation_error');
+      if (accountIds && (level !== 'ADVERTISER' || !accountIds.length || accountIds.length > 100 || !accountIds.every((id) => /^\d{1,24}$/.test(id)))) throw new HttpError(400, 'Contas inválidas.', 'validation_error');
+      if (types && (!types.length || !types.every((t) => TRANSACTION_TYPE_RE.test(t)))) throw new HttpError(400, 'Tipos de transação inválidos.', 'validation_error');
+      const filtering = { start_time: startTime, end_time: endTime, ...(types ? { transaction_types: types } : {}), ...(accountIds ? { account_ids: accountIds } : {}) };
+      const data = await call('/bc/account/transaction/get/', { token, query: { bc_id: bcId, transaction_level: level, filtering, page, page_size: pageSize } });
+      const text = (value, max) => (typeof value === 'string' && value ? value.slice(0, max) : null);
+      const transactions = (Array.isArray(data.transaction_list) ? data.transaction_list : []).map((item) => ({
+        id: text(String(item?.transaction_id ?? ''), 64),
+        type: TRANSACTION_TYPE_RE.test(String(item?.transaction_type ?? '')) ? item.transaction_type : null,
+        amountType: ['POSITIVE', 'NEGATIVE', 'OTHER'].includes(item?.amount_type) ? item.amount_type : 'OTHER',
+        amount: numOrNull(item?.amount),
+        subtotal: numOrNull(item?.subtotal),
+        taxAmount: numOrNull(item?.tax_amount),
+        currency: /^[A-Z]{3}$/.test(String(item?.currency ?? '')) ? item.currency : null,
+        billingType: ['CASH', 'CREDIT'].includes(item?.billing_type) ? item.billing_type : null,
+        timezone: text(item?.timezone, 16),
+        createdAt: TRANSACTION_TIME_RE.test(String(item?.create_time ?? '')) ? item.create_time : null,
+        accountId: digitsOrNull(item?.account_id),
+        invoiceSerial: text(item?.serial_number, 64),
+      })).filter((t) => t.id && t.amount !== null);
+      const info = data.page_info ?? {};
+      return { transactions, pageInfo: { page: num(info.page) || page, totalNumber: num(info.total_number), totalPage: num(info.total_page) || 1 } };
     },
 
     /**

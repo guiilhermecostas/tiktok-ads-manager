@@ -10,7 +10,7 @@ import { homeChatView } from './views/home-chat.js';
 import { managerView } from './views/manager.js';
 import { catalogView } from './views/catalog/index.js';
 import { reportsView } from './views/reports.js';
-import { balanceAccountsView, balanceBcView } from './views/balance.js';
+import { balanceAccountsView, balanceBcView } from './views/balance/index.js';
 import { reportsHourlyView } from './views/reports-hourly.js';
 import { campaignsView } from './views/campaigns.js';
 import { openCampaignWizard } from './views/campaign-wizard/index.js';
