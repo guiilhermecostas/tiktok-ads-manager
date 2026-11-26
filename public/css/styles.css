@@ -170,13 +170,19 @@ a { color: var(--tt-red-dark); }
 .nav-group__panel {
   position: fixed; z-index: 48; min-width: 190px; padding: 6px; display: flex; flex-direction: column; gap: 2px;
   background: #161616; border: 1px solid #2c2c2c; border-radius: 12px; box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
-  visibility: hidden; opacity: 0; transform: translateY(-4px); pointer-events: none;
-  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s;
+  contain: layout style; transform-origin: top left; will-change: opacity, transform;
+  visibility: hidden; opacity: 0; transform: translate3d(0, -6px, 0) scale(0.97); pointer-events: none;
+  /* saída rápida: o painel some sem "arrastar" */
+  transition: opacity 0.11s ease-in, transform 0.11s ease-in, visibility 0s linear 0.11s;
 }
-.nav-group.is-open > .nav-group__panel { visibility: visible; opacity: 1; transform: none; pointer-events: auto; transition-delay: 0s; }
+.nav-group.is-open > .nav-group__panel {
+  visibility: visible; opacity: 1; transform: none; pointer-events: auto;
+  /* entrada suave: abre com desaceleração (começa rápido e pousa devagar) */
+  transition: opacity 0.16s cubic-bezier(0.2, 0.7, 0.2, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), visibility 0s;
+}
 /* Busca do menu em uso: as opções que combinam aparecem direto, em lista (sem painel). */
 .nav--searching .nav-group__header { display: none; }
-.nav--searching .nav-group__panel { position: static; visibility: visible; opacity: 1; transform: none; pointer-events: auto; padding: 0; min-width: 0; width: auto !important; background: none; border: 0; box-shadow: none; }
+.nav--searching .nav-group__panel { position: static; contain: none; will-change: auto; visibility: visible; opacity: 1; transform: none; pointer-events: auto; padding: 0; min-width: 0; width: auto !important; background: none; border: 0; box-shadow: none; }
 /* Menu recolhido: só o ícone do grupo; as opções abrem ao lado. */
 .shell.is-collapsed .nav-group__header { justify-content: center; }
 .shell.is-collapsed .nav-group__header .nav-item__label, .shell.is-collapsed .nav-group__chevron, .shell.is-collapsed .nav-group__dot { display: none; }
@@ -185,7 +191,10 @@ a { color: var(--tt-red-dark); }
 .shell.is-collapsed .nav-group__panel .nav-item { justify-content: flex-start; }
 .shell.is-collapsed .nav-group__panel .nav-item__label { display: inline; }
 .shell.is-collapsed .nav-group__panel .nav-item.is-active::after { display: block; }
-@media (prefers-reduced-motion: reduce) { .nav-group__panel, .nav-group__chevron, .nav-group__header { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .nav-group__panel, .nav-group__chevron, .nav-group__header { transition: none !important; }
+  .nav-group__panel { transform: none; }
+}
 
 .sidebar__bottom { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.12); }
 .account { display: flex; align-items: center; gap: 10px; padding: 4px 6px; min-width: 0; }
@@ -539,7 +548,7 @@ a { color: var(--tt-red-dark); }
   .nav-item.is-active::after { display: none; }
   .nav-group { display: contents; }
   .nav-group__header { display: none; }
-  .nav-group__panel { display: contents; visibility: visible; pointer-events: auto; } /* a visibilidade é herdada pelas opções: precisa ficar visível */
+  .nav-group__panel { display: contents; visibility: visible; pointer-events: auto; contain: none; will-change: auto; } /* a visibilidade é herdada pelas opções: precisa ficar visível */
   .sidebar__bottom { flex-direction: row; border: 0; padding: 0; }
   .account__text { display: none; }
   .shell.is-collapsed .nav-item__label, .shell.is-collapsed .logout__label { display: inline; }

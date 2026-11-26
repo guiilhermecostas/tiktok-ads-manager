@@ -6,11 +6,12 @@ import { h, icon } from '../dom.js';
  *  - Clique/toque ou Enter/Espaço no título: abre e FIXA (fica aberto até clicar fora, apertar Esc ou clicar no título de novo).
  *  - Teclado: ↓ no título abre e vai para a primeira opção; ↑/↓ andam entre as opções; Esc fecha e volta ao título.
  *  - O painel é `position: fixed` (colocado sob o título no momento de abrir): assim a rolagem da lateral nunca o corta e ele não empurra o resto do menu.
+ *  - Animação leve: só `opacity` e `transform` (compostas pela GPU, sem recalcular layout). Entra suave (com desaceleração) e sai rápido. Quem prefere menos movimento (prefers-reduced-motion) recebe a troca instantânea.
  *  - Em tela pequena (menu horizontal) o painel não existe: as opções aparecem direto, em linha (CSS).
  * Todo texto entra como nó de texto (nunca HTML).
  */
-const OPEN_DELAY_MS = 70;
-const CLOSE_DELAY_MS = 260;
+const OPEN_DELAY_MS = 45;
+const CLOSE_DELAY_MS = 220;
 const GAP_PX = 2;
 const EDGE_PX = 8;
 
@@ -40,6 +41,7 @@ export function createNavGroup({ label, iconName, items, hasActive, isSearching 
   const panelId = `nav-group-${counter}`;
   let open = false;
   let pinned = false;
+  let muted = false; // a pessoa fechou clicando no título: não reabre por hover até o mouse sair do grupo e voltar
   let openTimer;
   let closeTimer;
 
@@ -56,22 +58,33 @@ export function createNavGroup({ label, iconName, items, hasActive, isSearching 
 
   const links = () => [...panel.querySelectorAll('a')].filter((a) => !a.hidden);
 
-  /** Põe o painel logo abaixo do título (ou ao lado, com a lateral recolhida), sem sair da tela. */
+  /**
+   * Põe o painel logo abaixo do título (ou ao lado, com a lateral recolhida), sem sair da tela.
+   * Primeiro LÊ tudo (posição do título, tamanho do painel) e só depois ESCREVE (largura, posição) numa tacada: o navegador faz um
+   * único cálculo de layout em vez de um por leitura, e o painel (fora do fluxo) não mexe no resto do menu.
+   */
+  let placedAsSide = null;
   function place() {
+    const sideMode = root.closest('.shell')?.classList.contains('is-collapsed') === true;
+    if (placedAsSide !== sideMode) { // a lateral foi expandida/recolhida desde a última abertura: a largura antiga não vale mais
+      panel.style.width = sideMode ? 'auto' : '';
+      placedAsSide = sideMode;
+    }
     const rect = header.getBoundingClientRect();
-    const sideMode = root.closest('.shell')?.classList.contains('is-collapsed');
-    panel.style.width = sideMode ? 'auto' : `${Math.round(rect.width)}px`;
-    panel.style.left = `${Math.round(sideMode ? rect.right + GAP_PX + 2 : rect.left)}px`;
-    panel.style.top = `${Math.round(sideMode ? rect.top : rect.bottom + GAP_PX - 4)}px`;
-    const box = panel.getBoundingClientRect();
-    if (box.bottom > window.innerHeight - EDGE_PX) panel.style.top = `${Math.max(EDGE_PX, window.innerHeight - EDGE_PX - box.height)}px`;
-    if (box.right > window.innerWidth - EDGE_PX) panel.style.left = `${Math.max(EDGE_PX, window.innerWidth - EDGE_PX - box.width)}px`;
+    const width = sideMode ? panel.offsetWidth : Math.round(rect.width);
+    const height = panel.offsetHeight;
+    const left = Math.min(sideMode ? rect.right + GAP_PX + 2 : rect.left, window.innerWidth - EDGE_PX - width);
+    const top = Math.min(sideMode ? rect.top : rect.bottom + GAP_PX - 4, window.innerHeight - EDGE_PX - height);
+    if (!sideMode) panel.style.width = `${width}px`;
+    panel.style.left = `${Math.round(Math.max(EDGE_PX, left))}px`;
+    panel.style.top = `${Math.round(Math.max(EDGE_PX, top))}px`;
   }
 
-  function show({ pin = false } = {}) {
+  function show({ pin = false, byHover = false } = {}) {
     clearTimeout(closeTimer);
     clearTimeout(openTimer);
-    if (isCompactNav() || isSearching()) return;
+    if (isCompactNav() || isSearching() || (byHover && muted)) return;
+    muted = false;
     if (current && current !== entry) current.close();
     if (pin) pinned = true;
     if (open) return;
@@ -96,8 +109,12 @@ export function createNavGroup({ label, iconName, items, hasActive, isSearching 
 
   function onHeaderClick() {
     if (isCompactNav() || isSearching()) return;
-    if (open && pinned) close();
-    else show({ pin: true });
+    if (open && pinned) {
+      close();
+      muted = root.matches(':hover'); // fechou com o mouse parado em cima do título: não pode reabrir sozinho (se o mouse está longe, não há o que silenciar)
+    } else {
+      show({ pin: true }); // fechado: abre e fixa; aberto só por hover: fixa
+    }
   }
 
   function onHeaderKey(event) {
@@ -118,13 +135,14 @@ export function createNavGroup({ label, iconName, items, hasActive, isSearching 
   }
 
   root.addEventListener('pointerenter', (event) => {
-    if (event.pointerType !== 'mouse' || !canHover() || isCompactNav() || isSearching()) return;
+    if (event.pointerType !== 'mouse' || !canHover() || isCompactNav() || isSearching() || muted) return;
     clearTimeout(closeTimer);
-    if (!open) openTimer = setTimeout(() => show(), OPEN_DELAY_MS);
+    if (!open) openTimer = setTimeout(() => show({ byHover: true }), OPEN_DELAY_MS);
   });
   root.addEventListener('pointerleave', (event) => {
     if (event.pointerType !== 'mouse') return;
     clearTimeout(openTimer);
+    muted = false;
     if (open && !pinned) closeTimer = setTimeout(() => close(), CLOSE_DELAY_MS);
   });
 
