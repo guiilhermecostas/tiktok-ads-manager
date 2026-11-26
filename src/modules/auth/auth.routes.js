@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { RateLimiter } from '../../lib/rate-limit.js';
-import { tooMany } from '../../lib/http-error.js';
+import { badRequest, tooMany } from '../../lib/http-error.js';
 import { asObject, parseEmail, parsePassword, parseText } from '../../lib/validation.js';
 import { requireAuth } from '../../middleware/guards.js';
 import { sessionCookieOptions } from '../../middleware/session.js';
 import { presentSession } from './session-view.js';
 
-export function createAuthRouter({ authService, sessions, config, limits = {} }) {
+export function createAuthRouter({ authService, sessions, impersonation, config, limits = {} }) {
   const router = Router();
   const registerLimiter = new RateLimiter({ max: limits.register ?? 10, windowMs: 60 * 60 * 1000 });
   const loginIpLimiter = new RateLimiter({ max: limits.loginIp ?? 30, windowMs: 15 * 60 * 1000 });
@@ -57,10 +57,25 @@ export function createAuthRouter({ authService, sessions, config, limits = {} })
   router.get('/me', (req, res) => {
     // Visitante não é erro: responde 200 com user nulo (evita ruído de 401 no console do navegador).
     if (!req.user) return res.json({ user: null, workspace: null, csrfToken: null });
-    res.json({ ...presentSession(req.user, req.member), csrfToken: req.session.csrfToken });
+    res.json({ ...presentSession(req.user, req.member), impersonation: req.impersonation ? { adminName: req.impersonation.adminName } : null, csrfToken: req.session.csrfToken });
+  });
+
+  // Sai da conta que o admin está vendo e volta para a SUA conta de admin (sessão nova). Se ele já não for admin aprovado, cai no login.
+  router.post('/impersonation/exit', requireAuth, async (req, res) => {
+    if (!req.impersonation) throw badRequest('Você não está na conta de outra pessoa.');
+    const { session } = await impersonation.stop({ adminId: req.impersonation.adminId, targetId: req.user.id }, { ip: req.ip });
+    await sessions.destroy(req.sessionToken);
+    if (!session) {
+      res.clearCookie(config.cookieName, { path: '/', httpOnly: true, sameSite: 'strict', secure: config.cookieSecure });
+      return res.json({ user: null, workspace: null, csrfToken: null });
+    }
+    res.cookie(config.cookieName, session.token, sessionCookieOptions(config, session.expiresAt));
+    const found = await sessions.resolve(session.token);
+    return res.json({ ...presentSession(found.user, found.member), impersonation: null, csrfToken: session.csrfToken });
   });
 
   router.post('/logout', requireAuth, async (req, res) => {
+    if (req.impersonation) await impersonation.stop({ adminId: req.impersonation.adminId, targetId: req.user.id }, { ip: req.ip, reopen: false });
     await sessions.destroy(req.sessionToken);
     res.clearCookie(config.cookieName, { path: '/', httpOnly: true, sameSite: 'strict', secure: config.cookieSecure });
     res.status(204).end();

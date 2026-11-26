@@ -19,7 +19,7 @@ export function homeChatView(ctx) {
   if (conversation.ownerId !== state.user.id) conversation = { ownerId: state.user.id, messages: [] };
   const firstName = state.user.name.split(' ')[0];
   const body = h('div', { class: 'chat__body' });
-  const input = h('textarea', { class: 'chat__input', rows: 1, maxlength: MAX_LENGTH, placeholder: 'Pergunte ao assistente…', 'aria-label': 'Mensagem para o assistente' });
+  const input = h('textarea', { class: 'chat__input', rows: 1, maxlength: MAX_LENGTH, placeholder: 'Pergunte sobre as suas campanhas, contas e relatórios…', 'aria-label': 'Sua pergunta' });
   const send = h('button', { type: 'submit', class: 'chat__send', 'aria-label': 'Enviar mensagem', title: 'Enviar', disabled: true }, icon('send', 18));
   let waiting = false;
 
@@ -40,7 +40,7 @@ export function homeChatView(ctx) {
 
   function messageEl(message) {
     if (message.role === 'user') return h('div', { class: 'chat__msg chat__msg--user' }, h('div', { class: 'chat__bubble' }, message.text), avatarEl(state.user, { size: 'sm' }));
-    if (message.typing) return h('div', { class: 'chat__msg' }, h('div', { class: 'chat__bubble chat__bubble--typing', 'aria-label': 'O assistente está escrevendo' }, h('span', { class: 'dot' }), h('span', { class: 'dot' }), h('span', { class: 'dot' })));
+    if (message.typing) return h('div', { class: 'chat__msg' }, h('div', { class: 'chat__bubble chat__bubble--typing', 'aria-label': 'Escrevendo a resposta' }, h('span', { class: 'dot' }), h('span', { class: 'dot' }), h('span', { class: 'dot' })));
     if (message.blocks) return h('div', { class: 'chat__msg' }, h('div', { class: 'chat__bubble chat__bubble--rich' }, renderBlocks(message.blocks, { openWizard: () => openCampaignWizard(ctx), ask: (text) => submit(text) }), h('div', { class: 'chat__actions' }, copyButton(message.text))));
     return h('div', { class: 'chat__msg' }, h('div', { class: 'chat__bubble' }, message.text, h('div', { class: 'chat__actions' }, copyButton(message.text))));
   }
@@ -103,11 +103,11 @@ export function homeChatView(ctx) {
       submit(input.value);
     }
   });
-  const form = h('form', { class: 'chat__composer', novalidate: true, onSubmit: (e) => { e.preventDefault(); submit(input.value); } }, h('div', { class: 'chat__box' }, input, send), h('p', { class: 'chat__hint muted' }, 'Enter envia · Shift+Enter quebra a linha. O assistente ainda está em desenvolvimento.'));
+  const form = h('form', { class: 'chat__composer', novalidate: true, onSubmit: (e) => { e.preventDefault(); submit(input.value); } }, h('div', { class: 'chat__box' }, input, send), h('p', { class: 'chat__hint muted' }, 'Enter envia · Shift+Enter quebra a linha.'));
 
   const newChat = h('button', { type: 'button', class: 'btn btn--secondary btn--sm chat__new', hidden: true, onClick: () => { conversation = { ownerId: state.user.id, messages: [] }; waiting = false; draw(); input.focus(); } }, '+ Nova conversa');
 
-  const element = h('div', { class: 'chat' }, h('div', { class: 'chat__top' }, h('span', { class: 'chat__name' }, 'Assistente'), newChat), body, form);
+  const element = h('div', { class: 'chat' }, h('div', { class: 'chat__top' }, newChat), body, form);
   draw({ stick: false });
   queueMicrotask(() => input.focus());
   return { element };

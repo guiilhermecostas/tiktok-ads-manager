@@ -1,8 +1,9 @@
 import { post } from '../api.js';
 import { h, icon } from '../dom.js';
-import { can, isWorkspaceOwner, state } from '../state.js';
+import { can, isWorkspaceOwner, setSession, state } from '../state.js';
 import { openCampaignWizard } from './campaign-wizard/index.js';
 import { avatarEl } from './avatar.js';
+import { createBell } from './notifications-bell.js';
 import { openProfile } from './profile.js';
 
 // `areas`: o item aparece para quem tem ao menos uma destas áreas (o dono da conta tem todas); `ownerOnly`: só o dono do espaço.
@@ -173,16 +174,39 @@ export function renderLayout(ctx, currentPath, content) {
     ),
   );
 
+  async function leaveImpersonation(e) {
+    const trigger = e.currentTarget;
+    trigger.disabled = true;
+    try {
+      setSession(await post('/auth/impersonation/exit'));
+      ctx.navigate('/admin', { replace: true });
+    } catch {
+      trigger.disabled = false;
+      await ctx.refreshSession(); // a sessão pode já ter caído (ex.: a conta foi bloqueada): a tela vai para o lugar certo
+    }
+  }
+  // Faixa fixa no topo enquanto um administrador vê a conta de outra pessoa: deixa claro onde está e dá a saída em um clique.
+  const impersonationBar = state.impersonation
+    ? h(
+        'div',
+        { class: 'impersonation-bar', role: 'status' },
+        h('span', { class: 'impersonation-bar__text' }, h('strong', null, `Você está na conta de ${user.name}`), ' · modo somente leitura (nada é alterado)'),
+        h('button', { type: 'button', class: 'btn btn--sm impersonation-bar__exit', onClick: leaveImpersonation }, 'Voltar ao admin'),
+      )
+    : null;
+
   const workspace = h(
     'div',
     { class: 'workspace' },
     h(
       'div',
       { class: 'frame' },
+      impersonationBar,
       h(
         'header',
         { class: 'appbar' },
         h('span', { class: 'appbar__title' }, 'TikTok Ads Manager'),
+        createBell(ctx), // o sino fica no canto direito do topo
       ),
       h('main', { class: 'main', id: 'main' }, content),
     ),

@@ -7,6 +7,7 @@ import { formatCurrency, formatDate, formatNumber, formatPercent } from '../form
 import { can } from '../state.js';
 import { alertBox, badge, button, confirmDialog, emptyState, field, openModal, spinner, toast } from '../ui.js';
 import { pageHeader } from './layout.js';
+import { popover } from './popover.js';
 
 /**
  * Gerenciador: campanhas, grupos de anúncios e anúncios de TODAS as contas, cada nível na sua aba (clicar numa campanha abre os grupos dela; num
@@ -404,23 +405,83 @@ export async function managerView() {
   }
 
   // ---------- desenho: barra de ferramentas ----------
+  // Poucos controles à vista: busca, período, Filtros, a visualização em uso (um menu), Colunas e Atualizar. Conta, situação e "só com gasto"
+  // ficam dentro de "Filtros" (com o número de filtros ligados) e aparecem como chips removíveis quando estão em uso.
   const toolbar = h('div', { class: 'manager__toolbar' });
+  const ui = { open: null }; // painel aberto ('filters' | 'views' | null): guardado aqui para a barra poder ser redesenhada sem fechá-lo
+  const remember = (name) => (isOpen) => { ui.open = isOpen ? name : (ui.open === name ? null : ui.open); };
+
+  function refreshAction(event) {
+    const trigger = event.currentTarget;
+    trigger.disabled = true;
+    load({ fresh: true }).then((done) => { if (done) toast('Lista atualizada.'); else trigger.disabled = false; });
+  }
+
+  function filtersSummary(accounts) {
+    const f = st.config.filters;
+    const chips = [];
+    if (f.accountId) chips.push({ text: `Conta: ${accounts.find((a) => a.id === f.accountId)?.name ?? f.accountId}`, clear: () => { f.accountId = ''; } });
+    if (f.status) chips.push({ text: `Situação: ${STATUS_LABELS[f.status]}`, clear: () => { f.status = ''; } });
+    if (f.onlySpent) chips.push({ text: 'Só com gasto', clear: () => { f.onlySpent = false; } });
+    return chips;
+  }
+
   function drawToolbar() {
     const view = currentView();
-    const viewSelect = h('select', { class: 'input input--filter', 'aria-label': 'Visualização', onChange: (e) => chooseView(e.target.value) },
-      h('option', { value: '' }, 'Visualização padrão do sistema'),
-      st.views.map((v) => h('option', { value: String(v.id) }, `${v.isDefault ? '★ ' : ''}${v.name}`)));
-    viewSelect.value = st.currentViewId === null ? '' : String(st.currentViewId);
     const dirty = isDirty();
+    const accounts = st.data?.accounts ?? [];
+    const chips = filtersSummary(accounts);
+    const refilter = () => { st.page = 1; drawToolbar(); drawBody(); };
 
-    const preset = h('select', { class: 'input input--filter', 'aria-label': 'Período', onChange: (e) => { st.config.datePreset = e.target.value; drawToolbar(); if (e.target.value !== 'custom') load({ reset: true }); } },
+    const search = h('input', { class: 'input toolbar__search manager__search', type: 'search', maxlength: 100, placeholder: levelDef().searchHint, 'aria-label': `Buscar ${levelDef().plural}`, value: st.search,
+      onInput: (e) => { st.search = e.target.value; st.page = 1; drawBody(); } });
+
+    const preset = h('select', { class: 'input input--filter manager__period', 'aria-label': 'Período', onChange: (e) => { st.config.datePreset = e.target.value; drawToolbar(); if (e.target.value !== 'custom') load({ reset: true }); } },
       DATE_PRESETS.map((p) => h('option', { value: p.id }, p.label)), h('option', { value: 'custom' }, 'Personalizado…'));
     preset.value = st.config.datePreset;
+
+    // ----- Filtros (painel) -----
+    const accountSelect = h('select', { class: 'input input--filter', id: 'manager-filter-account', 'aria-label': 'Conta de anúncio', onChange: (e) => { st.config.filters.accountId = e.target.value; refilter(); } },
+      h('option', { value: '' }, `Todas as contas${accounts.length ? ` (${accounts.length})` : ''}`),
+      accounts.map((a) => h('option', { value: a.id }, `${a.name}${a.status === 'error' ? ' · erro' : ''}`)));
+    accountSelect.value = st.config.filters.accountId;
+    const statusSelect = h('select', { class: 'input input--filter', id: 'manager-filter-status', 'aria-label': 'Situação', onChange: (e) => { st.config.filters.status = e.target.value; refilter(); } },
+      STATUS_FILTERS.map((v) => h('option', { value: v }, STATUS_LABELS[v])));
+    statusSelect.value = st.config.filters.status;
+    const filtersPanel = h('div', { class: 'manager__panel' },
+      h('label', { class: 'manager__panel-field', for: 'manager-filter-account' }, h('span', { class: 'field__label' }, 'Conta de anúncio'), accountSelect),
+      h('label', { class: 'manager__panel-field', for: 'manager-filter-status' }, h('span', { class: 'field__label' }, 'Situação'), statusSelect),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.config.filters.onlySpent, onChange: (e) => { st.config.filters.onlySpent = e.target.checked; refilter(); } }), h('span', null, 'Só com gasto no período')),
+      chips.length ? h('button', { type: 'button', class: 'manager__linkbtn', onClick: () => { for (const chip of chips) chip.clear(); refilter(); } }, 'Limpar filtros') : null);
+    const filters = popover({
+      label: ['Filtros', chips.length ? h('span', { class: 'manager__count' }, String(chips.length)) : null],
+      ariaLabel: chips.length ? `Filtros: ${chips.length} em uso` : 'Filtros', content: filtersPanel, open: ui.open === 'filters', onToggle: remember('filters'),
+    });
+
+    // ----- Visualização (menu) -----
+    const viewName = view ? `${view.isDefault ? '★ ' : ''}${view.name}` : 'Padrão do sistema';
+    const choose = (id) => () => { ui.open = null; chooseView(id === null ? '' : String(id)); };
+    const item = (label, onClick, { danger = false, checked = false } = {}) => h('button', { type: 'button', role: 'menuitem', class: `manager__menuitem${checked ? ' is-checked' : ''}${danger ? ' is-danger' : ''}`, onClick }, label);
+    const act = (fn) => () => { ui.open = null; fn(); };
+    const viewsPanel = h('div', { class: 'manager__menu', role: 'menu', 'aria-label': 'Visualizações' },
+      h('p', { class: 'manager__menu-title' }, 'Visualizações'),
+      item('Padrão do sistema', choose(null), { checked: st.currentViewId === null }),
+      st.views.map((v) => item(`${v.isDefault ? '★ ' : ''}${v.name}`, choose(v.id), { checked: v.id === st.currentViewId })),
+      h('hr', { class: 'manager__menu-sep' }),
+      view ? item(dirty ? 'Salvar alterações' : 'Salvar alterações (nada mudou)', act(saveChanges)) : item('Salvar como visualização…', act(saveAsNew)),
+      view ? item('Salvar como nova…', act(saveAsNew)) : null,
+      view ? item(view.isDefault ? 'Não abrir mais por padrão' : 'Abrir sempre com esta', act(toggleDefault)) : null,
+      view ? item('Excluir esta visualização', act(removeView), { danger: true }) : null);
+    const views = popover({
+      label: [h('span', { class: 'manager__viewlabel' }, 'Visualização'), h('strong', { class: 'manager__viewname' }, viewName), dirty ? h('span', { class: 'manager__dirty', title: 'Você mudou colunas, filtros ou ordem desde que abriu esta visualização' }, 'alterada') : null],
+      ariaLabel: `Visualização: ${viewName}${dirty ? ' (alterada)' : ''}`, content: viewsPanel, open: ui.open === 'views', onToggle: remember('views'), align: 'right',
+    });
+
     const customBox = st.config.datePreset === 'custom'
-      ? h('span', { class: 'manager__custom' },
-        h('input', { class: 'input', type: 'date', 'aria-label': 'Data inicial', value: st.custom.from, onChange: (e) => { st.custom.from = e.target.value; } }),
+      ? h('div', { class: 'manager__row manager__custom' },
+        h('input', { class: 'input input--filter', type: 'date', 'aria-label': 'Data inicial', value: st.custom.from, onChange: (e) => { st.custom.from = e.target.value; } }),
         h('span', { class: 'muted' }, 'até'),
-        h('input', { class: 'input', type: 'date', 'aria-label': 'Data final', value: st.custom.to, onChange: (e) => { st.custom.to = e.target.value; } }),
+        h('input', { class: 'input input--filter', type: 'date', 'aria-label': 'Data final', value: st.custom.to, onChange: (e) => { st.custom.to = e.target.value; } }),
         button('Aplicar', { small: true, variant: 'primary', onClick: () => {
           if (!st.custom.from || !st.custom.to || st.custom.from > st.custom.to) return toast('Informe as duas datas (a inicial não pode ser depois da final).', 'danger');
           return load({ reset: true });
@@ -428,30 +489,18 @@ export async function managerView() {
         h('span', { class: 'muted manager__hint' }, `até ${MAX_CUSTOM_DAYS} dias`))
       : null;
 
-    const accounts = st.data?.accounts ?? [];
-    const accountSelect = h('select', { class: 'input input--filter', 'aria-label': 'Conta de anúncio', onChange: (e) => { st.config.filters.accountId = e.target.value; st.page = 1; drawToolbar(); drawBody(); } },
-      h('option', { value: '' }, `Todas as contas${accounts.length ? ` (${accounts.length})` : ''}`),
-      accounts.map((a) => h('option', { value: a.id }, `${a.name}${a.status === 'error' ? ' · erro' : ''}`)));
-    accountSelect.value = st.config.filters.accountId;
-    const statusSelect = h('select', { class: 'input input--filter', 'aria-label': 'Situação', onChange: (e) => { st.config.filters.status = e.target.value; st.page = 1; drawToolbar(); drawBody(); } },
-      STATUS_FILTERS.map((v) => h('option', { value: v }, STATUS_LABELS[v])));
-    statusSelect.value = st.config.filters.status;
-    const search = h('input', { class: 'input toolbar__search', type: 'search', maxlength: 100, placeholder: levelDef().searchHint, 'aria-label': `Buscar ${levelDef().plural}`, value: st.search,
-      onInput: (e) => { st.search = e.target.value; st.page = 1; drawBody(); } });
+    const chipRow = chips.length
+      ? h('div', { class: 'manager__row manager__chips', 'aria-label': 'Filtros em uso' },
+        chips.map((chip) => h('span', { class: 'manager__chip' }, chip.text, h('button', { type: 'button', class: 'manager__chip-x', 'aria-label': `Remover filtro: ${chip.text}`, onClick: () => { chip.clear(); refilter(); } }, '×'))))
+      : null;
 
     setChildren(
       toolbar,
-      h('div', { class: 'manager__row' },
-        h('div', { class: 'manager__views' }, h('span', { class: 'field__label' }, 'Visualização'), viewSelect,
-          dirty ? badge('alterada', 'warning') : null,
-          button(view ? 'Salvar alterações' : 'Salvar visualização', { small: true, variant: dirty || !view ? 'primary' : 'secondary', onClick: saveChanges }),
-          view ? button('Salvar como nova…', { small: true, onClick: saveAsNew }) : null,
-          view ? button(view.isDefault ? '★ Padrão' : '☆ Tornar padrão', { small: true, onClick: toggleDefault }) : null,
-          view ? button('Excluir', { small: true, variant: 'danger-ghost', onClick: removeView }) : null),
-        h('div', { class: 'manager__actions' }, button('Colunas', { small: true, onClick: columnsDialog }), button('Atualizar', { small: true, onClick: async (e) => { const t = e.currentTarget; t.disabled = true; if (await load({ fresh: true })) toast('Anúncios atualizados.'); } }))),
-      h('div', { class: 'manager__row manager__filters' }, preset, customBox, accountSelect, statusSelect,
-        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.config.filters.onlySpent, onChange: (e) => { st.config.filters.onlySpent = e.target.checked; st.page = 1; drawToolbar(); drawBody(); } }), h('span', null, 'Só com gasto no período')),
-        search),
+      h('div', { class: 'manager__row manager__main' },
+        search, preset, filters,
+        h('div', { class: 'manager__actions' }, views, button('Colunas', { small: true, onClick: columnsDialog }), button('Atualizar', { small: true, ariaLabel: `Atualizar ${levelDef().plural}`, onClick: refreshAction }))),
+      customBox,
+      chipRow,
     );
   }
 
@@ -603,7 +652,7 @@ export async function managerView() {
     return undefined;
   }
 
-  setChildren(root, pageHeader('Gerenciador', 'Campanhas, grupos de anúncios e anúncios de todas as suas contas, cada um na sua aba: veja o desempenho, ative ou pause e salve o seu formato de visualização.'), tabs, toolbar, body);
+  setChildren(root, pageHeader('Gerenciador', 'Campanhas, grupos de anúncios e anúncios de todas as suas contas.'), tabs, toolbar, body);
   drawTabs();
   drawBody();
   await loadViews();

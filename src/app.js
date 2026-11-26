@@ -3,9 +3,13 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import helmet from 'helmet';
 import { createAdminRouter } from './modules/admin/admin.routes.js';
+import { createAuditRepository } from './modules/admin/audit.repository.js';
+import { createImpersonationService } from './modules/admin/impersonation.service.js';
 import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createAuthService } from './modules/auth/auth.service.js';
 import { createSessionsRepository } from './modules/auth/sessions.repository.js';
+import { createAdminNotificationsRouter, createNotificationsRouter } from './modules/notifications/notifications.routes.js';
+import { createNotificationsRepository } from './modules/notifications/notifications.repository.js';
 import { createCampaignsRepository } from './modules/campaigns/campaigns.repository.js';
 import { createCampaignsRouter } from './modules/campaigns/campaigns.routes.js';
 import { createAvatarProcessor } from './modules/profile/avatar-processor.js';
@@ -51,7 +55,7 @@ import { createHourlyService } from './modules/tiktok/hourly.service.js';
 import { createTiktokService } from './modules/tiktok/tiktok.service.js';
 import { createUsersRepository } from './modules/users/users.repository.js';
 import { apiNotFound, errorHandler } from './middleware/errors.js';
-import { requireAdmin, requireApproved, requireAuth, sameOriginOnly } from './middleware/guards.js';
+import { noImpersonation, readOnlyWhenImpersonating, requireAdmin, requireApproved, requireAuth, sameOriginOnly } from './middleware/guards.js';
 import { loadSession } from './middleware/session.js';
 import { requireArea, requireAreaByMethod, requireOwner, resolveWorkspace } from './middleware/workspace.js';
 
@@ -67,6 +71,10 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
   const campaigns = createCampaignsRepository(db);
   const authService = createAuthService({ users, sessions, config });
+  // Administração: registro de auditoria e acesso do admin à conta de outra pessoa (somente leitura).
+  const audit = createAuditRepository(db);
+  const impersonation = createImpersonationService({ users, sessions, audit });
+  const notifications = createNotificationsRepository(db); // o sino do topo (avisos do admin)
   const tiktokClient = createTiktokClient({ config, fetchFn });
   // Sem TOKEN_ENCRYPTION_KEY a chave é nula: o serviço recusa cadastros (ensureConfigured) e nada é gravado.
   const businessCenters = createBusinessCentersRepository(db, { encryptionKey: config.tiktok.encryptionKey });
@@ -162,7 +170,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
 
   api.use(loadSession({ sessions, config }));
 
-  const authRouter = createAuthRouter({ authService, sessions, config, limits });
+  const authRouter = createAuthRouter({ authService, sessions, impersonation, config, limits });
   api.use('/auth', authRouter);
 
   // Retorno da autorização do TikTok: público (vem de outro site/aba), protegido pelo `state` de uso único.
@@ -177,7 +185,8 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // `resolveWorkspace` define de quem são os dados (req.actor: o próprio usuário ou o dono do espaço, no caso de colaborador)
   // e as áreas liberadas; cada módulo exige a sua área (o dono da conta sempre tem todas).
   const protectedApi = express.Router();
-  protectedApi.use(requireAuth, requireApproved, resolveWorkspace);
+  // Um admin que está vendo a conta de outra pessoa só consulta: qualquer alteração (POST/PATCH/PUT/DELETE) é barrada aqui, antes de qualquer módulo.
+  protectedApi.use(requireAuth, requireApproved, readOnlyWhenImpersonating, resolveWorkspace);
   const campaignsRouter = createCampaignsRouter({ campaigns, tiktok: tiktokService, creatives: creativesService, limits });
   protectedApi.use('/campaigns', requireArea('campaigns'), campaignsRouter);
   const proxiesRouter = createProxiesRouter({ service: proxiesService, limits });
@@ -201,7 +210,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   protectedApi.use('/hooks', requireArea('creatives'), hooksRouter);
   // Anexos da conta: quem gerencia as contas TikTok (o dono sempre; colaborador com a área "Contas TikTok").
   const filesRouter = createFilesRouter({ service: filesService, limits });
-  protectedApi.use('/files', requireArea('accounts'), filesRouter);
+  protectedApi.use('/files', noImpersonation, requireArea('accounts'), filesRouter); // arquivos com logins: nem leitura para o admin na conta de outra pessoa
   // Perfil (nome e foto) é da PESSOA logada, qualquer que seja o espaço onde ela trabalha: sem exigir área.
   const profileRouter = createProfileRouter({ service: profileService, limits });
   protectedApi.use('/profile', profileRouter);
@@ -210,7 +219,13 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Equipe e administração: nunca para colaboradores (a administração usa a conta real da pessoa, não o espaço).
   const teamRouter = createTeamRouter({ service: teamService, limits });
   protectedApi.use('/team', requireOwner, teamRouter);
-  protectedApi.use('/admin', requireAdmin, requireOwner, createAdminRouter({ users, sessions }));
+  // O sino é da PESSOA logada (não do espaço de trabalho): qualquer conta aprovada, inclusive colaboradores.
+  const notificationsRouter = createNotificationsRouter({ repo: notifications, limits });
+  protectedApi.use('/notifications', notificationsRouter);
+  const adminNotificationsRouter = createAdminNotificationsRouter({ repo: notifications, users, audit, now: clock, limits });
+  protectedApi.use('/admin/notifications', requireAdmin, requireOwner, adminNotificationsRouter); // antes de /admin: este caminho é mais específico
+  const adminRouter = createAdminRouter({ users, sessions, impersonation, audit, config, limits });
+  protectedApi.use('/admin', requireAdmin, requireOwner, adminRouter);
   api.use(protectedApi);
 
   api.use(apiNotFound);
@@ -251,6 +266,9 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
       hooksRouter.stop();
       hourlyRouter.stop();
       authRouter.stop();
+      adminRouter.stop();
+      notificationsRouter.stop();
+      adminNotificationsRouter.stop();
       tiktokRouter.stop();
       proxiesRouter.stop();
       proxiesService.close();

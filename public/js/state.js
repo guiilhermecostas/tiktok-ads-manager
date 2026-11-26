@@ -5,12 +5,14 @@ export const state = {
   user: null,
   workspace: null,
   csrfToken: null,
+  impersonation: null, // { adminName } quando um administrador está vendo esta conta (somente leitura)
 };
 
 export function setSession(payload) {
   state.user = payload?.user ?? null;
   state.workspace = payload?.workspace ?? null;
   state.csrfToken = payload?.csrfToken ?? null;
+  state.impersonation = payload?.impersonation ?? null;
 }
 
 /** A pessoa logada pode usar ao menos UMA destas áreas? (o dono da conta tem todas; é só conveniência de tela: o servidor é quem manda) */

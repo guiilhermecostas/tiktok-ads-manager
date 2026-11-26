@@ -15,6 +15,7 @@ import { reportsHourlyView } from './views/reports-hourly.js';
 import { campaignsView } from './views/campaigns.js';
 import { openCampaignWizard } from './views/campaign-wizard/index.js';
 import { adminView } from './views/admin.js';
+import { adminNotificationsView } from './views/admin-notifications.js';
 import { tiktokAdsView } from './views/tiktok-ads.js';
 import { businessCentersView } from './views/business-centers.js';
 import { creativesView } from './views/creatives/library.js';
@@ -46,6 +47,7 @@ const PROTECTED_ROUTES = {
   '/business-centers/files': { title: 'Arquivos', view: filesView, areas: ['accounts'] },
   '/team': { title: 'Colaboradores', view: teamView, ownerOnly: true },
   '/admin': { title: 'Administração', view: adminView, adminOnly: true },
+  '/admin/notifications': { title: 'Notificações', view: adminNotificationsView, adminOnly: true },
 };
 const GUEST_ROUTES = { '/login': loginView, '/register': registerView };
 

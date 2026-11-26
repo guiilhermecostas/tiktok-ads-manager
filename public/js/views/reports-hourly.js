@@ -65,8 +65,11 @@ export async function reportsHourlyView() {
   async function refreshNow(trigger) {
     if (refreshing) return;
     refreshing = true;
+    // O texto do botão NÃO muda (um texto maior quebrava a linha e fazia a tela pular): o estado aparece como um indicador girando.
     trigger.disabled = true;
-    trigger.textContent = 'Buscando no TikTok…';
+    trigger.classList.add('is-busy');
+    trigger.setAttribute('aria-busy', 'true');
+    trigger.title = 'Buscando no TikTok…';
     try {
       const result = await post('/tiktok/hourly/refresh');
       toast(result.connections ? `Atualizado: ${result.rows} ${result.rows === 1 ? 'hora' : 'horas'} de ${result.advertisers} ${result.advertisers === 1 ? 'conta' : 'contas'}${result.failed ? ` (${result.failed} sem resposta)` : ''}.` : 'Nenhuma conexão ativa para atualizar.', result.failed ? 'danger' : 'success');
@@ -74,6 +77,10 @@ export async function reportsHourlyView() {
       toast(err.message, 'danger');
     }
     refreshing = false;
+    trigger.disabled = false;
+    trigger.classList.remove('is-busy');
+    trigger.removeAttribute('aria-busy');
+    trigger.removeAttribute('title');
     await load();
   }
 

@@ -53,6 +53,23 @@ export function requireApproved(req, _res, next) {
   next();
 }
 
+/**
+ * Durante o acesso de um admin à conta de outra pessoa, nada é alterado: só leitura (GET/HEAD/OPTIONS). Assim "navegar na conta" nunca gasta
+ * dinheiro, publica, apaga ou muda dados da pessoa.
+ */
+export function readOnlyWhenImpersonating(req, _res, next) {
+  if (req.impersonation && !SAFE_METHODS.has(req.method)) {
+    return next(forbidden('Você está vendo a conta como administrador: aqui só dá para consultar. Volte para a sua conta para fazer alterações.', 'impersonation_read_only'));
+  }
+  next();
+}
+
+/** Área que nem a leitura é liberada ao admin que está na conta de outra pessoa (conteúdo sensível, como os arquivos com logins). */
+export function noImpersonation(req, _res, next) {
+  if (req.impersonation) return next(forbidden('Este conteúdo é sensível e não é mostrado quando você está na conta de outra pessoa.', 'impersonation_blocked'));
+  next();
+}
+
 export function requireAdmin(req, _res, next) {
   if (req.user.role !== 'admin') return next(forbidden('Acesso restrito a administradores.'));
   next();

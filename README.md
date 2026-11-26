@@ -53,6 +53,24 @@ Requer Node >= 22.13 (`scrypt`, `fetch` e test runner nativos). Dependências de
 - Sem `ADMIN_PASSWORD`, uma senha aleatória é gerada e exibida uma vez no console.
 - Para trocar a senha: altere `ADMIN_PASSWORD` e reinicie (sessões antigas do admin são encerradas).
 
+### Administração: acessar a conta de um usuário, bloquear e registro de ações
+
+Em **Administração → Contas**, cada conta aprovada tem **Acessar conta** (um clique) e **Bloquear**:
+
+- **Acessar conta** abre a conta da pessoa **como ela vê**, só para **consulta**: qualquer alteração (criar campanha, transferir saldo, mudar perfil, pausar anúncio…) é recusada com `403 impersonation_read_only`
+  e os **arquivos com logins** nem abrem. Só vale para contas **comuns e aprovadas** (nunca outro admin, nunca a própria conta), dura **1 hora**, tem limite de 30 entradas por hora e fica
+  no registro. É uma **sessão nova** marcada com o admin (`sessions.impersonator_id`); se o admin deixar de ser admin aprovado, ela cai na hora, e bloquear a pessoa também a derruba.
+  Uma faixa fixa no topo mostra “Você está na conta de …” com **Voltar ao admin** (`POST /api/auth/impersonation/exit` devolve uma sessão nova do admin).
+- **Bloquear/Reativar** derruba as sessões na hora (inclusive as abertas por admin).
+- **Registro de ações** (`admin_audit_log`, só acrescenta linhas): entrar/sair da conta de alguém, mudanças de status e envio/alteração de notificações. Aparece no fim da tela.
+
+### Notificações (o sino do topo)
+
+O sino fica no canto direito do topo: selo com as não lidas e um painel com as 30 mais recentes (atualiza a cada minuto com a aba visível). Em **Administração → Notificações** o admin escreve
+título, mensagem, **tipo** (aviso, novidade, atenção, urgente), **quem recebe** (todos ou uma pessoa), um atalho para uma tela do sistema (só caminhos internos) e a **validade**; a lista mostra
+quantas pessoas já leram e permite desativar, reativar ou excluir. A leitura é de cada pessoa (`notification_reads`); o servidor só mostra e só marca o que é da pessoa (sem IDOR).
+Rotas: `GET /api/notifications`, `POST /api/notifications/read`; admin: `/api/admin/notifications`. Colaboradores recebem as notificações **deles** (a pessoa), não as do dono do espaço.
+
 ## Integração TikTok (Business Centers)
 
 1. Qualquer usuário aprovado abre **Contas TikTok → Conectar Business Center**. Há dois caminhos:
@@ -317,6 +335,10 @@ as colunas que fazem sentido: **campanha** = objetivo e orçamento; **grupo** = 
 e em massa), período, filtros, colunas e visualizações salvas valem para os três níveis. Pausar uma campanha muda o status do que está dentro dela: as outras abas buscam de novo.
 Cada nível é uma consulta própria, guardada enquanto a pessoa troca de aba no mesmo período (a troca de aba é instantânea depois da primeira vez).
 
+**Barra de ferramentas enxuta:** à vista ficam só **busca, período, Filtros, Visualização, Colunas e Atualizar**. Conta, situação e “só com gasto” ficam dentro de **Filtros** (o botão mostra
+quantos estão ligados e cada um vira um **chip** removível); a **visualização** em uso é um menu único (escolher, salvar alterações, salvar como nova, abrir sempre com esta, excluir).
+Os painéis (`popover.js`) fecham ao clicar fora e com Esc, e cabem na largura do celular.
+
 - **Contrato oficial por nível (conferido na documentação):** `GET /campaign/get/`, `GET /adgroup/get/` e `GET /ad/get/` (campos em `fields`, `filtering.primary_status = STATUS_NOT_DELETE`,
   `page_size` até 1000); desempenho em `GET /report/integrated/get/` com `data_level` **`AUCTION_CAMPAIGN` / `AUCTION_ADGROUP` / `AUCTION_AD`** e **uma** dimensão de ID (`campaign_id`, `adgroup_id`
   ou `ad_id`; o TikTok não aceita duas); ativar/pausar em `POST /campaign/status/update/` (`campaign_ids`), `/adgroup/status/update/` (`adgroup_ids`) e `/ad/status/update/` (`ad_ids`), de 1 a 20
@@ -448,7 +470,8 @@ src/
   modules/
     auth/              cadastro, login, logout, sessões
     users/             repositório de usuários
-    admin/             aprovação de contas
+    admin/             aprovação de contas, acesso do admin à conta de um usuário (somente leitura) e registro de auditoria
+    notifications/     o sino do topo: notificações do admin (todos ou uma pessoa), leitura por pessoa
     campaigns/         CRUD de campanhas internas (escopado por usuário)
     tiktok/            Business Centers (cliente da API, conexão por link/OAuth, repositórios, serviço, rotas) e gasto por hora (coleta + leitura)
     creatives/         biblioteca de criativos (armazenamento, validação por conteúdo, rotas)

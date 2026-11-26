@@ -9,10 +9,17 @@ export function loadSession({ sessions, config }) {
     req.user = null;
     req.session = null;
     req.member = null;
+    req.impersonation = null; // { adminId, adminName } quando um admin está vendo a conta de outra pessoa (somente leitura)
     const token = parseCookies(req.headers.cookie)[config.cookieName];
     if (token) {
-      const found = await sessions.resolve(token);
+      let found = await sessions.resolve(token);
+      // Sessão aberta por um admin só vale enquanto ele continuar sendo admin aprovado (rebaixar/bloquear o admin a encerra na hora).
+      if (found?.impersonator && !(found.impersonator.role === 'admin' && found.impersonator.status === 'approved')) {
+        await sessions.destroy(token);
+        found = null;
+      }
       if (found) {
+        if (found.impersonator) req.impersonation = { adminId: found.impersonator.id, adminName: found.impersonator.name };
         req.member = found.member;
         // Se o dono do espaço foi bloqueado/rejeitado, o acesso dos colaboradores dele cai junto.
         req.user = found.member && found.member.ownerStatus !== 'approved' && found.user.status === 'approved' ? { ...found.user, status: 'blocked' } : found.user;

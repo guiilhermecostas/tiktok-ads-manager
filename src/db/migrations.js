@@ -546,6 +546,71 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['balance_transfers'], revoke: ['balance_transfers'], identity: ['balance_transfers'] })}
     `,
   },
+  {
+    version: 19,
+    description: 'Administração: acesso do admin à conta de um usuário (sessão marcada, somente leitura) e registro de auditoria das ações do admin',
+    sql: `
+      -- Sessão aberta pelo admin "como" outra pessoa: guarda QUEM é o admin. A sessão nasce e morre junto com o admin (se ele deixar de ser
+      -- admin aprovado a sessão deixa de valer) e sempre tem prazo curto; a aplicação a trata como somente leitura.
+      ALTER TABLE sessions ADD COLUMN impersonator_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+      CREATE INDEX idx_sessions_impersonator ON sessions (impersonator_id) WHERE impersonator_id IS NOT NULL;
+
+      -- Registro do que o admin fez (entrar na conta de alguém, aprovar, rejeitar, bloquear, reativar). Só acrescenta linhas: a aplicação nunca
+      -- altera nem apaga. Se uma conta for excluída, a linha continua (a referência vira nula) e o nome fica no texto do detalhe.
+      CREATE TABLE admin_audit_log (
+        id         INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        admin_id   INTEGER     REFERENCES users(id) ON DELETE SET NULL,
+        target_id  INTEGER     REFERENCES users(id) ON DELETE SET NULL,
+        action     TEXT        NOT NULL CHECK (action IN ('impersonation_start', 'impersonation_end', 'status_change')),
+        detail     TEXT        CHECK (detail IS NULL OR char_length(detail) <= 200),
+        ip         TEXT        CHECK (ip IS NULL OR char_length(ip) <= 64),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX idx_admin_audit_created ON admin_audit_log (created_at DESC, id DESC);
+
+      ${protectTables({ rls: ['admin_audit_log'], revoke: ['admin_audit_log'], identity: ['admin_audit_log'] })}
+    `,
+  },
+  {
+    version: 20,
+    description: 'Notificações: o sino do topo (avisos enviados pelo admin para todos ou para uma pessoa) e quem já leu cada uma',
+    sql: `
+      -- Uma notificação é do admin para TODOS ('all') ou para UMA pessoa ('user', com target_user_id). Vale enquanto estiver ativa e dentro da validade.
+      -- O link só pode ser um caminho interno do sistema (nada de sites externos). Apagar a pessoa apaga as notificações dela e as leituras.
+      CREATE TABLE notifications (
+        id             INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        title          TEXT        NOT NULL CHECK (char_length(title) BETWEEN 1 AND 80),
+        body           TEXT        NOT NULL CHECK (char_length(body) BETWEEN 1 AND 600),
+        level          TEXT        NOT NULL DEFAULT 'info' CHECK (level IN ('info', 'success', 'warning', 'danger')),
+        link           TEXT        CHECK (link IS NULL OR (char_length(link) <= 100 AND link ~ '^/[a-z0-9_/-]*$' AND link !~ '^//')),
+        audience       TEXT        NOT NULL CHECK (audience IN ('all', 'user')),
+        target_user_id INTEGER     REFERENCES users(id) ON DELETE CASCADE,
+        active         BOOLEAN     NOT NULL DEFAULT true,
+        expires_at     TIMESTAMPTZ,
+        created_by     INTEGER     REFERENCES users(id) ON DELETE SET NULL,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CHECK ((audience = 'all' AND target_user_id IS NULL) OR (audience = 'user' AND target_user_id IS NOT NULL))
+      );
+      CREATE INDEX idx_notifications_created ON notifications (created_at DESC, id DESC);
+      CREATE INDEX idx_notifications_target ON notifications (target_user_id) WHERE target_user_id IS NOT NULL;
+
+      -- Cada pessoa guarda a própria leitura (a de uma não muda a da outra).
+      CREATE TABLE notification_reads (
+        notification_id INTEGER     NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+        user_id         INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        read_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (notification_id, user_id)
+      );
+      CREATE INDEX idx_notification_reads_user ON notification_reads (user_id);
+
+      -- O registro de auditoria do admin passa a aceitar também o envio e a alteração de notificações.
+      ALTER TABLE admin_audit_log DROP CONSTRAINT admin_audit_log_action_check;
+      ALTER TABLE admin_audit_log ADD CONSTRAINT admin_audit_log_action_check
+        CHECK (action IN ('impersonation_start', 'impersonation_end', 'status_change', 'notification_send', 'notification_change'));
+
+      ${protectTables({ rls: ['notifications', 'notification_reads'], revoke: ['notifications', 'notification_reads'], identity: ['notifications'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

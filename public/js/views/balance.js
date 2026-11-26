@@ -16,6 +16,9 @@ import { pageHeader } from './layout.js';
  */
 
 const STATUS_FILTERS = [['', 'Todos'], ['with', 'Com saldo'], ['without', 'Sem saldo'], ['unknown', 'Sem informação']];
+/** "Ver contas" na aba das BCs leva para a aba das contas já buscando por aquela BC. */
+const handoff = { q: '' };
+const AUTO_REFRESH_MS = 60 * 1000; // o servidor guarda o saldo por 1 minuto: atualizar mais rápido só devolveria o mesmo valor
 const money = (value, currency) => (value === null || value === undefined ? '—' : formatCurrency(value, currency && currency !== 'UNKNOWN' ? currency : undefined));
 
 /** Situação de uma linha: with | without | unknown (erro ou o TikTok não informou). */
@@ -50,8 +53,7 @@ function balanceLayout({ active, counts, children }) {
 }
 
 /** Tabela com linhas que se expandem em "Detalhes" (todos os valores do TikTok). */
-function table({ columns, rows, renderCells, renderDetails, renderActions = null, emptyText }) {
-  const open = new Set();
+function table({ columns, rows, renderCells, renderDetails, renderActions = null, emptyText, open = new Set() }) {
   const body = h('tbody');
   function paint() {
     if (!rows.length) return setChildren(body, h('tr', null, h('td', { colspan: columns.length + 1, class: 'muted' }, emptyText)));
@@ -62,7 +64,7 @@ function table({ columns, rows, renderCells, renderDetails, renderActions = null
         type: 'button', class: 'balance__toggle', 'aria-expanded': String(isOpen), 'aria-label': `${isOpen ? 'Ocultar' : 'Ver'} detalhes`,
         onClick: () => { if (open.has(row.key)) open.delete(row.key); else open.add(row.key); paint(); },
       }, isOpen ? 'Ocultar' : 'Detalhes');
-      nodes.push(h('tr', { class: isOpen ? 'is-open' : null }, renderCells(row), h('td', { 'data-label': 'Detalhes', class: 'balance__cell-toggle' }, h('div', { class: 'balance__actions' }, renderActions?.(row) ?? null, toggle))));
+      nodes.push(h('tr', { class: isOpen ? 'is-open' : null }, renderCells(row), h('td', { 'data-label': 'Detalhes', class: 'balance__cell-toggle' }, h('div', { class: 'balance__actions' }, renderActions?.(row, { showDetails: () => { open.add(row.key); paint(); } }) ?? null, toggle))));
       if (isOpen) nodes.push(h('tr', { class: 'balance__details-row' }, h('td', { colspan: columns.length + 1 }, renderDetails(row))));
     }
     setChildren(body, nodes);
@@ -100,9 +102,11 @@ function details(row, extra = []) {
 }
 
 async function balanceScreen(tabName) {
-  const state = { q: '', status: '', currency: '', connection: '', data: null, transfers: null };
+  const state = { q: handoff.q, status: '', currency: '', connection: '', data: null, transfers: null, open: { bc: new Set(), accounts: new Set() } };
+  handoff.q = '';
   const content = h('div', { class: 'reports__content' }, spinner());
   const filtersBar = h('div', { class: 'reports__filters' });
+  const updatedAt = h('span', { class: 'muted balance__updated', role: 'status' });
   let shell;
   let loadId = 0;
 
@@ -125,6 +129,21 @@ async function balanceScreen(tabName) {
       return false;
     } finally {
       if (current === loadId) content.classList.remove('is-loading');
+    }
+  }
+
+  /** Atualização automática: em silêncio (sem apagar a tela, sem mexer no que a pessoa está digitando) e só com a aba visível. */
+  async function refreshQuietly() {
+    if (document.hidden || content.classList.contains('is-loading') || document.querySelector('.modal, dialog[open]')) return;
+    const current = ++loadId;
+    try {
+      const data = await get('/tiktok/balance');
+      if (current !== loadId) return;
+      state.data = data;
+      updatedAt.textContent = `Atualizado às ${timeText(data.fetchedAt)}`;
+      drawContent();
+    } catch {
+      // falhou em segundo plano: a tela continua com o último saldo (o botão "Atualizar agora" mostra o erro)
     }
   }
 
@@ -163,6 +182,7 @@ async function balanceScreen(tabName) {
     };
     const currency = currencies.length > 1 ? select('Moeda', state.currency, [['', 'Todas as moedas'], ...currencies.map((c) => [c, c === 'UNKNOWN' ? 'Moeda não informada' : c])], (v) => { state.currency = v; drawContent(); }) : null;
     const connection = connections.length > 1 ? select('Conexão', state.connection, [['', 'Todas as conexões'], ...connections], (v) => { state.connection = v; drawContent(); }) : null;
+    updatedAt.textContent = state.data ? `Atualizado às ${timeText(state.data.fetchedAt)}` : '';
     const refresh = button([icon('chart', 14), ' Atualizar agora'], { small: true, onClick: async (e) => {
       const trigger = e.currentTarget;
       trigger.disabled = true;
@@ -170,7 +190,7 @@ async function balanceScreen(tabName) {
       else trigger.disabled = false;
     } });
     refresh.classList.add('reports__refresh');
-    setChildren(filtersBar, search, status, currency, connection, state.data ? h('span', { class: 'muted balance__updated' }, `Atualizado às ${timeText(state.data.fetchedAt)}`) : null, refresh);
+    setChildren(filtersBar, search, status, currency, connection, state.data ? updatedAt : null, refresh);
   }
 
   function summaryCards() {
@@ -188,8 +208,17 @@ async function balanceScreen(tabName) {
 
   // ---------- transferência de saldo (BC ↔ conta) ----------
   const bcOf = (row) => state.data.bcs.find((b) => b.connectionId === row.connectionId && b.bcId === row.bcId) ?? null;
-  function transferButton(row) {
-    if (!state.data.canTransfer || !transferEligibility(row, bcOf(row)).ok) return null;
+  function transferButton(row, { showDetails }) {
+    if (!state.data.canTransfer) return null;
+    const eligibility = transferEligibility(row, bcOf(row));
+    if (!eligibility.ok) {
+      // Sem o botão a pessoa acha que "não funciona": o botão fica, apagado, e ao clicar abre os detalhes com o MOTIVO.
+      const blocked = button('Transferir', { small: true, ariaLabel: `Transferir saldo da conta ${row.name}: indisponível, veja o motivo`, onClick: showDetails });
+      blocked.classList.add('is-blocked');
+      blocked.setAttribute('aria-disabled', 'true');
+      blocked.title = eligibility.reason;
+      return blocked;
+    }
     return button('Transferir', { small: true, ariaLabel: `Transferir saldo da conta ${row.name}`, onClick: () => openTransferDialog({ account: row, bc: bcOf(row), onDone: () => { load({ fresh: true }); loadTransfers(); } }) });
   }
   /** Nos detalhes: por que esta conta não tem o botão (ou dica de que ele existe). */
@@ -249,6 +278,8 @@ async function balanceScreen(tabName) {
         h('td', { 'data-label': 'Situação' }, situationBadge(r)),
         h('td', { 'data-label': 'Contas' }, r.accountsError ? h('span', { class: 'muted', title: r.accountsError }, `${r.accountsTotal} · sem informação`) : `${r.accountsWithBalance} com saldo de ${r.accountsTotal}`),
       ],
+      open: state.open.bc,
+      renderActions: (r) => (r.bcId ? h('a', { href: '/balance/accounts', 'data-link': '', class: 'btn btn--secondary btn--sm', 'aria-label': `Ver as contas da BC ${r.bcId}`, onClick: () => { handoff.q = r.bcId; } }, 'Ver contas') : null),
       renderDetails: (r) => details(r, [r.accountsError ? alertBox(`Contas desta BC: ${r.accountsError}`, 'warning') : null]),
     });
     const accountsTable = () => table({
@@ -262,7 +293,8 @@ async function balanceScreen(tabName) {
         h('td', { 'data-label': 'Saldo disponível', class: 'num' }, h('strong', null, money(r.main, r.currency)), sourceCaption(r)),
         h('td', { 'data-label': 'Situação' }, situationBadge(r)),
       ],
-      renderActions: (r) => transferButton(r),
+      renderActions: transferButton,
+      open: state.open.accounts,
       renderDetails: (r) => details(r, [transferNote(r), h('p', { class: 'muted balance__meta' }, `Conexão: ${r.connectionName}${r.advertiserStatus ? ` · Situação da conta no TikTok: ${accountStatus(r.advertiserStatus)}` : ''}`)]),
     });
     const s = data.summary;
@@ -279,6 +311,13 @@ async function balanceScreen(tabName) {
   drawFilters();
   load();
   if (tabName === 'accounts') loadTransfers();
+  // Atualiza sozinha enquanto a tela está aberta; ao sair da tela (o elemento deixa a página) o relógio para.
+  const timer = setInterval(() => {
+    if (!shell.isConnected) return clearInterval(timer); // a tela já foi trocada (o 1º minuto é bem mais que o tempo de montar a tela)
+    if (document.hidden) return null;
+    if (tabName === 'accounts') loadTransfers();
+    return refreshQuietly();
+  }, AUTO_REFRESH_MS);
   return { element: shell };
 }
 

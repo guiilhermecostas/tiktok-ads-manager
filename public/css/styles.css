@@ -198,6 +198,50 @@ a { color: var(--tt-red-dark); }
   background: linear-gradient(90deg, var(--tt-cyan), var(--tt-red)); opacity: 0.9;
 }
 .appbar__title { font-weight: 600; font-size: 14px; }
+.appbar .bell { margin-left: auto; }
+
+/* ============ Sino de notificações ============ */
+.bell { position: relative; }
+.bell__btn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--text); cursor: pointer; }
+.bell__btn:hover, .bell__btn[aria-expanded='true'] { background: #f1f1f2; }
+.bell__btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(37, 244, 238, 0.55); }
+.bell__badge { position: absolute; top: 2px; right: 1px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--tt-red); color: #fff; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; box-shadow: 0 0 0 2px #fff; }
+.bell__panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 60; width: min(380px, calc(100vw - 24px)); max-height: min(70vh, 520px); display: flex; flex-direction: column; background: #fff; border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16); overflow: hidden; }
+.bell__panel[hidden] { display: none; }
+.bell__head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.bell__markall { border: 0; background: transparent; padding: 4px 6px; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.bell__markall:hover { background: #f1f1f2; color: var(--text); }
+.bell__markall[hidden] { display: none; }
+.bell__list { overflow-y: auto; }
+.bell__empty { margin: 0; padding: 22px 14px; text-align: center; font-size: 13px; }
+.bell__item { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 11px 14px; border: 0; border-bottom: 1px solid #f0f0f1; background: #fff; text-align: left; font: inherit; color: var(--text); cursor: pointer; }
+.bell__item:last-child { border-bottom: 0; }
+.bell__item:hover { background: #fafafa; }
+.bell__item:focus-visible { outline: none; box-shadow: inset 0 0 0 3px rgba(37, 244, 238, 0.55); }
+.bell__item.is-unread { background: #f4fbfb; }
+.bell__item.is-unread:hover { background: #ecf8f8; }
+.bell__dot { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: #c4c4c8; }
+.bell__dot--success { background: #1fb5ad; }
+.bell__dot--warning { background: #e6a100; }
+.bell__dot--danger { background: var(--tt-red); }
+.bell__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bell__title { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.bell__body { font-size: 13px; color: #3f3f46; white-space: pre-line; overflow-wrap: anywhere; }
+.bell__meta { font-size: 12px; }
+
+/* Administração → Notificações */
+.notif-form { margin-bottom: 24px; }
+.form-grid__wide { grid-column: 1 / -1; }
+.notif-preview { margin-top: 16px; }
+.notif-preview__label { margin: 0 0 6px; font-size: 12px; }
+.notif-preview__item { width: auto; max-width: 420px; border: 1px solid var(--border); border-radius: 12px; cursor: default; }
+.notif-form__actions { display: flex; justify-content: flex-start; margin-top: 14px; } /* à esquerda: o botão flutuante "Publicar campanha" fica à direita e não cobre o envio */
+.notif-sent { margin-top: 8px; }
+.notif-body { max-width: 360px; white-space: pre-line; overflow-wrap: anywhere; }
+.admin__audit { margin-top: 28px; }
+.impersonation-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 20px; background: #fff3cd; border-bottom: 1px solid #ffe08a; color: #5c4200; font-size: 13px; }
+.impersonation-bar__exit { background: #5c4200; border-color: #5c4200; color: #fff; white-space: nowrap; }
+.impersonation-bar__exit:hover:not(:disabled) { background: #3f2d00; }
 
 .main { flex: 1; min-width: 0; overflow-y: auto; padding: 24px; }
 .page { max-width: 1100px; margin: 0 auto; }
@@ -323,6 +367,7 @@ a { color: var(--tt-red-dark); }
 .req { color: var(--tt-red-dark); }
 .field__error { color: #9d1033; font-size: 12px; font-weight: 500; }
 .input--error { border-color: var(--tt-red); }
+.input--filter { padding-top: 6px; padding-bottom: 6px; font-size: 13px; } /* filtros e seletores das barras de ferramentas: mais baixos, no tamanho dos botões pequenos */
 .input--area { resize: vertical; min-height: 76px; }
 .money { display: flex; align-items: stretch; }
 .money__prefix { display: grid; place-items: center; padding: 0 12px; border: 1px solid #c9cccf; border-right: 0; border-radius: 8px 0 0 8px; background: #f6f6f7; color: var(--muted); }
@@ -377,7 +422,7 @@ a { color: var(--tt-red-dark); }
 .modal--wide { max-width: 860px; }
 .modal--md { max-width: 600px; }
 .toolbar--row { align-items: center; justify-content: space-between; }
-.toolbar__search { max-width: 280px; }
+.toolbar__search { max-width: 280px; padding-top: 7px; padding-bottom: 7px; font-size: 13px; }
 .meter { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .meter .progress { flex: 1; max-width: 260px; }
 .progress { height: 6px; border-radius: 999px; background: #e1e1e3; overflow: hidden; }
@@ -557,8 +602,8 @@ body.modal-open { overflow: hidden; }
 .hub__header { text-align: center; padding: 6px 0 2px; }
 .hub__title { font-size: 28px; letter-spacing: -0.02em; }
 .hub__subtitle { margin: 8px auto 0; max-width: 640px; color: var(--muted); line-height: 1.5; }
-.tabs--hub { display: flex; width: fit-content; max-width: 100%; margin: 0; padding: 4px; gap: 2px; background: #e4e4e7; border-radius: 14px; flex-wrap: nowrap; }
-.tabs--hub .tab { padding: 9px 20px; border-radius: var(--radius-btn); white-space: nowrap; }
+.tabs--hub { display: flex; width: fit-content; max-width: 100%; margin: 0; padding: 3px; gap: 2px; background: #e4e4e7; border-radius: 12px; flex-wrap: nowrap; }
+.tabs--hub .tab { padding: 5px 16px; font-size: 14px; border-radius: 10px; white-space: nowrap; }
 .tabs--hub .tab:hover { background: rgba(255, 255, 255, 0.55); }
 .tabs--hub .tab.is-active { background: #fff; border-color: transparent; color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14); }
 /* barra única: abas à esquerda; resumo + botão principal à direita */
@@ -781,14 +826,14 @@ body.modal-open { overflow: hidden; }
 
 /* ============ Relatórios: filtros, indicadores, gráfico de linha, observações e ranking ============ */
 .reports { max-width: 1180px; margin: 0 auto; padding-bottom: 76px; } /* folga para o botão flutuante "Publicar campanha" não cobrir o fim da página */
-.tabs--left { margin: 4px 0 18px; }
-.reports__filters { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.tabs--left { margin: 2px 0 12px; }
+.reports__filters { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .reports__filters select.input { width: auto; max-width: 100%; min-width: 180px; }
 .reports__compare { margin-left: auto; font-size: 13px; }
 .reports__content { transition: opacity 0.15s; }
 .reports__content.is-loading { opacity: 0.55; pointer-events: none; }
-.segmented { display: inline-flex; padding: 3px; gap: 2px; background: #e4e4e7; border-radius: var(--radius-btn); }
-.segmented__btn { border: 0; background: transparent; padding: 7px 14px; border-radius: 11px; font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.segmented { display: inline-flex; padding: 2px; gap: 2px; background: #e4e4e7; border-radius: var(--radius-btn); }
+.segmented__btn { border: 0; background: transparent; padding: 5px 12px; border-radius: 9px; font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
 .segmented__btn:hover { background: rgba(255, 255, 255, 0.55); }
 .segmented__btn.is-on { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14); }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; margin-bottom: 14px; }
@@ -842,8 +887,7 @@ body.modal-open { overflow: hidden; }
   .main > .page:has(> .chat) { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; }
   .page > .chat { flex: 1; height: auto; min-height: 0; width: 100%; }
 }
-.chat__top { flex: none; display: flex; align-items: center; justify-content: space-between; min-height: 36px; }
-.chat__name { font-weight: 700; font-size: 15px; }
+.chat__top { flex: none; display: flex; align-items: center; justify-content: flex-end; min-height: 36px; }
 .chat__new[hidden] { display: none; }
 /* A conversa rola AQUI dentro; o campo de mensagem fica fixo embaixo e nunca cobre nada. `margin: auto` centraliza sem cortar o topo. */
 .chat__body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: 8px 0 12px; }
@@ -919,7 +963,9 @@ body.modal-open { overflow: hidden; }
 .kpi--static { cursor: default; }
 .kpi--static:hover { border-color: var(--border); transform: none; }
 .kpi__hint { font-size: 12px; line-height: 1.3; min-height: 1.3em; }
-.reports__refresh { margin-left: auto; }
+.reports__refresh { margin-left: auto; flex-shrink: 0; white-space: nowrap; }
+.btn.is-busy { position: relative; color: transparent; } /* o texto fica no lugar (a largura não muda) e o indicador gira por cima */
+.btn.is-busy::before { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid #d4d4d8; border-top-color: var(--tt-red); animation: spin 0.7s linear infinite; }
 .reports__chart-side { display: flex; align-items: center; gap: 10px; flex: none; }
 .hours-top { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; counter-reset: top; }
 .hours-top li { counter-increment: top; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-radius: 10px; background: #f6f6f7; font-size: 13px; }
@@ -1011,6 +1057,8 @@ body.modal-open { overflow: hidden; }
 .balance__sub { margin: 14px 0 6px; font-size: 13px; }
 .balance__history { margin-top: 22px; }
 .balance__actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
+.balance .btn.is-blocked { opacity: 0.55; cursor: help; }
+.balance .btn.is-blocked:hover { opacity: 0.8; }
 .transfer { display: flex; flex-direction: column; gap: 14px; }
 .transfer__balances { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
 .transfer__balances div { border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; background: #fafafa; }
@@ -1039,12 +1087,49 @@ body.modal-open { overflow: hidden; }
 .manager__row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .manager__row .field__label { margin: 0; }
 .manager { padding-bottom: 88px; } /* o botão flutuante "Publicar campanha" não cobre as últimas linhas */
-.manager__views { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1 1 auto; }
-.manager__views select.input { flex: 0 1 280px; width: auto; min-width: 200px; }
-.manager__actions { display: flex; gap: 8px; margin-left: auto; }
-.manager__filters select.input { flex: 0 1 190px; min-width: 150px; }
-.manager__filters .toolbar__search { flex: 1 1 240px; max-width: 360px; }
-.manager__custom { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.manager__main { gap: 8px 10px; }
+.manager__search { flex: 1 1 260px; max-width: 380px; }
+.manager__period { flex: 0 0 auto; width: auto; min-width: 140px; }
+.manager__actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.manager__count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--tt-black); color: #fff; font-size: 11px; font-weight: 700; }
+.manager__viewlabel { font-size: 12px; font-weight: 500; color: var(--muted); }
+.manager__viewname { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.manager__dirty { padding: 1px 7px; border-radius: 999px; background: #fff3cd; color: #6b4a00; font-size: 11px; font-weight: 700; }
+.manager__chips { gap: 6px; }
+.manager__chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 999px; background: #eef0f2; font-size: 12px; font-weight: 600; }
+.manager__chip-x { width: 20px; height: 20px; border: 0; border-radius: 50%; background: transparent; font: inherit; font-size: 15px; line-height: 1; color: var(--muted); cursor: pointer; }
+.manager__chip-x:hover { background: #dcdfe3; color: var(--text); }
+.manager__linkbtn { align-self: flex-start; border: 0; background: none; padding: 2px 0; font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); text-decoration: underline; cursor: pointer; }
+.manager__linkbtn:hover { color: var(--text); }
+.manager__panel { display: flex; flex-direction: column; gap: 12px; padding: 14px; min-width: 260px; }
+.manager__panel-field { display: flex; flex-direction: column; gap: 4px; }
+.manager__panel-field .field__label { margin: 0; font-size: 12px; }
+.manager__panel select.input { width: 100%; }
+.manager__menu { display: flex; flex-direction: column; padding: 6px; min-width: 250px; }
+.manager__menu-title { margin: 0; padding: 6px 10px 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.manager__menu-sep { width: 100%; margin: 6px 0; border: 0; border-top: 1px solid var(--border); }
+.manager__menuitem { display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 14px; text-align: left; color: var(--text); cursor: pointer; overflow-wrap: anywhere; }
+.manager__menuitem:hover, .manager__menuitem:focus-visible { background: #f1f1f2; outline: none; }
+.manager__menuitem.is-checked { font-weight: 700; }
+.manager__menuitem.is-checked::before { content: '✓ '; }
+.manager__menuitem.is-danger { color: var(--tt-red-dark); }
+.manager__menuitem.is-danger:hover { background: #fff1f4; }
+
+/* Painel que abre ao clicar (Filtros, menu da visualização) */
+.popover { position: relative; display: inline-flex; }
+.popover__btn { gap: 8px; }
+.popover__panel { position: absolute; top: calc(100% + 6px); z-index: 40; background: #fff; border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16); max-width: calc(100vw - 24px); }
+.popover__panel[hidden] { display: none; }
+.popover__panel--left { left: 0; }
+.popover__panel--right { right: 0; }
+@media (max-width: 720px) {
+  /* celular: o painel ocupa a largura da barra (nunca passa da tela) e abre logo abaixo dela */
+  .manager__toolbar { position: relative; }
+  .manager__toolbar .popover { position: static; }
+  .manager__toolbar .popover__panel { left: 0; right: 0; max-width: none; }
+  .manager__panel, .manager__menu { min-width: 0; }
+}
+.manager__custom { gap: 8px; }
 .manager__custom .input { width: auto; }
 .manager__hint { font-size: 12px; }
 .manager__summary { margin: 0 0 10px; font-size: 13px; }
@@ -1093,7 +1178,9 @@ body.modal-open { overflow: hidden; }
 
 @media (max-width: 720px) {
   .manager__actions { margin-left: 0; }
-  .manager__filters select.input, .manager__filters .toolbar__search { flex: 1 1 100%; max-width: none; }
+  .manager__search { flex: 1 1 100%; max-width: none; }
+  .manager__period { flex: 1 1 120px; }
+  .manager__viewlabel { display: none; }
   .manager__table .table { min-width: 0; }
   .manager__name { max-width: none; }
   .manager__name .acc-id { max-width: none; white-space: normal; overflow-wrap: anywhere; }
@@ -1101,7 +1188,6 @@ body.modal-open { overflow: hidden; }
   .manager .table--stack td.manager__check { justify-content: flex-start; font-size: 13px; }
   .manager__total td:first-child { display: none; }
   .manager__th { cursor: default; }
-  .manager__views select.input { flex: 1 1 100%; }
   .manager .table--stack td.manager__name { display: block; text-align: left; }
   .manager .table--stack td.manager__name::before { display: none; }
   .manager .table td.manager__date { white-space: normal; }
