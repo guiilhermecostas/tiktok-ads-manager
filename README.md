@@ -493,6 +493,19 @@ suspenso por 5 minutos. Com dezenas de contas isso aparecia no Gerenciador (“O
   as contas que faltaram (as que carregaram há menos de 15 s são reaproveitadas).
 - Se o app subir de nível (Advanced/Premium/Ultimate, em Meus apps → Autorização), reduza `TIKTOK_MIN_INTERVAL_MS`.
 
+## Automação → Campanha one-click
+
+Menu **Automação → Campanha one-click** (exige a área “Campanhas”). A pessoa monta **uma vez** a campanha completa (campanha, grupo de anúncios e anúncio, com os mesmos passos e textos de ajuda do assistente), dá um nome
+(“Campanha para os Estados Unidos”, “Campanha para o Brasil”) e ela vira um **cartão** com dois botões: **Apagar** e **Publicar**. O **+** cria uma configuração nova; clicar no título do cartão a edita.
+
+- **Publicar** abre um pop-up com **todas as contas de anúncio** em lista, agrupadas por Business Center, com **busca por nome ou ID da conta**, filtro por **Business Center**, por **tipo** (comuns/agência), por **situação** (ativas/inativas)
+  e por moeda (quando há mais de uma), mais "marcar todas as listadas". O botão **Publicar** fica sempre visível. Cada conta tem andamento, erro e retomada próprios e **tudo é criado PAUSADO**. Os IDs próprios de cada conta (pixel, identidade…) podem ser ajustados ali.
+- **Como funciona (reaproveita o que já existe):** a configuração é guardada em `campaign_templates` (migração 26, RLS, nome único por dono, até 50 por dono, sempre **completa**). Publicar chama `POST /api/automation/one-click/:id/launch`, que
+  cria uma **campanha nova** a partir da configuração (re-validada no servidor, criativos conferidos) e a tela publica essa campanha conta por conta em `POST /api/campaigns/:id/publish` (mesmas travas, limites, criativos refeitos por conta e registro de atividades).
+  A configuração **nunca é “gasta”**: serve para quantas publicações a pessoa quiser; apagar o cartão não apaga campanhas já publicadas. Se algumas contas falharem, tentar de novo na mesma janela retoma só as que faltam.
+- API (`src/modules/automation/`): `GET/POST /api/automation/one-click`, `GET/PUT/DELETE /api/automation/one-click/:id`, `POST /api/automation/one-click/:id/launch`. Tudo escopado pelo dono do espaço (colaborador com a área “Campanhas” usa as configurações do dono; sem a área recebe 403).
+  Criar, alterar, apagar e publicar entram no **registro de atividades** da equipe.
+
 ## Campanhas (assistente passo a passo)
 
 - Cada etapa começa com uma frase simples dizendo o que fazer ali, cada bloco do formulário tem uma explicação curta (`GROUP_HELP` em `shared/campaign-spec.js`) e os campos que mais confundem têm dica própria (`help`).
@@ -552,6 +565,7 @@ src/
     tiktok/            Business Centers (cliente da API, conexão por link/OAuth, repositórios, serviço, rotas) e gasto por hora (coleta + leitura)
     creatives/         biblioteca de criativos (armazenamento, validação por conteúdo, rotas)
     team/              colaboradores: convites, aceite, áreas de acesso (repositório, serviço, rotas)
+    automation/        Campanha one-click: configurações de campanha reutilizáveis que publicam em várias contas (repositório, serviço, rotas)
     activity/          registro de atividades da equipe (observador de rotas, regras, repositório, serviço)
     profile/           Minha conta: foto de perfil (recodificada no FFmpeg), nome e nível de gasto
     files/             arquivos anexados da conta (criptografados, só download)

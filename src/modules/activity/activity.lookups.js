@@ -2,9 +2,10 @@
  * Buscas só de LEITURA que o registro de atividades usa para pôr nomes nas ações (antes de excluir, depois de publicar…). Cada uma é escopada pelo
  * dono do espaço: nunca devolve nome de algo que é de outra pessoa. Se não achar, devolve nulo/vazio (a ação é registrada sem o nome).
  */
-export function createActivityLookups({ campaigns, creatives, businessCenters, proxies, files, team }) {
+export function createActivityLookups({ oneClick, campaigns, creatives, businessCenters, proxies, files, team }) {
   return {
     campaign: (ownerId, id) => campaigns.get(ownerId, id),
+    template: (ownerId, id) => oneClick.get(ownerId, id),
     creatives: async (ownerId, ids) => {
       if (!ids.length) return [];
       const byId = new Map((await creatives.getManyInternal(ownerId, ids)).map((row) => [row.id, { id: row.id, name: row.name }]));

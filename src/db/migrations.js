@@ -803,6 +803,27 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['workspace_activity'], revoke: ['workspace_activity'], identity: ['workspace_activity'] })}
     `,
   },
+  {
+    version: 26,
+    description: 'Automação: configurações de campanha "one-click" (modelos reutilizáveis que publicam em várias contas)',
+    sql: `
+      -- Um modelo é uma configuração COMPLETA de campanha (campanha, grupo e anúncio) com um nome dado pela pessoa ("Campanha para o Brasil"). Publicar um modelo cria uma
+      -- campanha nova (uma cópia) e a publica nas contas escolhidas; o modelo em si nunca é gasto, então serve para quantas publicações a pessoa quiser.
+      -- Pertence ao dono do espaço de trabalho; apagar o dono apaga os modelos. O nome é único por dono, sem diferenciar maiúsculas.
+      CREATE TABLE campaign_templates (
+        id         INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        owner_id   INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name       TEXT        NOT NULL CHECK (char_length(name) BETWEEN 2 AND 60),
+        objective  TEXT        NOT NULL CHECK (char_length(objective) BETWEEN 1 AND 40),
+        config     JSONB       NOT NULL CHECK (jsonb_typeof(config) = 'object' AND octet_length(config::text) <= 100000),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX idx_campaign_templates_owner_name ON campaign_templates (owner_id, lower(name));
+
+      ${protectTables({ rls: ['campaign_templates'], revoke: ['campaign_templates'], identity: ['campaign_templates'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

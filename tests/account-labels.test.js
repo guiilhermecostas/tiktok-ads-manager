@@ -1,12 +1,40 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import {
-  ACCOUNT_LABELS, KIND_FILTERS, MAX_LABEL_BATCH, STATUS_FILTERS, countByKind, isAccountLabel, matchesAccountFilter,
+  ACCOUNT_LABELS, KIND_FILTERS, MAX_LABEL_BATCH, STATUS_FILTERS, centersOf, countByKind, isAccountLabel, matchesAccountFilter,
 } from '../shared/account-labels.js';
 import { GOOD_TOKEN, OTHER_TOKEN, createFakeTiktok, tiktokTestConfig } from './fake-tiktok.js';
 import { createUser, loginAdmin, startTestServer } from './helpers.js';
 
 const LIMITS = { register: 1000, loginIp: 1000, loginAccount: 1000, tiktokRead: 1000, tiktokWrite: 1000, campaignPublish: 1000 };
+
+describe('Filtro por Business Center (lista de contas ao publicar)', () => {
+  const accounts = [
+    { id: '1', businessCenterId: 7, businessCenterName: 'Zeta BC', label: null, businessCenterStatus: 'active', currency: 'USD' },
+    { id: '2', businessCenterId: 7, businessCenterName: 'Zeta BC', label: 'agency', businessCenterStatus: 'active', currency: 'BRL' },
+    { id: '3', businessCenterId: 12, businessCenterName: 'Álamo BC', label: null, businessCenterStatus: 'error', currency: 'USD' },
+    { id: '4', businessCenterId: 12, businessCenterName: '', label: null, businessCenterStatus: 'active', currency: 'USD' },
+  ];
+  const ids = (filter) => accounts.filter((a) => matchesAccountFilter(a, filter)).map((a) => a.id);
+
+  it('as Business Centers saem uma vez cada, em ordem alfabética, com a contagem (e nome de reserva)', () => {
+    assert.deepEqual(centersOf(accounts), [{ id: '12', name: 'Álamo BC', accounts: 2 }, { id: '7', name: 'Zeta BC', accounts: 2 }]);
+    assert.deepEqual(centersOf([]), []);
+    assert.equal(centersOf([{ businessCenterId: 5, businessCenterName: '' }])[0].name, 'Business Center 5');
+  });
+
+  it('filtra pela BC (ID como texto) e combina com os outros filtros; "all" não filtra', () => {
+    assert.deepEqual(ids({}), ['1', '2', '3', '4']);
+    assert.deepEqual(ids({ center: 'all' }), ['1', '2', '3', '4']);
+    assert.deepEqual(ids({ center: '7' }), ['1', '2']);
+    assert.deepEqual(ids({ center: '12', status: 'active' }), ['4']);
+    assert.deepEqual(ids({ center: '12', status: 'inactive' }), ['3']);
+    assert.deepEqual(ids({ center: '7', kind: 'agency' }), ['2']);
+    assert.deepEqual(ids({ center: '7', currency: 'USD' }), ['1']);
+    assert.deepEqual(ids({ center: '999' }), [], 'BC que não existe não mostra nada');
+    assert.deepEqual(ids({ center: 7 }), [], 'o ID vem como texto: número não casa (evita comparação frouxa)');
+  });
+});
 
 describe('Etiquetas de conta de anúncio: regras compartilhadas (servidor e telas)', () => {
   const standard = { id: '1', label: null, businessCenterStatus: 'active' };

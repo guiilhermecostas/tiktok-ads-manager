@@ -35,6 +35,7 @@ export function h(tag, props, ...children) {
 
 const ICONS = {
   home: 'M3 11.5 12 4l9 7.5M5.5 10v9.5h13V10M10 19.5v-5h4v5',
+  zap: 'M13 2 4 14h7l-1 8 9-12h-7l1-8Z',
   megaphone: 'M3 10v4h3l7 4V6L6 10H3Zm13-1.5a4 4 0 0 1 0 7M18.5 6a7.5 7.5 0 0 1 0 12',
   shield: 'M12 3 4.5 6v5.5c0 4.5 3.2 8 7.5 9.5 4.3-1.5 7.5-5 7.5-9.5V6L12 3Zm-3 9 2.2 2.2L15.5 10',
   logout: 'M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14M10 16l-4-4 4-4M6 12h9',

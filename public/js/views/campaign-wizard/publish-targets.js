@@ -20,10 +20,11 @@ const SEARCH_THRESHOLD = 6; // a partir de quantas contas a busca aparece
  *  - getConfig(): configuração base da campanha
  *  - getPublications(): publicações já existentes ({ advertiserId, status, error, tiktokCampaignId, tiktokAdGroupId, overrides })
  *  - onChange(): chamado quando a seleção muda (o assistente atualiza o botão de publicar)
- * Há filtros por tipo (comuns / de agência) e por situação (ativas / inativas) e um atalho para marcar todas as contas listadas:
+ *  - alwaysSearch: mostra a busca mesmo com poucas contas (a busca acha por nome da conta, ID da conta ou nome da Business Center)
+ * Há filtros por Business Center, por tipo (comuns / de agência) e por situação (ativas / inativas) e um atalho para marcar todas as contas listadas:
  * assim dá para publicar um tipo de cada vez. Retorna { element, refresh, selectedIds, overridesFor, validate, setResult, setBusy, deselect }.
  */
-export function createPublishTargets({ advertisers, getConfig, getPublications, onChange }) {
+export function createPublishTargets({ advertisers, getConfig, getPublications, onChange, alwaysSearch = false }) {
   const selected = new Set();
   const overrides = new Map(); // id -> { adGroup: {...}, ad: {...} }
   const expanded = new Set(); // contas com o painel de ajustes aberto
@@ -73,7 +74,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
   const list = h('div', { class: 'targets__list' });
   const summary = h('p', { class: 'targets__summary', 'aria-live': 'polite' });
   const warning = h('div');
-  const search = h('input', { class: 'input targets__search', type: 'search', placeholder: 'Buscar conta ou Business Center…', 'aria-label': 'Buscar conta de anúncio', maxlength: 100 });
+  const search = h('input', { class: 'input targets__search', type: 'search', placeholder: 'Buscar por nome ou ID da conta…', 'aria-label': 'Buscar conta de anúncio', maxlength: 100 });
   search.addEventListener('input', () => {
     query = normalize(search.value.trim());
     renderList();
@@ -81,7 +82,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
   const searchRow = h('div', { class: 'targets__search-row' }, search);
 
   // Filtros por tipo e situação + atalho "marcar todas as listadas" (valem para o que está na tela, já com busca e filtros).
-  const filter = createAccountFilter({ onChange: () => renderList(), accounts: advertisers });
+  const filter = createAccountFilter({ onChange: () => renderList(), accounts: advertisers, byCenter: true });
   const selectListed = h('button', { type: 'button', class: 'link-btn' });
   selectListed.addEventListener('click', () => {
     const listed = listedSelectable();
@@ -310,7 +311,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
   );
 
   function refresh() {
-    searchRow.hidden = advertisers.length < SEARCH_THRESHOLD;
+    searchRow.hidden = !alwaysSearch && advertisers.length < SEARCH_THRESHOLD;
     filtersRow.hidden = advertisers.length === 0;
     // Contas que deixaram de ser elegíveis (já publicadas, BC com erro) saem da seleção.
     for (const id of [...selected]) {

@@ -1637,3 +1637,28 @@ button.activity__person:hover { border-color: var(--tt-cyan-dark); }
 .activity__tag { font-weight: 500; }
 .activity__time { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); padding-top: 2px; }
 .activity__more { display: flex; justify-content: center; padding-top: 14px; }
+
+/* ---------- Automação → Campanha one-click ---------- */
+.oneclick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; align-items: stretch; }
+.oneclick-add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 220px; padding: 20px; font: inherit; color: var(--muted); text-align: center; cursor: pointer; background: #fff; border: 2px dashed #c9cccf; border-radius: 18px; transition: border-color 0.15s, color 0.15s, background 0.15s; }
+.oneclick-add:hover, .oneclick-add:focus-visible { border-color: var(--tt-cyan-dark); color: var(--text); background: #f7fffe; }
+.oneclick-add__plus { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: var(--tt-black); color: #fff; font-size: 30px; line-height: 1; }
+.oneclick-add__label { font-size: 15px; font-weight: 700; color: var(--text); }
+.oneclick-add__hint { font-size: 12px; }
+.oneclick-card { position: relative; display: flex; flex-direction: column; gap: 12px; min-height: 220px; padding: 18px; background: #fff; border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; }
+.oneclick-card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 4px; background: linear-gradient(90deg, var(--tt-cyan), var(--tt-red)); }
+.oneclick-card__head { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-top: 4px; }
+.oneclick-card__title { padding: 0; font: inherit; font-size: 17px; font-weight: 700; line-height: 1.3; letter-spacing: -0.01em; text-align: left; color: var(--text); background: none; border: 0; cursor: pointer; overflow-wrap: anywhere; }
+.oneclick-card__title:hover, .oneclick-card__title:focus-visible { text-decoration: underline; }
+.oneclick-card__facts { margin: 0; display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.oneclick-card__facts > div { display: flex; gap: 8px; min-width: 0; }
+.oneclick-card__facts dt { flex: none; width: 74px; color: var(--muted); }
+.oneclick-card__facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.oneclick-card__actions { display: flex; gap: 8px; justify-content: space-between; margin-top: auto; padding-top: 6px; }
+.oneclick-card__actions .btn--primary { flex: 1; }
+.oneclick-empty { margin: 14px 0 0; }
+.oneclick-publish { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.oneclick-publish__scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 20px; }
+.oneclick-publish__banner:not(:empty) { padding: 14px 20px 0; }
+.oneclick-publish__footer { flex: none; display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); background: #fafafa; }
+.oneclick-publish__intro { margin: 0 0 12px; }

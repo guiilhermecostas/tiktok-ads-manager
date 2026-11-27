@@ -1,42 +1,38 @@
 import { countByKind } from '/shared/account-labels.js';
 import { distinctCurrencies, isMainCurrency, moneyPrefix } from '/shared/currency.js';
 import { catalogPresetConfig, defaultCreativeRefs, mergeCatalogDefaults } from '/shared/catalog-defaults.js';
-import { STEPS, collectCreativeRefs, defaultConfig, findField, reconcileConfig, stepOfPath, validateConfig } from '/shared/campaign-spec.js';
+import { STEPS, collectCreativeRefs, defaultConfig, reconcileConfig, stepOfPath, validateConfig } from '/shared/campaign-spec.js';
 import { get, post, put } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
 import { parseMoneyToCents } from '../../format.js';
-import { alertBox, button, confirmDialog, openModal, spinner, stepper as stepperView, toast } from '../../ui.js';
+import { alertBox, button, confirmDialog, field as formField, openModal, spinner, stepper as stepperView, toast } from '../../ui.js';
 import { pickCreatives } from '../creatives/picker.js';
 import { renderStepForm } from './form-fields.js';
+import { publishToAccounts } from './publish-run.js';
 import { createPublishTargets } from './publish-targets.js';
 import { renderReview } from './review.js';
 
 const FORM_STEPS = STEPS.slice(0, -1).map((s) => s.id);
 const REVIEW_INDEX = STEPS.length - 1;
+const NAME_MIN = 2;
+const NAME_MAX = 60;
+const TEMPLATE_API = '/automation/one-click';
 const NO_PUBLISH = { status: 'none', published: 0, partial: 0, failed: 0, locks: { campaign: false, adGroup: false, ad: false } };
 
 let active = null; // só um assistente aberto por vez (duplo clique no botão não abre dois)
-
-/** Mensagem curta de uma falha de publicação numa conta (inclui os campos inválidos, se houver). */
-function failureMessage(err) {
-  if (Array.isArray(err.details) && err.details.length) {
-    const parts = err.details.slice(0, 3).map((d) => {
-      const [section, key] = String(d.path).split('.');
-      return `${findField(section, key)?.label ?? d.path}: ${d.message}`;
-    });
-    return `Corrija na campanha: ${parts.join(' · ')}`;
-  }
-  return err.message;
-}
 
 /**
  * Assistente de campanha em POP-UP (aberto pelo botão flutuante "Publicar campanha" ou por "Editar" na lista).
  * Passos: Objetivo → Campanha → Grupo de anúncios → Anúncio → Revisão e publicação (escolha das contas de anúncio).
  * A UI é gerada pela especificação compartilhada (/shared/campaign-spec.js); o servidor valida de novo.
  * `ctx.reload()` atualiza a página de trás quando algo foi salvo/publicado.
+ *
+ * Modo CONFIGURAÇÃO (`template`, usado por Automação → Campanha one-click): os mesmos passos, mas em vez de publicar o último passo pede o NOME da
+ * configuração ("Campanha para o Brasil") e salva. As contas são escolhidas depois, no botão Publicar do cartão. `template: { id }` (id nulo = nova).
  */
-export function openCampaignWizard(ctx, { campaignId = null, catalog = null, defaults = null } = {}) {
+export function openCampaignWizard(ctx, { campaignId = null, catalog = null, defaults = null, template = null } = {}) {
   if (active) return active;
+  const isTemplate = template !== null;
 
   const body = h('div', { class: 'wizard-modal' }, spinner());
   let st = null;
@@ -51,7 +47,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
     if (!st.dirty) return true;
     return confirmDialog({
       title: 'Sair sem salvar?',
-      message: 'Há alterações não salvas nesta campanha. Se sair agora, elas serão perdidas.',
+      message: isTemplate ? 'Há alterações não salvas nesta configuração. Se sair agora, elas serão perdidas.' : 'Há alterações não salvas nesta campanha. Se sair agora, elas serão perdidas.',
       confirmLabel: 'Sair sem salvar',
       danger: true,
     });
@@ -64,7 +60,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
   };
 
   const modal = openModal({
-    title: 'Publicar campanha',
+    title: isTemplate ? (template.id ? 'Editar configuração' : 'Nova configuração one-click') : 'Publicar campanha',
     size: 'wizard',
     body,
     dismissOnOverlay: false, // um clique fora, sem querer, não pode jogar fora uma campanha em andamento
@@ -82,9 +78,10 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
   async function load() {
     const [advertiserResult, loaded] = await Promise.all([
       get('/tiktok/advertisers').catch(() => ({ advertisers: [] })),
-      campaignId ? get(`/campaigns/${campaignId}`) : Promise.resolve(null),
+      isTemplate ? (template.id ? get(`${TEMPLATE_API}/${template.id}`) : Promise.resolve(null)) : campaignId ? get(`/campaigns/${campaignId}`) : Promise.resolve(null),
     ]);
-    const existing = loaded?.campaign ?? null;
+    // A configuração salva se comporta como uma campanha ainda sem publicações (o assistente a edita do mesmo jeito).
+    const existing = isTemplate && loaded ? { ...loaded.template, wizard: true, publish: NO_PUBLISH, publications: [] } : loaded?.campaign ?? null;
     if (existing && !existing.wizard) throw new Error('Esta campanha foi criada no formato simples e não pode ser editada pelo assistente.');
 
     // Biblioteca de criativos: carregamos os mais recentes e, se a campanha já usa algum que ficou de fora, buscamos individualmente.
@@ -119,10 +116,12 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
       banner: null,
       moneyText: {},
       advertisers,
+      templateName: isTemplate ? existing?.name ?? '' : '',
+      nameError: null,
     };
-    if (existing) body.closest('.modal')?.querySelector('.modal__title')?.replaceChildren(existing.name);
+    if (existing && !isTemplate) body.closest('.modal')?.querySelector('.modal__title')?.replaceChildren(existing.name);
 
-    targets = createPublishTargets({
+    targets = isTemplate ? null : createPublishTargets({
       advertisers: st.advertisers,
       getConfig: () => st.config,
       getPublications: () => st.publications,
@@ -233,7 +232,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
     // ---------- navegação ----------
     function enterReview() {
       st.allErrors = toList(collect(FORM_STEPS));
-      targets.refresh();
+      targets?.refresh();
     }
 
     function goTo(index) {
@@ -293,6 +292,51 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
       }
     }
 
+    // ---------- modo configuração: nome + salvar ----------
+    const nameField = formField('Nome da configuração', { type: 'text', name: 'templateName', value: st.templateName, required: true, maxlength: NAME_MAX, autocomplete: 'off', placeholder: 'Ex.: Campanha para o Brasil' }, { hint: 'É o nome do cartão. Use algo que diga para onde ou para quê ela serve.' });
+    const nameError = h('p', { class: 'field__error', role: 'alert', hidden: true });
+    nameField.control.addEventListener('input', () => {
+      st.templateName = nameField.control.value;
+      st.dirty = true;
+      st.nameError = null;
+      nameError.hidden = true;
+    });
+    const nameCard = () => {
+      nameError.textContent = st.nameError ?? '';
+      nameError.hidden = !st.nameError;
+      return h('section', { class: 'card card--pad targets' }, h('h3', { class: 'card__title' }, 'Nome da configuração'), nameField.element, nameError, h('p', { class: 'muted' }, 'Para publicar, volte ao cartão desta configuração e clique em Publicar: lá você escolhe em quais contas de anúncio ela vai (pausada).'));
+    };
+
+    async function saveTemplate() {
+      st.allErrors = toList(collect(FORM_STEPS));
+      const name = st.templateName.trim().replace(/\s+/g, ' ');
+      st.nameError = name.length < NAME_MIN || name.length > NAME_MAX ? `Dê um nome de ${NAME_MIN} a ${NAME_MAX} caracteres.` : null;
+      if (st.allErrors.length || st.nameError) {
+        st.banner = null;
+        draw({ scrollTop: true });
+        return;
+      }
+      st.busy = 'save';
+      st.banner = null;
+      draw();
+      try {
+        const payload = { name, config: st.config };
+        const saved = (st.id ? await put(`${TEMPLATE_API}/${st.id}`, payload) : await post(TEMPLATE_API, payload)).template;
+        st.id = saved.id;
+        st.dirty = false;
+        st.changed = true;
+        toast('Configuração salva.');
+        st.busy = null;
+        modal.close();
+        return;
+      } catch (err) {
+        if (err.code === 'template_name_taken') st.nameError = err.message;
+        else if (!applyServerErrors(err)) st.banner = err.message;
+      }
+      st.busy = null;
+      draw({ scrollTop: true });
+    }
+
     /** Publica nas contas escolhidas, UMA de cada vez: cada conta tem progresso, erro e retomada próprios. */
     async function publishSelected() {
       const ids = targets.selectedIds();
@@ -338,21 +382,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
         return;
       }
 
-      const succeeded = [];
-      let failed = 0;
-      for (const id of ids) {
-        targets.setResult(id, { state: 'running' });
-        try {
-          const overrides = targets.overridesFor(id);
-          await post(`/campaigns/${st.id}/publish`, { confirm: true, advertiserId: id, ...(Object.keys(overrides).length ? { overrides } : {}) });
-          targets.setResult(id, { state: 'done' });
-          succeeded.push(id);
-        } catch (err) {
-          failed += 1;
-          targets.setResult(id, { state: 'failed', message: failureMessage(err) });
-          if (err.status === 401) break; // sessão caiu: o restante falharia do mesmo jeito
-        }
-      }
+      const { succeeded, failed } = await publishToAccounts({ campaignId: st.id, ids, targets });
       st.changed = true;
       try {
         const fresh = (await get(`/campaigns/${st.id}`)).campaign;
@@ -371,7 +401,8 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
     }
 
     // ---------- desenho ----------
-    const stepper = () => stepperView({ steps: STEPS, current: st.step, maxStep: st.maxStep, disabled: st.busy !== null, onGo: goTo, label: 'Etapas da campanha' });
+    const wizardSteps = isTemplate ? STEPS.map((step, i) => (i === REVIEW_INDEX ? { ...step, title: 'Nome e salvar' } : step)) : STEPS;
+    const stepper = () => stepperView({ steps: wizardSteps, current: st.step, maxStep: st.maxStep, disabled: st.busy !== null, onGo: goTo, label: 'Etapas da campanha' });
 
     function drawBanner() {
       bannerSlot.replaceChildren(...(st.banner ? [alertBox(st.banner)] : []));
@@ -380,19 +411,21 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
     function drawFooter() {
       const busy = st.busy !== null;
       const onReview = st.step === REVIEW_INDEX;
-      const count = onReview ? targets.selectedIds().length : 0;
+      const count = onReview && targets ? targets.selectedIds().length : 0;
       const publishLabel = st.busy === 'publish' ? 'Publicando…' : count > 1 ? `Publicar em ${count} contas` : 'Publicar no TikTok';
       const left = h(
         'div',
         { class: 'wizard-footer__side' },
         button('Fechar', { onClick: () => modal.requestClose(), disabled: busy }),
-        readOnlyAll() ? null : button(st.busy === 'save' ? 'Salvando…' : 'Salvar rascunho', { onClick: saveDraft, disabled: busy }),
+        readOnlyAll() || isTemplate ? null : button(st.busy === 'save' ? 'Salvando…' : 'Salvar rascunho', { onClick: saveDraft, disabled: busy }),
       );
       const right = h(
         'div',
         { class: 'wizard-footer__side' },
         st.step > 0 ? button('Voltar', { onClick: () => goTo(st.step - 1), disabled: busy }) : null,
-        onReview
+        onReview && isTemplate
+          ? button(st.busy === 'save' ? 'Salvando…' : 'Salvar configuração', { variant: 'primary', onClick: saveTemplate, disabled: busy || st.allErrors.length > 0 })
+          : onReview
           ? button(st.busy === 'publish' ? publishLabel : [icon('megaphone', 16), ` ${publishLabel}`], { variant: 'primary', onClick: publishSelected, disabled: busy || count === 0 || st.allErrors.length > 0 })
           : button('Continuar', { variant: 'primary', onClick: next, disabled: busy }),
       );
@@ -401,12 +434,12 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
 
     function draw({ scrollTop = false, focusFirstError = false } = {}) {
       const onReview = st.step === REVIEW_INDEX;
-      const meta = STEPS[st.step];
+      const meta = isTemplate && onReview ? { ...STEPS[st.step], title: 'Nome e salvar', description: 'Confira o resumo, dê um nome fácil de reconhecer e salve. Depois é só clicar em Publicar no cartão.' } : STEPS[st.step];
       const lockedNotice = !onReview && formCtx.readOnly
         ? alertBox(readOnlyAll() ? 'Esta campanha já foi publicada no TikTok e não pode mais ser editada aqui. Para mudar o anúncio, crie uma nova campanha.' : 'Este nível já foi criado no TikTok e não pode mais ser alterado. Ajuste as próximas etapas e publique novamente para concluir.', 'warning')
         : null;
       const content = onReview
-        ? renderReview({ config: st.config, creatives: creativeMap, errors: st.allErrors, publish: st.publish, readOnly: readOnlyAll(), goTo, targets: targets.element, moneyPrefix: formCtx.moneyPrefix })
+        ? renderReview({ config: st.config, creatives: creativeMap, errors: st.allErrors, publish: st.publish, readOnly: readOnlyAll(), goTo, targets: isTemplate ? nameCard() : targets.element, moneyPrefix: formCtx.moneyPrefix })
         : renderStepForm(meta.id, formCtx);
 
       setChildren(stepperSlot, stepper());

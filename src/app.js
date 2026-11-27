@@ -21,6 +21,9 @@ import { createSessionsRepository } from './modules/auth/sessions.repository.js'
 import { createAdminNotificationsRouter, createNotificationsRouter } from './modules/notifications/notifications.routes.js';
 import { createNotificationsRepository } from './modules/notifications/notifications.repository.js';
 import { createCampaignsRepository } from './modules/campaigns/campaigns.repository.js';
+import { createOneClickRepository } from './modules/automation/one-click.repository.js';
+import { createOneClickRouter } from './modules/automation/one-click.routes.js';
+import { createOneClickService } from './modules/automation/one-click.service.js';
 import { createCampaignsRouter } from './modules/campaigns/campaigns.routes.js';
 import { createAvatarProcessor } from './modules/profile/avatar-processor.js';
 import { createAvatarsRepository } from './modules/profile/avatars.repository.js';
@@ -84,6 +87,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const users = createUsersRepository(db);
   const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
   const campaigns = createCampaignsRepository(db);
+  const oneClickRepo = createOneClickRepository(db);
   // E-mail (código de verificação do cadastro e convites de colaboradores) pelo Resend. `mailer` pode ser injetado nos testes.
   const mail = mailer ?? createMailer({ config, fetchFn, log });
   const registrations = createRegistrationsRepository(db);
@@ -221,10 +225,14 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Um admin que está vendo a conta de outra pessoa só consulta: qualquer alteração (POST/PATCH/PUT/DELETE) é barrada aqui, antes de qualquer módulo.
   protectedApi.use(requireAuth, requireApproved, readOnlyWhenImpersonating, resolveWorkspace);
   // Registro de atividades: observa as ações que ALTERAM algo e as anota com quem fez (a pessoa), em qual espaço e quando. Não muda nenhuma resposta.
-  const activityLookups = createActivityLookups({ campaigns, creatives: creativesRepo, businessCenters, proxies: proxiesRepo, files: filesRepo, team: teamRepo });
+  const activityLookups = createActivityLookups({ oneClick: oneClickRepo, campaigns, creatives: creativesRepo, businessCenters, proxies: proxiesRepo, files: filesRepo, team: teamRepo });
   protectedApi.use(createActivityTrail({ activity, rules: createActivityRules(), lookups: activityLookups, log }));
   const campaignsRouter = createCampaignsRouter({ campaigns, tiktok: tiktokService, creatives: creativesService, limits });
   protectedApi.use('/campaigns', requireArea('campaigns'), campaignsRouter);
+  // Automação → Campanha one-click: configurações de campanha reutilizáveis (publicar cria uma campanha nova e a publicação segue a rota de campanhas).
+  const oneClickService = createOneClickService({ repo: oneClickRepo, campaigns, creatives: creativesService });
+  const oneClickRouter = createOneClickRouter({ service: oneClickService, limits });
+  protectedApi.use('/automation/one-click', requireArea('campaigns'), oneClickRouter);
   const proxiesRouter = createProxiesRouter({ service: proxiesService, limits });
   protectedApi.use('/proxies', requireArea('accounts'), proxiesRouter);
   // As áreas de cada rota do TikTok (contas, relatórios, lista de contas de anúncio) são exigidas dentro do próprio roteador.
@@ -332,6 +340,7 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
       avatarsRouter.stop();
       invitationsRouter.stop();
       campaignsRouter.stop();
+      oneClickRouter.stop();
     },
   };
 }

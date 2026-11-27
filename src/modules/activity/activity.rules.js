@@ -57,6 +57,31 @@ export function createActivityRules() {
         };
       },
     }),
+    // Campanha one-click: criar, alterar, apagar e publicar uma configuração (a publicação em cada conta aparece como "campaign.publish").
+    rule('POST', /^\/api\/automation\/one-click$/, 'template.create', {
+      describe: ({ result }) => (result?.template ? { target: result.template.name, details: { objective: OBJECTIVE_LABEL[result.template.objective] ?? result.template.objective } } : null),
+    }),
+    rule('PUT', /^\/api\/automation\/one-click\/(\d+)$/, 'template.update', {
+      describe: ({ result }) => (result?.template ? { target: result.template.name, details: { objective: OBJECTIVE_LABEL[result.template.objective] ?? result.template.objective } } : null),
+    }),
+    rule('DELETE', /^\/api\/automation\/one-click\/(\d+)$/, 'template.delete', {
+      before: async ({ actor, match, lookups }) => (await lookups.template(actor.id, Number(match[1])))?.name ?? null,
+      describe: ({ snapshot }) => ({ target: snapshot }),
+    }),
+    rule('POST', /^\/api\/automation\/one-click\/(\d+)\/launch$/, 'template.launch', {
+      describe: async ({ actor, match, lookups }) => {
+        const template = await lookups.template(actor.id, Number(match[1]));
+        if (!template) return null;
+        const ad = template.config?.ad ?? {};
+        const creativeIds = [ad.videoCreativeId, ad.coverCreativeId, ...(ad.imageCreativeIds ?? [])].filter((id) => Number.isInteger(id));
+        const creatives = creativeIds.length ? await lookups.creatives(actor.id, [...new Set(creativeIds)]) : [];
+        const catalogId = template.config?.adGroup?.catalogId;
+        return {
+          target: template.name,
+          details: { link: ad.landingPageUrl, creatives: creatives.map((c) => c.name), catalog: catalogId ? `ID ${catalogId}` : undefined, objective: OBJECTIVE_LABEL[template.objective] ?? template.objective },
+        };
+      },
+    }),
     // Ativar/pausar no Gerenciador (campanhas, grupos e anúncios).
     rule('POST', /^\/api\/tiktok\/manager\/(campaigns|adgroups|ads)\/status$/, 'manager.status', {
       describe: async ({ actor, match, body, result, lookups }) => {

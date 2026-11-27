@@ -8,12 +8,13 @@ import { createBell } from './notifications-bell.js';
 import { openProfile } from './profile.js';
 
 // `areas`: o item aparece para quem tem ao menos uma destas áreas (o dono da conta tem todas); `ownerOnly`: só o dono do espaço.
-// Ordem do menu: Início (sem título, é a porta de entrada) → Ads → BC e CA → Gestão → KPI. O título de cada grupo só aparece se a pessoa vê algum item dele.
+// Ordem do menu: Início (sem título, é a porta de entrada) → Ads → Automação → BC e CA → Gestão → KPI. O título de cada grupo só aparece se a pessoa vê algum item dele.
 const NAV = [
   { path: '/', label: 'Início', icon: 'home' },
   { path: '/manager', label: 'Gerenciador', icon: 'sliders', areas: ['campaigns', 'reports'], section: 'Ads' },
   { path: '/creatives', label: 'Criativos', icon: 'image', areas: ['creatives'], section: 'Ads' },
   { path: '/catalog', label: 'Catálogo', icon: 'box', areas: ['campaigns'], section: 'Ads' },
+  { path: '/automation/one-click', label: 'Campanha one-click', icon: 'zap', areas: ['campaigns'], section: 'Automação' },
   { path: '/business-centers', label: 'Contas TikTok', icon: 'building', areas: ['accounts'], section: 'BC e CA' },
   { path: '/balance', label: 'Saldo', icon: 'wallet', areas: ['accounts'], section: 'BC e CA' },
   { path: '/team', label: 'Colaboradores', icon: 'users', ownerOnly: true, section: 'Gestão' },
@@ -23,7 +24,7 @@ const NAV = [
 ];
 
 // Ícone do título de cada grupo do menu (as opções de dentro aparecem ao passar o mouse).
-const SECTION_ICONS = { Ads: 'megaphone', 'BC e CA': 'building', Gestão: 'users', KPI: 'chart' };
+const SECTION_ICONS = { Ads: 'megaphone', Automação: 'zap', 'BC e CA': 'building', Gestão: 'users', KPI: 'chart' };
 
 const COLLAPSE_KEY = 'tt.sidebar.collapsed';
 const readCollapsed = () => {

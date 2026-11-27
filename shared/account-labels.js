@@ -34,13 +34,26 @@ export const STATUS_FILTERS = Object.freeze([
 
 export const isActiveAccount = (account) => account.businessCenterStatus === 'active';
 
-export function matchesAccountFilter(account, { kind = 'all', status = 'all', currency = 'all' } = {}) {
+/** Filtro de contas: tipo, situação, moeda e Business Center (`center` = o ID da BC como texto, ou 'all'). Todos os filtros se combinam (E). */
+export function matchesAccountFilter(account, { kind = 'all', status = 'all', currency = 'all', center = 'all' } = {}) {
+  if (center !== 'all' && String(account.businessCenterId) !== center) return false;
   if (currency !== 'all' && account.currency !== currency) return false;
   if (kind === 'standard' && account.label) return false;
   if (kind !== 'all' && kind !== 'standard' && account.label !== kind) return false;
   if (status === 'active' && !isActiveAccount(account)) return false;
   if (status === 'inactive' && isActiveAccount(account)) return false;
   return true;
+}
+
+/** As Business Centers das contas, uma vez cada: [{ id (texto), name, accounts }], em ordem alfabética (para o filtro por Business Center). */
+export function centersOf(accounts) {
+  const byId = new Map();
+  for (const account of accounts) {
+    const id = String(account.businessCenterId);
+    if (!byId.has(id)) byId.set(id, { id, name: account.businessCenterName || `Business Center ${id}`, accounts: 0 });
+    byId.get(id).accounts += 1;
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 }
 
 /** Contagem por tipo, para resumos ("2 de agência, 1 comum"). */

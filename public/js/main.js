@@ -26,6 +26,7 @@ import { filesView } from './views/files.js';
 import { proxySettingsView } from './views/proxy-settings.js';
 import { tiktokConnectedView } from './views/tiktok-connected.js';
 import { inviteView } from './views/invite.js';
+import { oneClickView } from './views/automation/one-click.js';
 import { teamView } from './views/team.js';
 
 const root = document.getElementById('app');
@@ -37,6 +38,7 @@ const PROTECTED_ROUTES = {
   '/campaigns': { title: 'Campanhas', view: campaignsView, areas: ['campaigns'] },
   '/manager': { title: 'Gerenciador', view: managerView, areas: ['campaigns', 'reports'] },
   '/catalog': { title: 'Catálogo', view: catalogView, areas: ['campaigns'] },
+  '/automation/one-click': { title: 'Campanha one-click', view: oneClickView, areas: ['campaigns'] },
   '/creatives': { title: 'Criativos', view: creativesView, areas: ['creatives'] },
   '/reports': { title: 'Relatórios', view: reportsView, areas: ['reports'] },
   '/reports/hourly': { title: 'Gasto por hora', view: reportsHourlyView, areas: ['reports'] },
