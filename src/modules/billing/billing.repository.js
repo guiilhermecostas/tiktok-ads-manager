@@ -69,40 +69,61 @@ export function createBillingRepository(db) {
     // ---------- fechamentos ----------
     async listStatements(userId) {
       const { rows } = await db.query(
-        `SELECT to_char(period, 'YYYY-MM-DD') AS period, monthly_fee_cents, percent_bp, spend_cents, percent_fee_cents, total_cents, unconverted, created_at
+        `SELECT to_char(period, 'YYYY-MM-DD') AS period, monthly_fee_cents, percent_bp, spend_cents, percent_fee_cents, total_cents, unconverted, breakdown, created_at
            FROM billing_statements WHERE user_id = $1 ORDER BY period`,
         [userId],
       );
       return rows.map((r) => ({
         period: r.period, monthlyFeeCents: r.monthly_fee_cents, percentBp: r.percent_bp, spendCents: cents(r.spend_cents),
-        percentFeeCents: cents(r.percent_fee_cents), totalCents: cents(r.total_cents), unconverted: Array.isArray(r.unconverted) ? r.unconverted : [], closedAt: toIso(r.created_at),
+        percentFeeCents: cents(r.percent_fee_cents), totalCents: cents(r.total_cents), unconverted: Array.isArray(r.unconverted) ? r.unconverted : [],
+        breakdown: Array.isArray(r.breakdown) ? r.breakdown : [], closedAt: toIso(r.created_at),
       }));
     },
     /** Fecha o mês UMA vez (se já houver fechamento, não muda nada). Devolve true se criou. */
-    async insertStatement({ userId, period, monthlyFeeCents, percentBp, spendCents, percentFeeCents, totalCents, unconverted }) {
+    async insertStatement({ userId, period, monthlyFeeCents, percentBp, spendCents, percentFeeCents, totalCents, unconverted, breakdown }) {
       const { rowCount } = await db.query(
-        `INSERT INTO billing_statements (user_id, period, monthly_fee_cents, percent_bp, spend_cents, percent_fee_cents, total_cents, unconverted)
-         VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8::jsonb) ON CONFLICT (user_id, period) DO NOTHING`,
-        [userId, period, monthlyFeeCents, percentBp, spendCents, percentFeeCents, totalCents, JSON.stringify(unconverted)],
+        `INSERT INTO billing_statements (user_id, period, monthly_fee_cents, percent_bp, spend_cents, percent_fee_cents, total_cents, unconverted, breakdown)
+         VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb) ON CONFLICT (user_id, period) DO NOTHING`,
+        [userId, period, monthlyFeeCents, percentBp, spendCents, percentFeeCents, totalCents, JSON.stringify(unconverted), JSON.stringify(breakdown ?? [])],
       );
       return rowCount > 0;
     },
 
     // ---------- pagamentos ----------
-    async addPayment({ userId, amountCents, paidAt = null, note = null, registeredBy }) {
+    async addPayment({ userId, amountCents, paidAt = null, note = null, registeredBy, invoiceId = null }) {
       const { rows } = await db.query(
-        'INSERT INTO billing_payments (user_id, amount_cents, paid_at, note, registered_by) VALUES ($1, $2, COALESCE($3::date, CURRENT_DATE), $4, $5) RETURNING id',
-        [userId, amountCents, paidAt, note, registeredBy],
+        'INSERT INTO billing_payments (user_id, amount_cents, paid_at, note, registered_by, invoice_id) VALUES ($1, $2, COALESCE($3::date, CURRENT_DATE), $4, $5, $6) RETURNING id',
+        [userId, amountCents, paidAt, note, registeredBy, invoiceId],
       );
       return rows[0].id;
     },
     async listPayments(userId) {
       const { rows } = await db.query(
-        `SELECT p.id, p.amount_cents, to_char(p.paid_at, 'YYYY-MM-DD') AS paid_at, p.note, p.created_at, u.name AS registered_by_name
+        `SELECT p.id, p.amount_cents, to_char(p.paid_at, 'YYYY-MM-DD') AS paid_at, p.note, p.invoice_id, p.created_at, u.name AS registered_by_name
            FROM billing_payments p LEFT JOIN users u ON u.id = p.registered_by WHERE p.user_id = $1 ORDER BY p.paid_at DESC, p.id DESC`,
         [userId],
       );
-      return rows.map((r) => ({ id: r.id, amountCents: cents(r.amount_cents), paidAt: day(r.paid_at), note: r.note, registeredByName: r.registered_by_name, createdAt: toIso(r.created_at) }));
+      return rows.map((r) => ({ id: r.id, amountCents: cents(r.amount_cents), paidAt: day(r.paid_at), note: r.note, invoiceId: r.invoice_id, registeredByName: r.registered_by_name, createdAt: toIso(r.created_at) }));
+    },
+
+    // ---------- faturas ----------
+    /** Faturas da pessoa, da mais antiga para a mais nova (a ordem em que os pagamentos as quitam). */
+    async listInvoices(userId) {
+      const { rows } = await db.query(
+        `SELECT id, user_id, amount_cents, to_char(period_from, 'YYYY-MM-DD') AS period_from, to_char(period_to, 'YYYY-MM-DD') AS period_to, issued_at, to_char(due_date, 'YYYY-MM-DD') AS due_date
+           FROM billing_invoices WHERE user_id = $1 ORDER BY id`,
+        [userId],
+      );
+      return rows.map((r) => ({ id: r.id, userId: r.user_id, amountCents: cents(r.amount_cents), periodFrom: r.period_from, periodTo: r.period_to, issuedAt: toIso(r.issued_at), dueDate: r.due_date }));
+    },
+    /** Emite a fatura UMA vez por período (se já existir uma que termina no mesmo mês, não muda nada). Devolve true se criou. */
+    async insertInvoice({ userId, amountCents, periodFrom, periodTo, dueDate }) {
+      const { rowCount } = await db.query(
+        `INSERT INTO billing_invoices (user_id, amount_cents, period_from, period_to, due_date) VALUES ($1, $2, $3::date, $4::date, $5::date)
+         ON CONFLICT (user_id, period_to) DO NOTHING`,
+        [userId, amountCents, periodFrom, periodTo, dueDate],
+      );
+      return rowCount > 0;
     },
 
     // ---------- bloqueios ----------
@@ -150,17 +171,41 @@ export function createBillingRepository(db) {
       return new Map(rows.map((r) => [r.owner_id, r.total]));
     },
 
-    // ---------- cotações ----------
+    // ---------- cotações (quantos REAIS vale 1 unidade da moeda) ----------
     async listRates() {
-      const { rows } = await db.query('SELECT currency, usd_per_unit::float8 AS usd_per_unit, updated_at FROM billing_rates ORDER BY currency');
-      return rows.map((r) => ({ currency: r.currency, usdPerUnit: r.usd_per_unit, updatedAt: toIso(r.updated_at) }));
+      const { rows } = await db.query('SELECT currency, brl_per_unit::float8 AS brl_per_unit, source, updated_at FROM billing_rates ORDER BY currency');
+      return rows.map((r) => ({ currency: r.currency, brlPerUnit: r.brl_per_unit, source: r.source, updatedAt: toIso(r.updated_at) }));
     },
-    async setRate(currency, usdPerUnit, updatedBy) {
+    /** Cotação FIXADA pelo admin: vale até ser removida e a atualização automática nunca a sobrescreve. */
+    async setManualRate(currency, brlPerUnit, updatedBy) {
       await db.query(
-        `INSERT INTO billing_rates (currency, usd_per_unit, updated_by) VALUES ($1, $2, $3)
-         ON CONFLICT (currency) DO UPDATE SET usd_per_unit = EXCLUDED.usd_per_unit, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-        [currency, usdPerUnit, updatedBy],
+        `INSERT INTO billing_rates (currency, brl_per_unit, source, updated_by) VALUES ($1, $2, 'manual', $3)
+         ON CONFLICT (currency) DO UPDATE SET brl_per_unit = EXCLUDED.brl_per_unit, source = 'manual', updated_by = EXCLUDED.updated_by, updated_at = now()`,
+        [currency, brlPerUnit, updatedBy],
       );
+    },
+    /** Cotações da atualização automática: só entram onde não há cotação manual. Devolve quantas moedas foram gravadas. */
+    async upsertAutoRates(rates) {
+      let saved = 0;
+      for (const { currency, brlPerUnit } of rates) {
+        const { rowCount } = await db.query(
+          `INSERT INTO billing_rates (currency, brl_per_unit, source) VALUES ($1, $2, 'auto')
+           ON CONFLICT (currency) DO UPDATE SET brl_per_unit = EXCLUDED.brl_per_unit, updated_at = now() WHERE billing_rates.source = 'auto'`,
+          [currency, brlPerUnit],
+        );
+        saved += rowCount;
+      }
+      return saved;
+    },
+    /** Remove a cotação (a automática volta no próximo ciclo). Devolve true se existia. */
+    async deleteRate(currency) {
+      const { rowCount } = await db.query('DELETE FROM billing_rates WHERE currency = $1', [currency]);
+      return rowCount > 0;
+    },
+    /** Moedas que aparecem no livro de gasto (para saber quais cotações buscar). */
+    async ledgerCurrencies() {
+      const { rows } = await db.query("SELECT DISTINCT currency FROM spend_ledger WHERE currency <> 'UNKNOWN' ORDER BY currency");
+      return rows.map((r) => r.currency);
     },
   };
 }

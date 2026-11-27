@@ -95,6 +95,7 @@ export function createFakeTiktok() {
     catalogFeedLogs2: {}, // feed -> entradas de /catalog/feed/log/
     feedCredentials: [], // { feed_id, username, password } recebidos (para provar que nunca voltam)
     failCatalogFor: new Set(), // BCs cujas chamadas de catálogo respondem "sem permissão"
+    catalogOnlyRegion: {}, // BC -> país que o TikTok aceita para ELA (qualquer outro volta "currency matches the selected country", mesmo constando nas listas)
     rejectProductSkus: new Set(), // SKUs que o processamento marca como erro
     strictCatalog: true, // true: campanha/grupo/anúncio de catálogo são conferidos contra o contrato oficial e recusados se fugirem dele
     campaignsById: {}, adgroupsById: {}, // o que foi criado (para conferir a coerência entre os níveis)
@@ -598,6 +599,7 @@ export function createFakeTiktok() {
         if (!conf || typeof conf !== 'object') return reply({}, 40002, 'catalog_conf is required');
         if (!state.catalogRegions.includes(conf.region_code)) return reply({}, 40002, 'region_code is not supported');
         if (!state.locationCurrencies.find((l) => l.location === conf.region_code)?.currency.includes(conf.currency)) return reply({}, 40002, 'currency is not supported for this region');
+        if (state.catalogOnlyRegion[body.bc_id] && conf.region_code !== state.catalogOnlyRegion[body.bc_id]) return reply({}, 40002, "Invalid Param: Please ensure the currency matches the selected country (e.g., 'United States' should use 'USD').");
         const id = String(++state.nextId);
         (state.catalogs[body.bc_id] ??= []).push({
           catalog_id: id, catalog_name: body.name, catalog_type: body.catalog_type, ad_creation_eligible: 'NOT_AVAILABLE',

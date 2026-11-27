@@ -824,6 +824,65 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['campaign_templates'], revoke: ['campaign_templates'], identity: ['campaign_templates'] })}
     `,
   },
+  {
+    version: 27,
+    description: 'Cobrança em REAL: valores em centavos de real, cotações para real (automáticas ou manuais) e faturas',
+    sql: `
+      -- 1) Os valores já guardados estavam em CENTAVOS DE DÓLAR e passam a ser CENTAVOS DE REAL. Conversão ÚNICA por uma cotação de referência fixa (5,50), porque uma
+      --    migração não consulta a internet. Cobre mensalidades dos planos, fechamentos, pagamentos e a dívida registrada nos bloqueios. (Na prática só existiam planos
+      --    com mensalidade zero; se houver outros valores, o admin deve conferi-los.)
+      ALTER TABLE billing_plans DROP CONSTRAINT billing_plans_monthly_fee_cents_check;
+      UPDATE billing_plans SET monthly_fee_cents = ROUND(monthly_fee_cents * 5.5)::int;
+      ALTER TABLE billing_plans ADD CONSTRAINT billing_plans_monthly_fee_cents_check CHECK (monthly_fee_cents BETWEEN 0 AND 5000000);
+
+      UPDATE billing_statements SET
+        monthly_fee_cents = ROUND(monthly_fee_cents * 5.5)::int,
+        spend_cents = ROUND(spend_cents * 5.5),
+        percent_fee_cents = ROUND(percent_fee_cents * 5.5),
+        total_cents = ROUND(total_cents * 5.5);
+      UPDATE billing_payments SET amount_cents = ROUND(amount_cents * 5.5);
+      UPDATE billing_locks SET debt_cents = ROUND(debt_cents * 5.5);
+
+      -- Cada fechamento guarda de onde veio o gasto: por moeda, com a cotação usada naquele momento (o passado nunca muda com cotações futuras).
+      ALTER TABLE billing_statements ADD COLUMN breakdown JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(breakdown) = 'array');
+
+      -- 2) Cotações: quantos REAIS vale 1 unidade de cada moeda (o real vale 1 e não tem linha). 'auto' = atualizada sozinha por uma fonte pública; 'manual' = fixada
+      --    pelo admin (a atualização automática nunca sobrescreve). As cotações antigas eram em dólar e não servem mais: a atualização automática preenche as novas.
+      DROP TABLE billing_rates;
+      CREATE TABLE billing_rates (
+        currency     TEXT           PRIMARY KEY CHECK (currency ~ '^[A-Z]{3}$' AND currency <> 'BRL'),
+        brl_per_unit NUMERIC(20,10) NOT NULL CHECK (brl_per_unit > 0),
+        source       TEXT           NOT NULL CHECK (source IN ('auto', 'manual')),
+        updated_by   INTEGER        REFERENCES users(id) ON DELETE SET NULL,
+        updated_at   TIMESTAMPTZ    NOT NULL DEFAULT now()
+      );
+
+      -- 3) Faturas: a cobrança dos meses fechados vira uma fatura quando o acumulado chega ao mínimo (R$ 50,00). Cada fatura cobre meses seguidos (de period_from até
+      --    period_to) e nunca se repete. Quem pagou o quê NÃO é guardado aqui: os pagamentos quitam as faturas da mais antiga para a mais nova (assim nada fica fora de sincronia).
+      CREATE TABLE billing_invoices (
+        id           INTEGER     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id      INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount_cents BIGINT      NOT NULL CHECK (amount_cents > 0),
+        period_from  DATE        NOT NULL CHECK (EXTRACT(DAY FROM period_from) = 1),
+        period_to    DATE        NOT NULL CHECK (EXTRACT(DAY FROM period_to) = 1),
+        issued_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        due_date     DATE        NOT NULL,
+        CHECK (period_to >= period_from),
+        UNIQUE (user_id, period_to)
+      );
+      CREATE INDEX idx_billing_invoices_user ON billing_invoices (user_id, id);
+
+      -- Pagamento feito ao marcar uma fatura como paga (para saber de qual fatura veio).
+      ALTER TABLE billing_payments ADD COLUMN invoice_id INTEGER REFERENCES billing_invoices(id) ON DELETE SET NULL;
+
+      ALTER TABLE admin_audit_log DROP CONSTRAINT admin_audit_log_action_check;
+      ALTER TABLE admin_audit_log ADD CONSTRAINT admin_audit_log_action_check
+        CHECK (action IN ('impersonation_start', 'impersonation_end', 'status_change', 'notification_send', 'notification_change',
+                          'billing_plan', 'billing_payment', 'billing_lock_release', 'billing_rate', 'billing_invoice_paid', 'billing_rate_clear'));
+
+      ${protectTables({ rls: ['billing_rates', 'billing_invoices'], revoke: ['billing_rates', 'billing_invoices'], identity: ['billing_invoices'] })}
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)

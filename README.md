@@ -68,10 +68,10 @@ Em **Administração → Contas**, cada conta aprovada tem **Acessar conta** (um
 - **Bloquear/Reativar** derruba as sessões na hora (inclusive as abertas por admin).
 - **Registro de ações** (`admin_audit_log`, só acrescenta linhas): entrar/sair da conta de alguém, mudanças de status e envio/alteração de notificações. Aparece no fim da tela.
 
-### Assinaturas (planos em dólar, gasto guardado e bloqueio de BC com débito)
+### Assinaturas (planos e faturas em REAL, câmbio, gasto guardado e bloqueio de BC com débito)
 
-**Tudo em dólar (US$)**, em centavos inteiros. Em **Administração → Assinaturas** cada pessoa tem o **próprio plano, negociável**: mensalidade + percentual do gasto em anúncios
-(ex.: A = US$ 0 + 10%, B = US$ 99,90 + 5%, C = US$ 199,90 + 0%). O plano vale "este mês" (o mês inteiro) ou "próximo mês"; o plano de cada mês é guardado, então mudar o acordo nunca
+**Tudo o que se cobra e se paga é em REAL (R$)**, em centavos inteiros; o gasto das contas em outra moeda é convertido (veja "Câmbio"). Em **Administração → Assinaturas** cada pessoa tem o **próprio plano, negociável**: mensalidade + percentual do gasto em anúncios
+(ex.: A = R$ 0 + 10%, B = R$ 99,90 + 5%, C = R$ 199,90 + 0%). O plano vale "este mês" (o mês inteiro) ou "próximo mês"; o plano de cada mês é guardado, então mudar o acordo nunca
 altera o passado. A pessoa vê o próprio extrato em **Plano e cobrança** (só leitura).
 
 - **Gasto que não some:** a coleta por hora também grava o gasto em `spend_ledger` (por dono e conta, **sem ligação com a conexão da BC**): remover a BC não apaga nem reduz nada. O valor
@@ -81,8 +81,19 @@ altera o passado. A pessoa vê o próprio extrato em **Plano e cobrança** (só 
   O admin registra pagamentos (não podem ser apagados) e vê o extrato de cada pessoa; tudo vai para o registro de ações.
 - **Bloqueio por débito:** se a pessoa **remove uma BC com débito**, a BC e as contas dela ficam bloqueadas para **outras pessoas** (`409 billing_locked`, sem revelar de quem é a dívida), tanto por token quanto por link.
   Cai sozinho quando a dívida zera, quando a própria dona reconecta ou quando o admin libera. Falha fechada: se não der para gravar o bloqueio, a remoção da BC **não** acontece.
-- **Outras moedas:** contas em outra moeda só entram na conta com uma **cotação** cadastrada (1 unidade = US$ X); sem ela o valor aparece como "não convertido" para o admin acertar.
-- Não há cobrança automática (cartão/PIX): o sistema calcula, mostra e registra o que foi pago; quem cobra é o admin.
+- **Câmbio (tudo vira real):** o gasto de cada conta, na moeda dela (USD, EUR, ARS…), é convertido para real com aritmética inteira (`convertToBrlCents` em `shared/billing.js`, sem erro de ponto flutuante, arredondando o meio centavo para cima).
+  As cotações (`billing_rates`: quantos reais vale 1 unidade) são **atualizadas sozinhas a cada 6 h** de uma fonte pública e **sem chave** (Frankfurter, https://frankfurter.dev, API v2 `GET /v2/rates?base=BRL&quotes=…`; a resposta "1 BRL = X moeda" é invertida);
+  na requisição vai só a lista de moedas, nenhum dado de pessoa, conta ou valor. O admin pode **fixar uma cotação à mão** (nunca é sobrescrita pela automática) e "voltar para automática"; há o botão "Atualizar cotações agora". Se a fonte
+  falhar, as últimas cotações guardadas continuam valendo e o erro aparece no painel (sem endereços). O mês em andamento usa a cotação de agora; **ao fechar, o gasto por moeda e a cotação usada ficam guardados** no fechamento (mudar a cotação depois não altera o passado).
+  Moeda sem cotação NÃO entra na conta e é avisada ("sem cotação"). Configuração: `BILLING_FX_AUTO=false` desliga a automática; `BILLING_FX_URL` só aceita https no domínio frankfurter.dev (`/v2`). A tela mostra, por mês, "US$ 96,00 × R$ 5,4321".
+- **Faturas (método de pagamento dentro da plataforma):** quando os meses fechados, somados e ainda sem fatura, chegam a **R$ 50,00** (`INVOICE_MIN_CENTS`), a plataforma emite uma **fatura** com esse valor, cobrindo os meses desde a anterior, com vencimento em 5 dias. Abaixo de R$ 50,00 o valor
+  **acumula** e entra na fatura seguinte (ninguém recebe fatura menor que isso). A situação de cada fatura (**paga / paga em parte / vencida / em aberto**) é **calculada** a partir dos pagamentos, que quitam as faturas da mais antiga para a mais nova: não existe "marcador de pago" que possa
+  ficar fora de sincronia. A pessoa vê as faturas em **Plano e cobrança** (e o que está acumulando).
+- **Marcar fatura como paga (admin):** em **Administração → Assinaturas → Faturas**, o admin marca a fatura mais antiga em aberto como paga quando o cliente pagou por fora (data e observação opcionais). Isso registra um pagamento do valor que FALTA da fatura (o valor nunca vem do navegador), ligado a ela, e entra no extrato
+  e no registro de ações. Duas marcações ao mesmo tempo pagam uma vez só. Também há o pagamento avulso (qualquer valor). API: `POST /api/admin/billing/users/:id/invoices/:invoiceId/pay`, `PUT/DELETE /api/admin/billing/rates/:moeda`, `POST /api/admin/billing/rates/refresh`.
+- Valores antigos em dólar (planos, fechamentos, pagamentos e dívidas de bloqueio) foram convertidos uma única vez na migração 27 por uma cotação de referência fixa de R$ 5,50 por dólar (as cotações antigas, em dólar, foram descartadas). **Se houver valores reais antigos, o admin deve conferi-los.**
+- Não há cobrança automática (cartão/PIX): o sistema calcula, emite a fatura, mostra e registra o que foi pago; quem confirma o pagamento é o admin.
+
 
 ### Notificações (o sino do topo)
 
@@ -496,7 +507,7 @@ suspenso por 5 minutos. Com dezenas de contas isso aparecia no Gerenciador (“O
 ## Automação → Campanha one-click
 
 Menu **Automação → Campanha one-click** (exige a área “Campanhas”). A pessoa monta **uma vez** a campanha completa (campanha, grupo de anúncios e anúncio, com os mesmos passos e textos de ajuda do assistente), dá um nome
-(“Campanha para os Estados Unidos”, “Campanha para o Brasil”) e ela vira um **cartão** com dois botões: **Apagar** e **Publicar**. O **+** cria uma configuração nova; clicar no título do cartão a edita.
+(“Campanha para os Estados Unidos”, “Campanha para o Brasil”) e ela vira um **cartão** com dois botões: **Apagar** e **Publicar**. O **+** cria uma configuração nova; **Duplicar** abre uma cópia já no passo do anúncio (para trocar os criativos sem montar tudo de novo; o nome sugerido é “… (cópia)” e só vira cartão quando você salva); clicar no título do cartão a edita.
 
 - **Publicar** abre um pop-up com **todas as contas de anúncio** em lista, agrupadas por Business Center, com **busca por nome ou ID da conta**, filtro por **Business Center**, por **tipo** (comuns/agência), por **situação** (ativas/inativas)
   e por moeda (quando há mais de uma), mais "marcar todas as listadas". O botão **Publicar** fica sempre visível. Cada conta tem andamento, erro e retomada próprios e **tudo é criado PAUSADO**. Os IDs próprios de cada conta (pixel, identidade…) podem ser ajustados ali.

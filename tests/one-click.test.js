@@ -227,3 +227,31 @@ describe('Campanha one-click: configurações reutilizáveis que publicam em vá
     assert.equal(rls[0].relrowsecurity, true);
   });
 });
+
+describe('Duplicar: nome sugerido para a cópia (regra compartilhada)', () => {
+  it('"X (cópia)", depois "X (cópia 2)"… sem repetir nome existente (sem diferenciar maiúsculas)', async () => {
+    const { copyName } = await import('../shared/one-click.js');
+    assert.equal(copyName('Dodo EUA CTV 1', []), 'Dodo EUA CTV 1 (cópia)');
+    assert.equal(copyName('Dodo EUA CTV 1', ['Dodo EUA CTV 1', 'Dodo EUA CTV 1 (cópia)']), 'Dodo EUA CTV 1 (cópia 2)');
+    assert.equal(copyName('Dodo', ['dodo (CÓPIA)', 'Dodo (cópia 2)']), 'Dodo (cópia 3)');
+    assert.equal(copyName('A', ['Outra']), 'A (cópia)');
+  });
+
+  it('nunca passa de 60 caracteres: o nome original é encurtado para caber o sufixo', async () => {
+    const { copyName, TEMPLATE_NAME_MAX } = await import('../shared/one-click.js');
+    const long = 'x'.repeat(60);
+    const first = copyName(long, [long]);
+    assert.equal(first.length, TEMPLATE_NAME_MAX);
+    assert.ok(first.endsWith(' (cópia)'));
+    const second = copyName(long, [long, first]);
+    assert.ok(second.length <= TEMPLATE_NAME_MAX && second.endsWith(' (cópia 2)') && second !== first);
+  });
+
+  it('o nome sugerido sempre é aceito pelo servidor (2 a 60 caracteres)', async () => {
+    const { copyName, TEMPLATE_NAME_MIN, TEMPLATE_NAME_MAX } = await import('../shared/one-click.js');
+    for (const name of ['Ab', 'x'.repeat(60), 'Campanha para o Brasil']) {
+      const suggested = copyName(name, []);
+      assert.ok(suggested.length >= TEMPLATE_NAME_MIN && suggested.length <= TEMPLATE_NAME_MAX, suggested);
+    }
+  });
+});

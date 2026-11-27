@@ -285,6 +285,8 @@ a { color: var(--tt-red-dark); }
 .billing-section { margin-top: 24px; }
 .billing-debt { color: var(--tt-red-dark); font-weight: 700; }
 .billing-preview { margin: 0; padding: 8px 12px; border-radius: 10px; background: #f4f4f5; font-size: 13px; }
+.billing-fx { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: #f4f4f5; font-size: 13px; }
+.billing-fx--error { background: #fff3cf; color: #7a5200; }
 .billing-rates { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .billing-rate-form__row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .billing-rate-form__row .field { flex: 0 1 200px; }
@@ -1656,6 +1658,7 @@ button.activity__person:hover { border-color: var(--tt-cyan-dark); }
 .oneclick-card__facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .oneclick-card__actions { display: flex; gap: 8px; justify-content: space-between; margin-top: auto; padding-top: 6px; }
 .oneclick-card__actions .btn--primary { flex: 1; }
+.oneclick-card__actions .btn { padding-left: 12px; padding-right: 12px; }
 .oneclick-empty { margin: 14px 0 0; }
 .oneclick-publish { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .oneclick-publish__scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 20px; }

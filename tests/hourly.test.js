@@ -46,6 +46,7 @@ describe('Gasto por hora: coleta a cada 30 minutos e leitura', () => {
 
   async function setup() {
     await run(ctx.db, 'DELETE FROM tiktok_hourly_spend');
+    await run(ctx.db, 'DELETE FROM billing_locks'); // gasto em real conta como cobrança: remover uma BC com débito bloqueia a BC, e cada cenário recomeça sem bloqueios
     await run(ctx.db, 'DELETE FROM tiktok_business_centers');
     ctx.hourly.stop();
     setNow('2026-11-23T17:20:00Z'); // 14h20 em São Paulo

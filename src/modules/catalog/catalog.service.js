@@ -31,6 +31,27 @@ function friendly(err) {
  *  - Cada pedido informa a conexão e a BC do TikTok; a BC precisa ser uma das da conexão (nunca aceitamos BC solta) e o ID do catálogo só numérico.
  *  - Falha em uma BC aparece naquela BC; as outras seguem. Lista em cache por 60 s (muda ao criar um catálogo).
  */
+/** O TikTok recusa a combinação país + moeda para algumas Business Centers, mesmo ela constando nas listas oficiais ("currency matches the selected country"). */
+const REGION_REJECTED = /currency.*(match|correspond).*countr|countr.*currency/i;
+
+/**
+ * Se o TikTok recusou o país/moeda, explica em português e, quando dá para saber, sugere o país onde a BC foi REGISTRADA com a moeda dele (é o que o TikTok
+ * costuma aceitar para a BC). A sugestão vai em `details.suggestion` para a tela oferecer "Usar …" com um clique. Qualquer outro erro passa como veio.
+ */
+async function explainRegionRejection(err, { api, token, bcId, regions, currencies, chosen }) {
+  if (err?.code !== 'tiktok_error' || !REGION_REJECTED.test(String(err.message))) return err;
+  const info = await api.getBcInfo(token, bcId).catch(() => null);
+  const area = info?.registeredArea ?? null;
+  const allowed = area ? currencies?.[area] ?? [] : [];
+  const currency = allowed.includes(info?.currency) ? info.currency : allowed[0] ?? null;
+  const usable = area && currency && (!regions || regions.includes(area)) && (area !== chosen.regionCode || currency !== chosen.currency);
+  const where = area ? ` Esta BC foi registrada em ${area}${info?.currency ? ` e paga em ${info.currency}` : ''}.` : '';
+  const hint = usable ? ` Tente ${area} com ${currency}, o país e a moeda da própria BC.` : ' Tente outro país e moeda, ou crie o catálogo em outra Business Center.';
+  const explained = new HttpError(422, `O TikTok recusou ${chosen.regionCode} com ${chosen.currency} para esta Business Center (é uma regra dele para esta BC).${where}${hint}`, 'catalog_region_rejected');
+  if (usable) explained.details = { suggestion: { regionCode: area, currency } };
+  return explained;
+}
+
 export function createCatalogService({ tiktok, connections, defaults, hidden, creatives, log = console }) {
   const listCache = new TtlCache({ ttlMs: LIST_TTL_MS, maxEntries: 100 });
   const metaCache = new TtlCache({ ttlMs: META_TTL_MS, maxEntries: 100 });
@@ -164,7 +185,11 @@ export function createCatalogService({ tiktok, connections, defaults, hidden, cr
           const [regions, currencies] = await Promise.all([api.getCatalogRegions(token, bcId).catch(() => null), api.getCatalogLocationCurrencies(token).catch(() => null)]);
           if (regions && !regions.includes(value.regionCode)) throw badRequest('Este país não é aceito para catálogos nesta Business Center.', 'invalid_region');
           if (currencies?.[value.regionCode] && !currencies[value.regionCode].includes(value.currency)) throw badRequest(`Para este país, a moeda do catálogo precisa ser: ${currencies[value.regionCode].join(', ')}.`, 'invalid_currency');
-          return api.createCatalog(token, { bcId, name: value.name, regionCode: value.regionCode, currency: value.currency, catalogType: value.catalogType });
+          try {
+            return await api.createCatalog(token, { bcId, name: value.name, regionCode: value.regionCode, currency: value.currency, catalogType: value.catalogType });
+          } catch (err) {
+            throw await explainRegionRejection(err, { api, token, bcId, regions, currencies, chosen: value });
+          }
         });
         log.info?.(`[catalogo] catálogo criado: usuário ${actor.id}, conexão ${connection.id}`); // sem token nem dados
         versions.set(actor.id, (versions.get(actor.id) ?? 0) + 1);

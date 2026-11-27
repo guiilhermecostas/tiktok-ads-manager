@@ -1,6 +1,7 @@
 import { countByKind } from '/shared/account-labels.js';
 import { distinctCurrencies, isMainCurrency, moneyPrefix } from '/shared/currency.js';
 import { catalogPresetConfig, defaultCreativeRefs, mergeCatalogDefaults } from '/shared/catalog-defaults.js';
+import { TEMPLATE_NAME_MAX as NAME_MAX, TEMPLATE_NAME_MIN as NAME_MIN } from '/shared/one-click.js';
 import { STEPS, collectCreativeRefs, defaultConfig, reconcileConfig, stepOfPath, validateConfig } from '/shared/campaign-spec.js';
 import { get, post, put } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
@@ -14,8 +15,6 @@ import { renderReview } from './review.js';
 
 const FORM_STEPS = STEPS.slice(0, -1).map((s) => s.id);
 const REVIEW_INDEX = STEPS.length - 1;
-const NAME_MIN = 2;
-const NAME_MAX = 60;
 const TEMPLATE_API = '/automation/one-click';
 const NO_PUBLISH = { status: 'none', published: 0, partial: 0, failed: 0, locks: { campaign: false, adGroup: false, ad: false } };
 
@@ -28,7 +27,9 @@ let active = null; // só um assistente aberto por vez (duplo clique no botão n
  * `ctx.reload()` atualiza a página de trás quando algo foi salvo/publicado.
  *
  * Modo CONFIGURAÇÃO (`template`, usado por Automação → Campanha one-click): os mesmos passos, mas em vez de publicar o último passo pede o NOME da
- * configuração ("Campanha para o Brasil") e salva. As contas são escolhidas depois, no botão Publicar do cartão. `template: { id }` (id nulo = nova).
+ * configuração ("Campanha para o Brasil") e salva. As contas são escolhidas depois, no botão Publicar do cartão. `template: { id }` (id nulo = nova);
+ * `template: { id: null, copyOf: { name, config } }` DUPLICA: abre já preenchida com a configuração e o nome sugerido, no passo do anúncio (onde se trocam os
+ * criativos), e só vira um cartão novo quando a pessoa salva.
  */
 export function openCampaignWizard(ctx, { campaignId = null, catalog = null, defaults = null, template = null } = {}) {
   if (active) return active;
@@ -60,7 +61,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
   };
 
   const modal = openModal({
-    title: isTemplate ? (template.id ? 'Editar configuração' : 'Nova configuração one-click') : 'Publicar campanha',
+    title: isTemplate ? (template.id ? 'Editar configuração' : template.copyOf ? 'Duplicar configuração' : 'Nova configuração one-click') : 'Publicar campanha',
     size: 'wizard',
     body,
     dismissOnOverlay: false, // um clique fora, sem querer, não pode jogar fora uma campanha em andamento
@@ -81,7 +82,8 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
       isTemplate ? (template.id ? get(`${TEMPLATE_API}/${template.id}`) : Promise.resolve(null)) : campaignId ? get(`/campaigns/${campaignId}`) : Promise.resolve(null),
     ]);
     // A configuração salva se comporta como uma campanha ainda sem publicações (o assistente a edita do mesmo jeito).
-    const existing = isTemplate && loaded ? { ...loaded.template, wizard: true, publish: NO_PUBLISH, publications: [] } : loaded?.campaign ?? null;
+    const copy = isTemplate && template.copyOf ? { id: null, name: template.copyOf.name, config: template.copyOf.config } : null;
+    const existing = isTemplate && (loaded || copy) ? { ...(loaded?.template ?? copy), wizard: true, publish: NO_PUBLISH, publications: [] } : loaded?.campaign ?? null;
     if (existing && !existing.wizard) throw new Error('Esta campanha foi criada no formato simples e não pode ser editada pelo assistente.');
 
     // Biblioteca de criativos: carregamos os mais recentes e, se a campanha já usa algum que ficou de fora, buscamos individualmente.
@@ -463,6 +465,10 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
     // Campanha já publicada (ou pronta para revisar) abre direto na última etapa.
     if (readOnlyAll()) st.step = REVIEW_INDEX;
     else if (existing && st.maxStep === REVIEW_INDEX) st.step = REVIEW_INDEX;
+    if (isTemplate && template.copyOf && st.maxStep === REVIEW_INDEX) { // cópia: abre no anúncio (é onde se trocam os criativos) e ainda não está salva
+      st.step = FORM_STEPS.indexOf('ad');
+      st.dirty = true;
+    }
     if (st.step === REVIEW_INDEX) enterReview();
     draw();
   }

@@ -264,7 +264,7 @@ describe('Admin: acessar a conta de um usuário (somente leitura) e bloquear', (
       const res = await a.get('/api/admin/audit');
       assert.equal(res.status, 200);
       assert.ok(res.json.entries.length > 0);
-      assert.ok(res.json.entries.every((e) => ['impersonation_start', 'impersonation_end', 'status_change', 'notification_send', 'notification_change', 'billing_plan', 'billing_payment', 'billing_lock_release', 'billing_rate'].includes(e.action) && e.createdAt && !('ip' in e)));
+      assert.ok(res.json.entries.every((e) => ['impersonation_start', 'impersonation_end', 'status_change', 'notification_send', 'notification_change', 'billing_plan', 'billing_payment', 'billing_lock_release', 'billing_rate', 'billing_invoice_paid', 'billing_rate_clear'].includes(e.action) && e.createdAt && !('ip' in e)));
       const ids = res.json.entries.map((e) => e.id);
       assert.deepEqual(ids, [...ids].sort((x, y) => y - x));
       const { client } = await createUser(ctx, { approve: true });

@@ -105,6 +105,26 @@ export function loadKlingConfig() {
   };
 }
 
+/**
+ * Câmbio da cobrança em reais. A cotação de cada moeda para REAL é buscada sozinha numa API pública (Frankfurter: sem chave, sem cadastro, e nenhum
+ * dado nosso vai na requisição: só a lista de moedas). Configuração do SERVIDOR:
+ *  - BILLING_FX_AUTO=false: desliga a atualização automática (só valem as cotações fixadas à mão pelo admin);
+ *  - BILLING_FX_URL: só https, no domínio frankfurter.dev, no caminho /v2 (padrão https://api.frankfurter.dev/v2).
+ */
+export function loadFxConfig() {
+  const enabled = (process.env.BILLING_FX_AUTO ?? '').trim().toLowerCase() !== 'false';
+  const raw = (process.env.BILLING_FX_URL ?? '').trim() || 'https://api.frankfurter.dev/v2';
+  let baseUrl;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname.replace(/\/+$/, '') !== '/v2' || !/^(api\.)?frankfurter\.dev$/.test(url.hostname)) throw new Error('x');
+    baseUrl = `${url.origin}/v2`;
+  } catch {
+    throw new Error('BILLING_FX_URL inválida (use https no domínio frankfurter.dev, ex.: https://api.frankfurter.dev/v2).');
+  }
+  return { enabled, baseUrl };
+}
+
 function loadTiktokConfig(context) {
   const rawKey = (process.env.TOKEN_ENCRYPTION_KEY ?? '').trim();
   const encryptionKey = rawKey ? parseEncryptionKey(rawKey) : null;
@@ -238,6 +258,7 @@ export function loadConfig(overrides = {}) {
     tiktok: loadTiktokConfig({ port, isProduction }),
     mail: loadMailConfig({ port, isProduction }),
     kling: loadKlingConfig(),
+    fx: loadFxConfig(),
     proxy: loadProxyConfig({ isProduction }),
     creatives: loadCreativesConfig(),
     ...overrides,

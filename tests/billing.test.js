@@ -7,7 +7,7 @@ import { all, createUser, loginAdmin, one, run, startTestServer } from './helper
 const LIMITS = { register: 1000, loginIp: 1000, loginAccount: 1000, adminImpersonate: 1000, tiktokRead: 1000, tiktokWrite: 1000, billingRead: 10000, billingAdminRead: 10000, billingAdminWrite: 10000 };
 const m = (spend) => ({ spend, impressions: spend * 100, clicks: spend * 3, conversion: 1 });
 
-describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloqueio de BC com débito', () => {
+describe('Assinaturas (tudo em real): planos, gasto guardado, cobrança e bloqueio de BC com débito', () => {
   let ctx;
   let fake;
   let admin;
@@ -22,25 +22,25 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
   after(() => ctx.stop());
 
   const reset = async () => {
-    for (const table of ['spend_ledger', 'billing_locks', 'billing_payments', 'billing_statements', 'billing_plans', 'billing_rates', 'tiktok_hourly_spend', 'tiktok_business_centers']) await run(ctx.db, `DELETE FROM ${table}`);
+    for (const table of ['spend_ledger', 'billing_locks', 'billing_payments', 'billing_invoices', 'billing_statements', 'billing_plans', 'billing_rates', 'tiktok_hourly_spend', 'tiktok_business_centers']) await run(ctx.db, `DELETE FROM ${table}`);
     setNow('2026-11-25T17:20:00Z');
     fake.state.bcs = { 111: ['9001', '9002'], 222: ['9001', '9777'], 333: ['9301'] };
-    fake.state.currencies = { 9001: 'USD', 9002: 'USD', 9777: 'USD', 9301: 'USD' };
+    fake.state.currencies = { 9001: 'BRL', 9002: 'BRL', 9777: 'BRL', 9301: 'BRL' };
     fake.state.validTokens.add(GOOD_TOKEN);
     fake.state.validTokens.add(OTHER_TOKEN);
     fake.state.hourly = {};
     fake.state.failHourlyFor = new Set();
     fake.state.hourlyDelayMs = 0;
   };
-  /** Pessoa nova SEM plano: o cadastro já dá o plano padrão (US$ 0 + 10%), que aqui é removido para cada teste partir do zero. */
+  /** Pessoa nova SEM plano: o cadastro já dá o plano padrão (R$ 0 + 10%), que aqui é removido para cada teste partir do zero. */
   const person = async (name) => {
     const user = await createUser(ctx, { approve: true, name });
     await run(ctx.db, 'DELETE FROM billing_plans WHERE user_id = $1', [user.id]);
     return user;
   };
   const plan = (who, monthlyFee, percent, extra = {}) => admin.put(`/api/admin/billing/users/${who.id}/plan`, { monthlyFee, percent, ...extra });
-  /** Gasto direto no livro (em dólar por padrão). `hour`: ISO em UTC. */
-  const seed = (who, advertiser, hour, spend, currency = 'USD') => run(ctx.db, 'INSERT INTO spend_ledger (owner_id, advertiser_id, hour_start, currency, spend) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (owner_id, advertiser_id, hour_start) DO UPDATE SET spend = EXCLUDED.spend', [who.id, advertiser, hour, currency, spend]);
+  /** Gasto direto no livro (em real por padrão). `hour`: ISO em UTC. */
+  const seed = (who, advertiser, hour, spend, currency = 'BRL') => run(ctx.db, 'INSERT INTO spend_ledger (owner_id, advertiser_id, hour_start, currency, spend) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (owner_id, advertiser_id, hour_start) DO UPDATE SET spend = EXCLUDED.spend', [who.id, advertiser, hour, currency, spend]);
   const mine = async (who) => (await who.client.get('/api/billing/me')).json;
   const overviewRow = async (who) => (await admin.get('/api/admin/billing')).json.users.find((u) => u.id === who.id);
   const connect = async (who, bcId, token = GOOD_TOKEN) => who.client.post('/api/tiktok/business-centers', { name: `BC ${bcId}`, bcId, accessToken: token });
@@ -103,7 +103,7 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
   });
 
   describe('planos negociáveis por pessoa (os 3 exemplos)', () => {
-    it('A: US$ 0 + 10% · B: US$ 99,90 + 5% · C: US$ 199,90 + 0% — com gasto de US$ 1.000 cada', async () => {
+    it('A: R$ 0 + 10% · B: R$ 99,90 + 5% · C: R$ 199,90 + 0% — com gasto de R$ 1.000 cada', async () => {
       await reset();
       const [a, b, c] = [await person('Pessoa A'), await person('Pessoa B'), await person('Pessoa C')];
       assert.equal((await plan(a, '0', '10')).status, 200);
@@ -202,7 +202,7 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
       const a = await person('Auditada');
       await plan(a, '99,90', '5');
       const log = await one(ctx.db, "SELECT action, detail FROM admin_audit_log WHERE action = 'billing_plan'");
-      assert.match(log.detail, /Auditada: US\$ 99\.90\/mês \+ 5\.00% a partir de 2026-11/);
+      assert.match(log.detail, /Auditada: R\$ 99,90\/mês \+ 5% a partir de 2026-11/);
     });
   });
 
@@ -221,7 +221,7 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
       assert.equal(await repo.recordSpend(a.id, '9001', 'USD', [{ hourStart: hour, spend: -5 }, { hourStart: 'x', spend: 1 }, { hourStart: hour, spend: NaN }]), 0, 'linhas inválidas são ignoradas');
     });
 
-    it('moeda estrangeira só entra com cotação; sem ela fica "não convertido" e é avisada', async () => {
+    it('gasto em outra moeda é CONVERTIDO para real pela cotação; sem cotação fica "não convertido" e é avisado', async () => {
       await reset();
       const a = await person('Pessoa A');
       await plan(a, '0', '10');
@@ -229,22 +229,30 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
       await seed(a, '9002', '2026-11-10T12:00:00Z', 500, 'BRL');
       await seed(a, '9003', '2026-11-10T12:00:00Z', 40, 'UNKNOWN');
       let res = await mine(a);
-      assert.equal(res.months[0].spendCents, 10000);
-      assert.deepEqual(res.months[0].unconverted.map((u) => [u.currency, u.spend]).sort(), [['BRL', 500], ['UNKNOWN', 40]]);
+      assert.equal(res.months[0].spendCents, 50000, 'só os R$ 500 entram: o dólar ainda não tem cotação');
+      assert.deepEqual(res.months[0].unconverted.map((u) => [u.currency, u.spend]).sort(), [['UNKNOWN', 40], ['USD', 100]]);
       assert.deepEqual((await overviewRow(a)).unconverted.length, 2);
-      assert.equal((await admin.put('/api/admin/billing/rates/BRL', { usdPerUnit: '0,20' })).status, 200);
+      assert.equal((await admin.put('/api/admin/billing/rates/USD', { brlPerUnit: '5,50' })).status, 200);
       res = await mine(a);
-      assert.equal(res.months[0].spendCents, 10000 + 10000, '500 BRL × 0,20 = US$ 100');
+      assert.equal(res.months[0].spendCents, 50000 + 55000, '100 USD × 5,50 = R$ 550');
+      assert.equal(res.months[0].percentFeeCents, 10500, '10% de R$ 1.050,00');
       assert.deepEqual(res.months[0].unconverted.map((u) => u.currency), ['UNKNOWN']);
+      assert.deepEqual(res.months[0].breakdown.map((b) => [b.currency, b.spend, b.rate, b.cents]).sort(), [['BRL', 500, 1, 50000], ['USD', 100, 5.5, 55000]], 'o extrato mostra de onde veio cada real');
     });
 
-    it('cotação: valida moeda e valor; USD e valores ruins são recusados; lista no painel', async () => {
+    it('cotação: valida moeda e valor (BRL e valores ruins recusados); fixa à mão, lista no painel e pode ser removida', async () => {
       await reset();
-      for (const [currency, body] of [['USD', { usdPerUnit: '1' }], ['BR', { usdPerUnit: '1' }], ['BRL', { usdPerUnit: '0' }], ['BRL', { usdPerUnit: '-1' }], ['BRL', {}], ['BRL', { usdPerUnit: 'abc' }]]) {
+      for (const [currency, body] of [['BRL', { brlPerUnit: '1' }], ['BR', { brlPerUnit: '1' }], ['USD', { brlPerUnit: '0' }], ['USD', { brlPerUnit: '-1' }], ['USD', {}], ['USD', { brlPerUnit: 'abc' }], ['USD', { usdPerUnit: '5' }]]) {
         assert.equal((await admin.put(`/api/admin/billing/rates/${currency}`, body)).status, 400, `${currency} ${JSON.stringify(body)}`);
       }
-      assert.equal((await admin.put('/api/admin/billing/rates/eur', { usdPerUnit: 1.08 })).status, 200, 'aceita minúsculas na URL');
-      assert.deepEqual((await admin.get('/api/admin/billing')).json.rates.map((r) => [r.currency, r.usdPerUnit]), [['EUR', 1.08]]);
+      assert.equal((await admin.put('/api/admin/billing/rates/eur', { brlPerUnit: 6.1 })).status, 200, 'aceita minúsculas na URL');
+      const listed = (await admin.get('/api/admin/billing')).json;
+      assert.deepEqual(listed.rates.map((r) => [r.currency, r.brlPerUnit, r.source]), [['EUR', 6.1, 'manual']]);
+      assert.equal(listed.fx.enabled, true);
+      assert.equal((await admin.delete('/api/admin/billing/rates/eur')).status, 200);
+      assert.deepEqual((await admin.get('/api/admin/billing')).json.rates, []);
+      assert.equal((await admin.delete('/api/admin/billing/rates/eur')).status, 404, 'remover o que não existe');
+      assert.equal((await admin.delete('/api/admin/billing/rates/BRL')).status, 400);
     });
 
     it('a coleta por hora grava no livro (e a reconferência diária recupera horas perdidas)', async () => {
@@ -332,7 +340,7 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
       await run(ctx.db, 'DELETE FROM admin_audit_log');
       const a = await person('Pessoa A');
       await admin.post(`/api/admin/billing/users/${a.id}/payments`, { amount: '12,34' });
-      assert.match((await one(ctx.db, "SELECT detail FROM admin_audit_log WHERE action = 'billing_payment'")).detail, /US\$ 12\.34 recebido/);
+      assert.match((await one(ctx.db, "SELECT detail FROM admin_audit_log WHERE action = 'billing_payment'")).detail, /R\$ 12,34 recebido/);
       const bad = [
         `INSERT INTO billing_payments (user_id, amount_cents) VALUES (${a.id}, 0)`,
         `INSERT INTO billing_payments (user_id, amount_cents) VALUES (${a.id}, -5)`,
@@ -341,8 +349,12 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
         `INSERT INTO billing_plans (user_id, monthly_fee_cents, percent_bp, effective_month) VALUES (${a.id}, 100, 100, '2026-11-15')`,
         `INSERT INTO spend_ledger (owner_id, advertiser_id, hour_start, spend) VALUES (${a.id}, '9001', now(), -1)`,
         `INSERT INTO spend_ledger (owner_id, advertiser_id, hour_start, currency, spend) VALUES (${a.id}, '9001', now(), 'real', 1)`,
-        "INSERT INTO billing_rates (currency, usd_per_unit) VALUES ('USD', 1)",
-        "INSERT INTO billing_rates (currency, usd_per_unit) VALUES ('BRL', 0)",
+        "INSERT INTO billing_rates (currency, brl_per_unit, source) VALUES ('BRL', 1, 'manual')",
+        "INSERT INTO billing_rates (currency, brl_per_unit, source) VALUES ('USD', 0, 'manual')",
+        "INSERT INTO billing_rates (currency, brl_per_unit, source) VALUES ('USD', 5, 'outra')",
+        `INSERT INTO billing_invoices (user_id, amount_cents, period_from, period_to, due_date) VALUES (${a.id}, 0, '2026-10-01', '2026-10-01', '2026-11-05')`,
+        `INSERT INTO billing_invoices (user_id, amount_cents, period_from, period_to, due_date) VALUES (${a.id}, 5000, '2026-11-01', '2026-10-01', '2026-11-05')`,
+        `INSERT INTO billing_invoices (user_id, amount_cents, period_from, period_to, due_date) VALUES (${a.id}, 5000, '2026-10-15', '2026-10-01', '2026-11-05')`,
         `INSERT INTO billing_locks (owner_id, kind, value, debt_cents) VALUES (${a.id}, 'outro', '1', 0)`,
         `INSERT INTO billing_locks (owner_id, kind, value, debt_cents) VALUES (${a.id}, 'bc', 'abc', 0)`,
       ];
@@ -474,7 +486,7 @@ describe('Assinaturas (tudo em dólar): planos, gasto guardado, cobrança e bloq
   });
 
   describe('regras do serviço (sem banco)', () => {
-    const stubRepo = (extra = {}) => ({ listPlans: async () => [], listStatements: async () => [], listPayments: async () => [], listRates: async () => [], spendByMonth: async () => [], ...extra });
+    const stubRepo = (extra = {}) => ({ listPlans: async () => [], listStatements: async () => [], listPayments: async () => [], listRates: async () => [], listInvoices: async () => [], spendByMonth: async () => [], ...extra });
 
     it('se não der para gravar o bloqueio, o erro sobe (a remoção da BC não pode acontecer)', async () => {
       const service = createBillingService({

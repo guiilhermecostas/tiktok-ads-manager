@@ -1,9 +1,10 @@
 import { summarize, validateConfig } from '../../../shared/campaign-spec.js';
+import { MAX_TEMPLATES, TEMPLATE_NAME_MAX, TEMPLATE_NAME_MIN } from '../../../shared/one-click.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, notFound, validationError } from '../../lib/http-error.js';
 import { asObject, parseText } from '../../lib/validation.js';
 
-export const MAX_TEMPLATES = 50; // por dono: a lista é uma grade de cartões, não um arquivo
+export { MAX_TEMPLATES };
 const NAME_TAKEN = () => new HttpError(409, 'Você já tem uma configuração com este nome. Escolha outro nome.', 'template_name_taken');
 
 /**
@@ -15,7 +16,7 @@ export function createOneClickService({ repo, campaigns, creatives }) {
   /** Nome + configuração. O modelo só é salvo COMPLETO (todos os campos obrigatórios): o cartão tem de estar pronto para publicar. */
   async function parse(actor, body) {
     const data = asObject(body);
-    const name = parseText(data.name, 'Nome da configuração', { min: 2, max: 60 });
+    const name = parseText(data.name, 'Nome da configuração', { min: TEMPLATE_NAME_MIN, max: TEMPLATE_NAME_MAX });
     const { config, errors } = validateConfig(data.config, { requireComplete: true });
     if (errors.length) throw validationError(errors);
     const refs = await creatives.verifyReferences(actor, config); // os criativos escolhidos precisam ser do próprio dono (nunca IDs de terceiros)

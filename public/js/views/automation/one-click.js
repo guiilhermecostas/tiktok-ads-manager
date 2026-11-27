@@ -1,4 +1,5 @@
 import { COUNTRIES, summarize } from '/shared/campaign-spec.js';
+import { copyName } from '/shared/one-click.js';
 import { del, get } from '../../api.js';
 import { h, icon } from '../../dom.js';
 import { formatDate, formatMoney, OBJECTIVES } from '../../format.js';
@@ -59,6 +60,8 @@ export async function oneClickView(ctx) {
 
   const create = () => openCampaignWizard({ ...ctx, reload: safeReload }, { template: { id: null } });
   const edit = (template) => openCampaignWizard({ ...ctx, reload: safeReload }, { template: { id: template.id } });
+  // Duplicar: abre a cópia no passo do anúncio, para trocar os criativos; só vira cartão quando a pessoa salva.
+  const duplicate = (template, all) => openCampaignWizard({ ...ctx, reload: safeReload }, { template: { id: null, copyOf: { name: copyName(template.name, all.map((t) => t.name)), config: structuredClone(template.config) } } });
 
   async function remove(template) {
     const ok = await confirmDialog({
@@ -79,7 +82,7 @@ export async function oneClickView(ctx) {
 
   const publish = (template) => openOneClickPublish({ template, onDone: safeReload });
 
-  function card(template) {
+  function card(template, all) {
     const facts = cardFacts(template.config);
     return h(
       'article',
@@ -96,6 +99,7 @@ export async function oneClickView(ctx) {
         'div',
         { class: 'oneclick-card__actions' },
         button('Apagar', { variant: 'danger-ghost', onClick: () => remove(template), ariaLabel: `Apagar a configuração ${template.name}` }),
+        button('Duplicar', { onClick: () => duplicate(template, all), ariaLabel: `Duplicar a configuração ${template.name}`, title: 'Cria uma cópia para você trocar os criativos (ou o que quiser) sem montar tudo de novo' }),
         button([icon('megaphone', 16), ' Publicar'], { variant: 'primary', onClick: () => publish(template), ariaLabel: `Publicar a configuração ${template.name}` }),
       ),
     );
@@ -114,8 +118,8 @@ export async function oneClickView(ctx) {
       'div',
       null,
       pageHeader('Campanha one-click', 'Monte a campanha uma vez, dê um nome e publique em várias contas com um clique.'),
-      tabIntro('Suas configurações', 'Cada cartão é uma campanha pronta (campanha, grupo de anúncios e anúncio). Clique em + para criar uma, ex.: “Campanha para os Estados Unidos” e “Campanha para o Brasil”. Em Publicar você escolhe as contas; tudo é criado pausado.'),
-      h('div', { class: 'oneclick-grid' }, addCard(), templates.map(card)),
+      tabIntro('Suas configurações', 'Cada cartão é uma campanha pronta (campanha, grupo de anúncios e anúncio). Clique em + para criar uma, ou em Duplicar para copiar uma que já existe e só trocar os criativos, ex.: “Campanha para os Estados Unidos” e “Campanha para o Brasil”. Em Publicar você escolhe as contas; tudo é criado pausado.'),
+      h('div', { class: 'oneclick-grid' }, addCard(), templates.map((t) => card(t, templates))),
       templates.length ? null : h('p', { class: 'muted oneclick-empty' }, 'Você ainda não tem nenhuma configuração. Clique em “Nova configuração” para criar a primeira.'),
     );
   }

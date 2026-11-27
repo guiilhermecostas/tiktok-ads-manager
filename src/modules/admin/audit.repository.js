@@ -1,6 +1,6 @@
 import { toIso } from '../../db/helpers.js';
 
-export const AUDIT_ACTIONS = ['impersonation_start', 'impersonation_end', 'status_change', 'notification_send', 'notification_change', 'billing_plan', 'billing_payment', 'billing_lock_release', 'billing_rate'];
+export const AUDIT_ACTIONS = ['impersonation_start', 'impersonation_end', 'status_change', 'notification_send', 'notification_change', 'billing_plan', 'billing_payment', 'billing_lock_release', 'billing_rate', 'billing_invoice_paid', 'billing_rate_clear'];
 
 /** Registro de auditoria das ações do admin. Só acrescenta linhas (nunca altera nem apaga). Consultas parametrizadas. */
 export function createAuditRepository(db) {

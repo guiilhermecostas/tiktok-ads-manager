@@ -8,6 +8,7 @@ import { createAuditRepository } from './modules/admin/audit.repository.js';
 import { createBillingRepository } from './modules/billing/billing.repository.js';
 import { createAdminBillingRouter, createBillingRouter } from './modules/billing/billing.routes.js';
 import { createBillingService } from './modules/billing/billing.service.js';
+import { createFxService } from './modules/billing/fx.service.js';
 import { createImpersonationService } from './modules/admin/impersonation.service.js';
 import { createActivityLookups } from './modules/activity/activity.lookups.js';
 import { createActivityRepository } from './modules/activity/activity.repository.js';
@@ -83,7 +84,7 @@ const SHARED_DIR = path.join(ROOT_DIR, 'shared');
 /**
  * Monta a aplicação Express. Recebe dependências (config, db, log) para facilitar testes.
  */
-export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer, avatarProcessor, clock, hourlyPauseMs, hourlyReconcileDays, hourlyMonitorStatuses, klingFetch, hooksIntervalMs }) {
+export function createApp({ config, db, log = console, limits, fetchFn, cleaner, mailer, avatarProcessor, clock, hourlyPauseMs, hourlyReconcileDays, hourlyMonitorStatuses, klingFetch, fxFetch, hooksIntervalMs }) {
   const users = createUsersRepository(db);
   const sessions = createSessionsRepository(db, { ttlMs: config.sessionTtlMs });
   const campaigns = createCampaignsRepository(db);
@@ -114,7 +115,9 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Assinaturas (tudo em dólar): o gasto coletado por hora também vai para um livro permanente (não some se a BC for removida).
   const billingRepo = createBillingRepository(db);
   const advertiserStatus = createAdvertiserStatusRepository(db); // situação das contas (a coleta a cada 30 min anota quando uma conta cai)
-  const billingService = createBillingService({ repo: billingRepo, users, log, now: clock });
+  // Câmbio: cotações para REAL atualizadas sozinhas (fonte pública, só o servidor liga o relógio) ou fixadas pelo admin.
+  const fxService = createFxService({ repo: billingRepo, config: config.fx ?? { enabled: false, baseUrl: '' }, fetchFn: fxFetch ?? fetch, log, now: clock });
+  const billingService = createBillingService({ repo: billingRepo, users, fx: fxService, log, now: clock });
   const hourlyService = createHourlyService({ tiktok: tiktokService, connections: businessCenters, repo: createHourlyRepository(db), ledger: billingRepo, statusLog: hourlyMonitorStatuses === false ? null : advertiserStatus, reconcileDays: hourlyReconcileDays, log, now: clock, pauseMs: hourlyPauseMs });
   tiktokGuards.beforeConnect = (ownerId, ids) => billingService.assertConnectable(ownerId, ids);
   tiktokGuards.beforeRemove = async (connection) => {

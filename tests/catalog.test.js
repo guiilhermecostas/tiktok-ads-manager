@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it } from 'node:test';
 import {
   CATALOG_NAME_MAX, MAX_PRODUCTS_PER_REQUEST, buildSetConditions, csvTemplate, csvToProducts, normalizeCatalogInput, normalizeProduct, normalizeProductSetName, parseCsv, parsePrice, toBatches,
 } from '../shared/catalog.js';
@@ -285,6 +285,52 @@ describe('Catálogo: API do sistema', () => {
   const callsOf = (path) => fake.state.calls.filter((c) => c.path === path);
   const base = (connectionId, bcId = '111') => `connectionId=${connectionId}&bcId=${bcId}`;
   const createCatalog = async (user, connectionId, extra = {}) => (await user.client.post('/api/tiktok/catalogs', { connectionId, bcId: '111', name: 'Loja Principal', regionCode: 'BR', currency: 'BRL', ...extra }));
+
+  describe('o TikTok recusa país + moeda para uma BC específica ("currency matches the selected country")', () => {
+    afterEach(() => {
+      fake.state.catalogOnlyRegion = {};
+      delete fake.state.bcInfo['111'];
+    });
+
+    it('explica em português, sugere o país e a moeda da própria BC (com um clique na tela) e nada é criado', async () => {
+      const user = await setup();
+      const id = await connect(user, '111');
+      fake.state.catalogOnlyRegion = { 111: 'BR' };
+      fake.state.bcInfo['111'] = { registered_area: 'BR', currency: 'BRL' };
+      const res = await createCatalog(user, id, { regionCode: 'US', currency: 'USD' });
+      assert.equal(res.status, 422, res.text);
+      assert.equal(res.json.error.code, 'catalog_region_rejected');
+      assert.match(res.json.error.message, /O TikTok recusou US com USD para esta Business Center/);
+      assert.match(res.json.error.message, /registrada em BR e paga em BRL/);
+      assert.match(res.json.error.message, /Tente BR com BRL/);
+      assert.doesNotMatch(res.json.error.message, /Invalid Param/, 'a mensagem crua do TikTok não vaza para a tela');
+      assert.deepEqual(res.json.error.details, { suggestion: { regionCode: 'BR', currency: 'BRL' } });
+      assert.equal((fake.state.catalogs['111'] ?? []).length, 0);
+      // seguindo a sugestão, funciona
+      const ok = await createCatalog(user, id, { regionCode: 'BR', currency: 'BRL' });
+      assert.equal(ok.status, 201, ok.text);
+    });
+
+    it('sem saber onde a BC foi registrada, não inventa sugestão: pede outro país/moeda ou outra BC', async () => {
+      const user = await setup();
+      const id = await connect(user, '111');
+      fake.state.catalogOnlyRegion = { 111: 'BR' };
+      fake.state.bcInfo['111'] = {};
+      const res = await createCatalog(user, id, { regionCode: 'US', currency: 'USD' });
+      assert.equal(res.status, 422);
+      assert.equal(res.json.error.details, undefined);
+      assert.match(res.json.error.message, /Tente outro país e moeda, ou crie o catálogo em outra Business Center/);
+    });
+
+    it('outros erros do TikTok continuam como vieram (só esta recusa é traduzida)', async () => {
+      const user = await setup();
+      const id = await connect(user, '111');
+      fake.state.failCatalogFor.add('111');
+      const res = await createCatalog(user, id);
+      fake.state.failCatalogFor.delete('111');
+      assert.notEqual(res.json.error?.code, 'catalog_region_rejected');
+    });
+  });
 
   it('exige login, conta aprovada e a área "Campanhas"', async () => {
     const anon = ctx.client();

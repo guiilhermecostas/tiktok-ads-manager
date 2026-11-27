@@ -43,7 +43,7 @@ async function truncateAll(db) {
  * `cleaner`: por padrão um limpador FALSO (os testes usam mídia de mentira); `'real'` usa o FFmpeg de verdade;
  * também aceita um objeto com o mesmo contrato.
  */
-export async function startTestServer({ limits, config: overrides, fetchFn, isolated = false, creatives, cleaner, mailer, avatarProcessor, clock, klingFetch, monitorStatuses = false } = {}) {
+export async function startTestServer({ limits, config: overrides, fetchFn, isolated = false, creatives, cleaner, mailer, avatarProcessor, clock, klingFetch, fxFetch, monitorStatuses = false } = {}) {
   const MB = 1024 * 1024;
   const creativesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'creatives-test-'));
   const config = loadConfig({
@@ -68,7 +68,7 @@ export async function startTestServer({ limits, config: overrides, fetchFn, isol
   // E-mail falso por padrão: o cadastro envia um código por e-mail e os testes leem o código aqui. Os limites do cadastro ficam frouxos (os testes criam muitas contas).
   const chosenMailer = mailer ?? createFakeMailer();
   const testLimits = { registerEmail: 1_000_000, registerVerify: 1_000_000, registerResend: 1_000_000, ...limits };
-  const built = createApp({ config, db, log: silentLog, limits: testLimits, fetchFn, cleaner: chosenCleaner, mailer: chosenMailer, avatarProcessor: chosenAvatars, clock, hourlyPauseMs: 0, hourlyReconcileDays: 0, hourlyMonitorStatuses: monitorStatuses, klingFetch });
+  const built = createApp({ config, db, log: silentLog, limits: testLimits, fetchFn, cleaner: chosenCleaner, mailer: chosenMailer, avatarProcessor: chosenAvatars, clock, hourlyPauseMs: 0, hourlyReconcileDays: 0, hourlyMonitorStatuses: monitorStatuses, klingFetch, fxFetch: fxFetch ?? (async () => { throw new Error('sem rede nos testes'); }) }); // câmbio: nunca acessa a internet de verdade nos testes
   await built.authService.ensureAdmin(silentLog);
   await built.creativeStorage.init();
 

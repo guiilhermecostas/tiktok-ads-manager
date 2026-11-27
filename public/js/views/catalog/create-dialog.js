@@ -163,6 +163,18 @@ export function openCreateCatalogDialog({ businessCenters, onCreated }) {
       h('div', { class: 'modal__footer' }, button('Fechar', { onClick: () => modal.close() }), button('Adicionar produtos', { variant: 'primary', onClick: () => { openAdd = true; modal.close(); } })));
   }
 
+  /** O TikTok recusou o país/moeda para esta BC e sugeriu os da própria BC: um clique preenche e volta ao passo "País e moeda". */
+  function useSuggestion({ regionCode, currency: code }) {
+    const label = `${COUNTRY_NAME.get(regionCode) ?? regionCode} · ${code}`;
+    return h('p', null, button(`Usar ${label}`, { variant: 'primary', small: true, onClick: () => {
+      country.control.value = regionCode;
+      drawCurrencies();
+      currency.control.value = code;
+      errorSlot.replaceChildren();
+      goTo(1);
+    } }));
+  }
+
   async function createNow() {
     errorSlot.replaceChildren();
     try {
@@ -185,7 +197,8 @@ export function openCreateCatalogDialog({ businessCenters, onCreated }) {
     try {
       showResult((await post('/tiktok/catalogs', payload)).catalog);
     } catch (err) {
-      errorSlot.replaceChildren(alertBox(err.message));
+      const suggestion = err.code === 'catalog_region_rejected' ? err.details?.suggestion : null;
+      errorSlot.replaceChildren(alertBox(err.message), suggestion ? useSuggestion(suggestion) : null);
     } finally {
       busy = false;
       if (pane.isConnected) drawStep({ keepError: true });
