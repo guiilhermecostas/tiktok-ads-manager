@@ -45,6 +45,7 @@ function toRecord(row) {
     lastError: row.last_error ?? null,
     lastSyncedAt: toIso(row.last_synced_at),
     advertiserCount: row.advertiser_count ?? 0,
+    inactiveCount: row.inactive_count ?? 0,
     createdAt: toIso(row.created_at),
   };
 }
@@ -53,6 +54,8 @@ const SELECT_PUBLIC = `
   SELECT bc.id, bc.owner_id, u.name AS owner_name, bc.bc_id, bc.auth_type, bc.name, bc.shared, bc.status, bc.last_error,
          bc.last_synced_at, bc.created_at,
          (SELECT COUNT(*)::int FROM tiktok_advertisers a WHERE a.business_center_id = bc.id) AS advertiser_count,
+         (SELECT COUNT(*)::int FROM tiktok_advertisers a JOIN advertiser_status s ON s.owner_id = bc.owner_id AND s.advertiser_id = a.advertiser_id
+           WHERE a.business_center_id = bc.id AND s.status <> 'STATUS_ENABLE') AS inactive_count,
          EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS via_proxy,
          COALESCE((SELECT json_agg(json_build_object('id', g.owner_bc_id, 'accounts', g.total) ORDER BY g.total DESC, g.owner_bc_id)
                      FROM (SELECT a.owner_bc_id, COUNT(*)::int AS total FROM tiktok_advertisers a
@@ -222,8 +225,10 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
       const { rows } = await db.query(
         `SELECT a.advertiser_id, a.name, a.currency, a.timezone, a.owner_bc_id, a.label, bc.id AS bc_row_id, bc.name AS bc_name, bc.status AS bc_status,
                 bc.bc_id AS bc_external_id, bc.auth_type AS bc_auth_type, bc.shared AS bc_shared, (bc.owner_id = $1) AS bc_owned,
-                EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS bc_via_proxy
+                EXISTS (SELECT 1 FROM proxies p WHERE p.user_id = bc.owner_id AND p.active) AS bc_via_proxy,
+                s.status AS account_status, s.since AS account_status_since, s.checked_at AS account_status_checked_at
            FROM tiktok_advertisers a JOIN tiktok_business_centers bc ON bc.id = a.business_center_id
+           LEFT JOIN advertiser_status s ON s.owner_id = bc.owner_id AND s.advertiser_id = a.advertiser_id
           WHERE bc.owner_id = $1 OR bc.shared
           ORDER BY lower(bc.name), lower(a.name)`,
         [userId],
@@ -243,6 +248,10 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
         businessCenterShared: r.bc_shared === true,
         businessCenterOwned: r.bc_owned === true,
         businessCenterViaProxy: r.bc_via_proxy === true,
+        // Situação da CONTA no TikTok (a última lida: ao atualizar a conexão ou na coleta por hora). Nula = ainda não lida.
+        accountStatus: r.account_status ?? null, // STATUS_ENABLE, STATUS_DISABLE, STATUS_LIMIT…
+        accountStatusSince: toIso(r.account_status_since),
+        accountStatusCheckedAt: toIso(r.account_status_checked_at),
       }));
     },
     /** Se a mesma conta existir em mais de uma BC visível, prefere a do próprio usuário. */

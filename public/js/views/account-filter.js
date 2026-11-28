@@ -39,7 +39,7 @@ export function createAccountFilter({ onChange, accounts = [], byCenter = false 
   }
   controls.push(
     make('kind', KIND_FILTERS, 'Filtrar por tipo de conta', 'Contas comuns ou contas de agência'),
-    make('status', STATUS_FILTERS, 'Filtrar por situação da conta', 'Inativa = a Business Center da conta está com erro de acesso'),
+    make('status', STATUS_FILTERS, 'Filtrar por situação da conta', 'Inativa = conta encerrada, punida, reprovada ou em análise no TikTok, ou Business Center com erro de acesso'),
   );
   // Moeda: o seletor só existe quando as contas usam mais de uma (com uma só, filtrar por moeda não serve para nada).
   const currencies = countByCurrency(accounts).filter((c) => c.code);

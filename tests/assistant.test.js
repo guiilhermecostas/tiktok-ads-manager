@@ -100,6 +100,8 @@ describe('Assistente: contas que caíram e criativos enviados (API)', () => {
     it('se a leitura da situação falhar, o gasto por hora continua sendo coletado', async () => {
       await reset();
       const user = await owner();
+      await run(ctx.db, 'DELETE FROM advertiser_status'); // a situação lida ao conectar sai: o que se testa é a coleta por hora sem conseguir ler a situação
+      await run(ctx.db, 'DELETE FROM advertiser_status_events');
       fake.state.rejectFields = true; // o TikTok recusa o pedido de campos de /advertiser/info/
       fake.state.hourly = { 9001: { '2026-11-25': { 10: m(5) } } };
       const summary = await ctx.hourly.collectAll();
@@ -110,8 +112,8 @@ describe('Assistente: contas que caíram e criativos enviados (API)', () => {
 
     it('conta que o TikTok devolve com status fora do padrão é ignorada (nada inválido entra no banco)', async () => {
       await reset();
+      fake.state.advertiserStatus = { 9001: 'banida!', 9002: 'STATUS_LIMIT' }; // já vale ao conectar (que também lê a situação) e na coleta por hora
       await owner();
-      fake.state.advertiserStatus = { 9001: 'banida!', 9002: 'STATUS_LIMIT' };
       await ctx.hourly.collectAll();
       assert.deepEqual((await all(ctx.db, 'SELECT advertiser_id FROM advertiser_status ORDER BY 1')).map((r) => r.advertiser_id), ['9002']);
     });

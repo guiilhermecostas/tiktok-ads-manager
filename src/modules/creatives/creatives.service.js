@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import { collectCreativeRefs } from '../../../shared/campaign-spec.js';
+import { MAX_FOLDER_DEPTH } from '../../../shared/creative-folders.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest, notFound } from '../../lib/http-error.js';
 import { DECLARED_TYPES, MIME_BY_EXT, sniffCreativeType } from './creative-types.js';
@@ -11,7 +12,7 @@ const MEDIA_ID_RE = /^(?!.*(?:\.\.|\/\/))[A-Za-z0-9][\w\-./:]{2,198}[A-Za-z0-9]$
 /** Teto do arquivo LIMPO enviado ao TikTok (limites do próprio TikTok; a recodificação pode aumentar o arquivo). */
 const CLEAN_OUTPUT_MAX_BYTES = { video: 500 * 1024 * 1024, image: 10 * 1024 * 1024 };
 
-/** Pastas por usuário (uma por oferta). */
+/** Pastas por usuário (todas, em qualquer nível). */
 export const MAX_FOLDERS = 100;
 /** Criativos movidos de uma vez. */
 export const MAX_MOVE_BATCH = 100;
@@ -65,16 +66,23 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
       return creative;
     },
 
-    // ---------- pastas (uma por oferta, um nível só) ----------
+    // ---------- pastas (uma por oferta; cada pasta pode ter subpastas, até MAX_FOLDER_DEPTH níveis) ----------
     listFolders: (actor) => repo.folders(actor.id),
 
-    async createFolder(actor, name) {
+    /** Cria a pasta; com `parentId`, ela fica DENTRO dessa pasta (que precisa ser do usuário e ter espaço para mais um nível). */
+    async createFolder(actor, name, parentId = null) {
       if ((await repo.countFolders(actor.id)) >= MAX_FOLDERS) throw new HttpError(409, `Você já tem ${MAX_FOLDERS} pastas (o máximo). Apague alguma para criar outra.`, 'too_many_folders');
+      let parent = null;
+      if (parentId !== null) {
+        parent = await requireFolder(actor, parentId);
+        if ((await repo.folderDepth(actor.id, parentId)) >= MAX_FOLDER_DEPTH) throw new HttpError(409, `As pastas podem ter até ${MAX_FOLDER_DEPTH} níveis. Crie esta pasta em outro lugar.`, 'folder_too_deep');
+      }
       try {
-        const id = await repo.createFolder(actor.id, name);
-        return { id, name, count: 0 };
+        const id = await repo.createFolder(actor.id, name, parentId);
+        if (id === null) throw notFound('Pasta não encontrada.'); // o pai sumiu entre a conferência e a criação
+        return { id, name, parentId, count: 0 };
       } catch (err) {
-        if (isUniqueViolation(err)) throw new HttpError(409, `Já existe uma pasta chamada "${name}".`, 'folder_exists');
+        if (isUniqueViolation(err)) throw new HttpError(409, parent ? `Já existe uma pasta chamada "${name}" dentro de "${parent.name}".` : `Já existe uma pasta chamada "${name}".`, 'folder_exists');
         throw err;
       }
     },
@@ -83,17 +91,17 @@ export function createCreativesService({ repo, storage, cleaner, tiktok, config,
       try {
         if (!(await repo.renameFolder(actor.id, id, name))) throw notFound('Pasta não encontrada.');
       } catch (err) {
-        if (isUniqueViolation(err)) throw new HttpError(409, `Já existe uma pasta chamada "${name}".`, 'folder_exists');
+        if (isUniqueViolation(err)) throw new HttpError(409, `Já existe uma pasta chamada "${name}" neste lugar.`, 'folder_exists');
         throw err;
       }
       return { id, name };
     },
 
-    /** Apaga só a pasta: os criativos dela NÃO são apagados, voltam para "sem pasta". */
+    /** Apaga a pasta e as subpastas dela: os criativos NÃO são apagados, voltam para "sem pasta". Devolve quantos voltaram e quantas subpastas foram apagadas. */
     async deleteFolder(actor, id) {
-      const moved = await repo.deleteFolder(actor.id, id);
-      if (moved === null) throw notFound('Pasta não encontrada.');
-      return { moved };
+      const result = await repo.deleteFolder(actor.id, id);
+      if (result === null) throw notFound('Pasta não encontrada.');
+      return { moved: result.files, subfolders: result.folders };
     },
 
     /** Move 1 a 100 criativos para uma pasta (ou `null` = sem pasta). Tudo ou nada: ID de outra pessoa ou pasta inexistente = 404, nada muda. */

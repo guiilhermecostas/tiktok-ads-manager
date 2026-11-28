@@ -31,7 +31,8 @@ describe('Pastas da biblioteca de criativos', () => {
     const b = await folder(u, 'oferta B');
     const a = await folder(u, '  Oferta   A ');
     assert.equal(a.name, 'Oferta A', 'espaços normalizados');
-    assert.deepEqual(Object.keys(a).sort(), ['count', 'id', 'name']);
+    assert.deepEqual(Object.keys(a).sort(), ['count', 'id', 'name', 'parentId']);
+    assert.equal(a.parentId, null);
     await upload(u);
     const filed = await upload(u, { type: 'jpg' });
     await u.client.patch(`/api/creatives/${filed.id}`, { folderId: b.id });
@@ -180,7 +181,7 @@ describe('Pastas da biblioteca de criativos', () => {
     await u.client.post('/api/creatives/move', { ids: [c1.id, c2.id], folderId: f.id });
     assert.equal((await other.client.delete(`/api/creatives/folders/${f.id}`)).status, 404, 'pasta de outra pessoa');
     const res = await u.client.delete(`/api/creatives/folders/${f.id}`);
-    assert.deepEqual([res.status, res.json], [200, { moved: 2 }]);
+    assert.deepEqual([res.status, res.json], [200, { moved: 2, subfolders: 0 }]);
     assert.deepEqual((await u.client.get('/api/creatives/folders')).json.folders, []);
     const list = (await listIn(u, 'folderId=none')).creatives;
     assert.deepEqual(list.map((c) => [c.name, c.folderId]).sort(), [['dois', null], ['um', null]]);

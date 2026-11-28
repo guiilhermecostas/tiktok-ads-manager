@@ -1687,3 +1687,17 @@ button.activity__person:hover { border-color: var(--tt-cyan-dark); }
 .link-pixel__empty { padding: 14px; text-align: center; }
 .link-pixel__counter { margin: 6px 0 0; font-size: 12px; }
 .link-pixel__status:empty { display: none; }
+
+/* Subpastas: recuo na barra lateral, indicador de "tem subpastas" e caminho com atalhos */
+.folder-item[data-depth="1"] { padding-left: 22px; }
+.folder-item[data-depth="2"] { padding-left: 34px; }
+.folder-item[data-depth="3"] { padding-left: 46px; }
+.folder-item[data-depth="4"] { padding-left: 58px; }
+.folder-item__more { flex: none; display: inline-flex; color: var(--muted); }
+.crumbs .crumb[title] { max-width: 180px; }
+@media (max-width: 900px) { .folder-item[data-depth] { padding-left: 10px; } }
+
+/* Situação da conta de anúncio (Contas TikTok): selo + data da leitura, e aviso de inativas no cartão da conexão */
+.toast--warning { border-left-color: #f59e0b; }
+.acc-status { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.bc-inactive { margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: #fee2e2; color: #b91c1c; font-size: 12px; font-weight: 700; white-space: nowrap; }

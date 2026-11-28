@@ -103,8 +103,9 @@ export async function businessCentersView() {
   async function sync(bc, trigger) {
     trigger.disabled = true;
     try {
-      await post(`/tiktok/business-centers/${bc.id}/sync`);
-      toast(`${bc.name}: contas atualizadas.`);
+      const { businessCenter } = await post(`/tiktok/business-centers/${bc.id}/sync`);
+      const inactive = businessCenter?.inactiveCount ?? 0;
+      toast(`${bc.name}: contas atualizadas${inactive ? `, ${inactive === 1 ? '1 conta inativa' : `${inactive} contas inativas`} no TikTok` : ''}.`, inactive ? 'warning' : 'success');
     } catch (err) {
       toast(err.message, 'danger');
     }
@@ -208,7 +209,8 @@ export async function businessCentersView() {
       h('header', { class: 'bc-card__head' },
         h('span', { class: `bc-dot bc-dot--${active ? 'ok' : 'error'}`, role: 'img', 'aria-label': active ? 'Funcionando' : 'Com erro', title: active ? 'Funcionando' : 'Com erro' }),
         h('h2', { class: 'bc-card__name', title: bc.name }, bc.name),
-        h('span', { class: 'bc-count', title: 'Contas de anúncio nesta conexão' }, h('strong', null, String(bc.advertiserCount)), bc.advertiserCount === 1 ? ' conta' : ' contas')),
+        h('span', { class: 'bc-count', title: 'Contas de anúncio nesta conexão' }, h('strong', null, String(bc.advertiserCount)), bc.advertiserCount === 1 ? ' conta' : ' contas'),
+        bc.inactiveCount ? h('span', { class: 'bc-inactive', title: 'Contas encerradas, punidas, reprovadas ou em análise no TikTok. Veja quais em “Contas de anúncio”, filtrando por “Somente inativas”.' }, `${bc.inactiveCount} ${bc.inactiveCount === 1 ? 'inativa' : 'inativas'}`) : null),
       h('p', { class: 'bc-card__meta' }, details),
       h('p', { class: 'bc-card__meta' }, updated),
       bc.lastError ? h('p', { class: 'bc-card__note', role: 'alert' }, bc.lastError) : null,
@@ -223,7 +225,7 @@ export async function businessCentersView() {
     'dl',
     { class: 'hub-legend' },
     h('div', null, h('dt', null, '+ CA'), h('dd', null, 'cria novas contas de anúncio dentro da Business Center, no TikTok.')),
-    h('div', null, h('dt', null, 'Atualizar'), h('dd', null, 'busca de novo, no TikTok, a lista de contas de anúncio.')),
+    h('div', null, h('dt', null, 'Atualizar'), h('dd', null, 'busca de novo, no TikTok, a lista de contas de anúncio e a situação de cada uma (ativa, encerrada, punida…).')),
     h('div', null, h('dt', null, '⋯ Vincular pixel'), h('dd', null, 'liga um pixel a várias contas de anúncio de uma vez (Gerenciador de Eventos → Ativos).')),
     h('div', null, h('dt', null, '⋯ Renovar acesso'), h('dd', null, 'refaz a autorização pelo link (use se aparecer “Com erro”).')),
     h('div', null, h('dt', null, '⋯ Editar'), h('dd', null, 'muda o nome (e, na conexão por token, o token).')),

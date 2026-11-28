@@ -57,7 +57,8 @@ const isoDate = (date) => date.toISOString().slice(0, 10);
  * ou ao admin. Os dados (contas, campanhas, desempenho) usam apenas as BCs visíveis para quem pede.
  * `actor` é sempre o usuário autenticado: { id, role }.
  */
-export function createTiktokService({ client, repo, attempts, users, proxies = null, guards = {}, config, log = console }) {
+export function createTiktokService({ client, repo, attempts, users, proxies = null, guards = {}, statusLog = null, now = () => new Date(), config, log = console }) {
+  // `statusLog` (opcional): guarda a situação das contas (ativa, encerrada, punida…) lida do TikTok a cada leitura das contas; sem ele a tela só mostra o que a coleta por hora já anotou.
   // `guards`: ganchos ligados depois da montagem (assinaturas): `beforeConnect(ownerId, { bcIds, advertiserIds })` pode recusar a conexão;
   // `beforeRemove(connection)` roda antes de apagar uma conexão. Sem ganchos, nada acontece (a integração com o TikTok não depende deles).
   const creating = new Set(); // conexões com criação de contas em andamento (evita clique duplo / pedidos simultâneos)
@@ -98,6 +99,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
     lastError: bc.lastError,
     lastSyncedAt: bc.lastSyncedAt,
     advertiserCount: bc.advertiserCount,
+    inactiveCount: bc.inactiveCount, // contas cuja situação no TikTok é diferente de "ativa" (encerrada, punida, em análise…)
     createdAt: bc.createdAt,
     owned: bc.ownerId === actor.id,
     canManage: canManage(actor, bc),
@@ -136,7 +138,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
   async function loadAdvertisersByIds(token, ids, api, { discoverBc = false } = {}) {
     const info = ids.length ? await api.getAdvertiserInfo(token, ids) : [];
     const byId = new Map(info.map((a) => [a.id, a]));
-    const list = ids.map((id) => byId.get(id) ?? { id, name: id, currency: null, timezone: null, ownerBcId: null });
+    const list = ids.map((id) => byId.get(id) ?? { id, name: id, currency: null, timezone: null, ownerBcId: null, status: null });
     if (discoverBc && list.length && !list.some((a) => a.ownerBcId)) {
       try {
         const centers = await api.listBusinessCenters(token);
@@ -151,6 +153,21 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
   /** Token manual: contas atribuídas à Business Center informada. */
   async function loadAdvertisers(token, bcId, api) {
     return loadAdvertisersByIds(token, await api.listBusinessCenterAdvertiserIds(token, bcId), api);
+  }
+
+  /**
+   * Guarda a situação das contas lida agora (a mesma tabela da coleta por hora: mudanças viram eventos para o assistente).
+   * Melhor esforço: falhar aqui nunca impede de conectar, sincronizar ou criar contas.
+   */
+  async function recordStatuses(ownerId, advertisers) {
+    if (!statusLog) return;
+    const known = advertisers.filter((a) => a.status).map((a) => ({ id: a.id, name: a.name, status: a.status }));
+    if (!known.length) return;
+    try {
+      await statusLog.record(ownerId, known, now());
+    } catch (err) {
+      log.error('[tiktok] não foi possível guardar a situação das contas:', err.code ?? err.message);
+    }
   }
 
   /** Conexão por link: contas que o usuário autorizou para o app (a lista cresce se ele reautorizar com mais contas). */
@@ -300,6 +317,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
         if (isUniqueViolation(err)) throw new HttpError(409, 'Você já cadastrou esta Business Center.', 'conflict');
         throw err;
       }
+      await recordStatuses(actor.id, advertisers);
       invalidate();
       return present(actor, await repo.get(id));
     },
@@ -316,6 +334,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
           throw asValidationError(err);
         }
         await repo.replaceToken(id, accessToken, advertisers);
+        await recordStatuses(current.ownerId, advertisers);
       }
       if (name) await repo.rename(id, name);
       if (shared !== undefined) await repo.setShared(id, shared);
@@ -329,6 +348,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       if (current.authType === 'oauth') ensureOauthEnabled();
       const advertisers = await withBusinessCenterToken(id, (token, api) => (current.authType === 'oauth' ? loadOauthAdvertisers(token, api) : loadAdvertisers(token, current.bcId, api)));
       await repo.replaceAdvertisers(id, advertisers);
+      await recordStatuses(current.ownerId, advertisers); // a situação (ativa, encerrada, punida…) vem junto na mesma leitura
       invalidate();
       return present(actor, await repo.get(id));
     },
@@ -424,6 +444,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
         const current = await repo.get(bcRowId);
         const advertisers = await withBusinessCenterToken(bcRowId, (token, api) => (current.authType === 'oauth' ? loadOauthAdvertisers(token, api) : loadAdvertisers(token, current.bcId, api)));
         await repo.replaceAdvertisers(bcRowId, advertisers);
+        await recordStatuses(current.ownerId, advertisers);
         const known = new Set(advertisers.map((a) => a.id));
         visible = created.filter((c) => c.id && known.has(c.id)).length;
         invalidate();
@@ -547,6 +568,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
         let connectionId = existingId;
         if (existingId) await repo.replaceToken(existingId, accessToken, advertisers);
         else connectionId = await repo.create({ ownerId: owner.id, name: attempt.name, accessToken, advertisers, authType: 'oauth' });
+        await recordStatuses(owner.id, advertisers);
         invalidate();
         await attempts.finish(attempt.attemptId, { status: 'connected', connectionId });
         return { status: 'connected' };

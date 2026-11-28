@@ -105,7 +105,9 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   const proxiesService = createProxiesService({ repo: proxiesRepo, config, fetchFn: fetchFn ?? fetch, log });
   // Ganchos das assinaturas (ligados mais abaixo): recusar BC bloqueada por débito e guardar o gasto/bloquear ao remover uma BC.
   const tiktokGuards = {};
-  const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, guards: tiktokGuards, config, log });
+  // Situação das contas de anúncio (ativa, encerrada, punida…): anotada ao atualizar uma conexão e, a cada 30 min, pela coleta por hora (mudanças viram eventos).
+  const advertiserStatus = createAdvertiserStatusRepository(db);
+  const tiktokService = createTiktokService({ client: tiktokClient, repo: businessCenters, attempts: createOauthAttemptsRepository(db), users, proxies: proxiesService, guards: tiktokGuards, statusLog: hourlyMonitorStatuses === false ? null : advertiserStatus, now: clock, config, log });
   // Saldo (BCs e contas de anúncio) direto da API do TikTok, em cache curto.
   const balanceActivity = createBalanceActivityService({ tiktok: tiktokService, connections: businessCenters, log, now: clock });
   const balanceService = createBalanceService({ tiktok: tiktokService, connections: businessCenters, transfers: createBalanceTransfersRepository(db), users, log, now: clock });
@@ -114,7 +116,6 @@ export function createApp({ config, db, log = console, limits, fetchFn, cleaner,
   // Gasto por hora: coleta a cada 30 min (ligada só pelo servidor, em server.js) e leitura para a aba Relatórios → Por hora.
   // Assinaturas (tudo em dólar): o gasto coletado por hora também vai para um livro permanente (não some se a BC for removida).
   const billingRepo = createBillingRepository(db);
-  const advertiserStatus = createAdvertiserStatusRepository(db); // situação das contas (a coleta a cada 30 min anota quando uma conta cai)
   // Câmbio: cotações para REAL atualizadas sozinhas (fonte pública, só o servidor liga o relógio) ou fixadas pelo admin.
   const fxService = createFxService({ repo: billingRepo, config: config.fx ?? { enabled: false, baseUrl: '' }, fetchFn: fxFetch ?? fetch, log, now: clock });
   const billingService = createBillingService({ repo: billingRepo, users, fx: fxService, log, now: clock });

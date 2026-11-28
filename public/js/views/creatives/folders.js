@@ -1,3 +1,4 @@
+import { MAX_FOLDER_DEPTH, depthOf, descendantIds, pathLabel, pathOf, treeOrder, withTotals } from '/shared/creative-folders.js';
 import { del, get, patch, post } from '../../api.js';
 import { h, icon, setChildren } from '../../dom.js';
 import { alertBox, button, confirmDialog, field, openModal, toast } from '../../ui.js';
@@ -20,19 +21,25 @@ export const folderIdOf = (current) => (typeof current === 'number' ? current : 
 export const cleanFolderName = (name) => String(name).replace(/\s+/g, ' ').trim().slice(0, MAX_FOLDER_NAME);
 
 /**
- * Pastas da biblioteca (uma por oferta). Desenha a barra lateral de pastas e cuida de criar, renomear, apagar e mover.
+ * Pastas da biblioteca (uma por oferta, cada uma com subpastas até MAX_FOLDER_DEPTH níveis). Desenha a barra lateral em árvore (as subpastas
+ * aparecem sob a pasta aberta e as que levam até ela) e cuida de criar, renomear, apagar e mover.
  *  - `onSelect(value)`: a pessoa escolheu "Todos", "Sem pasta" ou uma pasta.
  *  - `onChanged()`: algo mudou (criativos movidos, pasta renomeada/apagada…): a tela recarrega a lista.
  * Cada item da barra aceita soltar CRIATIVOS (move) e ARQUIVOS do computador (envia: atributo `data-drop-folder`).
  * Todo texto (inclusive nome de pasta) entra como nó de texto, nunca como HTML.
  */
 export function createFolders({ onSelect, onChanged }) {
-  const state = { folders: [], total: 0, unfiled: 0, current: FOLDER_ALL, loaded: false, error: null };
+  // `folders`: lista simples do servidor; `tree`: a mesma lista com os totais de cada pasta somando as subpastas (deepCount, subfolderCount).
+  const state = { folders: [], tree: [], total: 0, unfiled: 0, current: FOLDER_ALL, loaded: false, error: null };
   const element = h('nav', { class: 'folder-nav', 'aria-label': 'Pastas' });
 
-  const nameOf = (id) => state.folders.find((f) => f.id === id)?.name ?? null;
-  const byId = (id) => state.folders.find((f) => f.id === id) ?? null;
+  /** "Oferta A / Verão" (ou só o nome, se for de nível mais alto); nulo se a pasta não existe. */
+  const nameOf = (id) => pathLabel(state.folders, id);
+  const byId = (id) => state.tree.find((f) => f.id === id) ?? null;
   const currentFolder = () => (typeof state.current === 'number' ? byId(state.current) : null);
+  /** Subpastas diretas de uma pasta (`null` = as de nível mais alto), na ordem da lista. */
+  const childrenOf = (parentId) => state.tree.filter((f) => (f.parentId ?? null) === parentId);
+  const canHaveChildren = (id) => depthOf(state.folders, id) < MAX_FOLDER_DEPTH;
 
   // ---------- mover (por arrastar ou pelo botão) ----------
   async function moveTo(ids, folderId) {
@@ -76,12 +83,13 @@ export function createFolders({ onSelect, onChanged }) {
   /** Itens do menu de contexto de uma pasta (usados na barra lateral e nos cartões de pasta). */
   const menuItems = (folder) => [
     { label: 'Abrir', icon: 'folder', onClick: () => select(folder.id) },
+    ...(canHaveChildren(folder.id) ? [{ label: 'Nova subpasta', icon: 'plus', onClick: () => openCreate({ parentId: folder.id }) }] : []),
     'separator',
     { label: 'Renomear pasta', icon: 'edit', onClick: () => openRename(folder) },
     { label: 'Excluir pasta', icon: 'trash', danger: true, onClick: () => confirmDelete(folder) },
   ];
 
-  function navItem({ value, label, count, iconName, folder = null }) {
+  function navItem({ value, label, count, iconName, folder = null, depth = 0, hasMore = false }) {
     const active = state.current === value;
     const el = h(
       'button',
@@ -90,12 +98,14 @@ export function createFolders({ onSelect, onChanged }) {
         class: `folder-item${active ? ' is-on' : ''}`,
         'aria-current': active ? 'page' : null,
         'data-folder': String(value),
+        'data-depth': depth ? String(depth) : null,
         [DROP_ATTR]: folder ? String(folder.id) : 'none', // "Todos" e "Sem pasta": arquivos do computador entram sem pasta
-        title: folder ? folder.name : label,
+        title: folder ? nameOf(folder.id) : label,
         onClick: () => select(value),
       },
       icon(iconName, 16),
       h('span', { class: 'folder-item__name' }, label),
+      hasMore ? h('span', { class: 'folder-item__more', title: 'Tem subpastas', 'aria-label': 'Tem subpastas' }, icon('chevron', 12)) : null,
       h('span', { class: 'folder-item__count' }, String(count)),
     );
     // Soltar criativos arrastados em cima de uma pasta move todos; "Todos" não é destino.
@@ -104,13 +114,19 @@ export function createFolders({ onSelect, onChanged }) {
     return el;
   }
 
+  /** Árvore da barra lateral: as de nível mais alto sempre; as subpastas só sob a pasta aberta e as que levam até ela (sem carets nem cliques extras). */
+  function visibleFolders() {
+    const open = new Set(typeof state.current === 'number' ? pathOf(state.folders, state.current).map((f) => f.id) : []);
+    return treeOrder(state.tree).filter(({ folder, depth }) => depth === 0 || open.has(folder.parentId)).map((entry) => ({ ...entry, open: open.has(entry.folder.id) }));
+  }
+
   function draw() {
     setChildren(
       element,
       navItem({ value: FOLDER_ALL, label: 'Todos os arquivos', count: state.total, iconName: 'box' }),
       navItem({ value: FOLDER_NONE, label: 'Sem pasta', count: state.unfiled, iconName: 'inbox' }),
       state.folders.length ? h('div', { class: 'folder-nav__title' }, 'Pastas') : null,
-      state.folders.map((f) => navItem({ value: f.id, label: f.name, count: f.count, iconName: 'folder', folder: f })),
+      visibleFolders().map(({ folder, depth, open }) => navItem({ value: folder.id, label: folder.name, count: folder.deepCount, iconName: 'folder', folder, depth, hasMore: folder.subfolderCount > 0 && !open })),
       h('button', { type: 'button', class: 'folder-item folder-item--new', onClick: () => openCreate() }, icon('plus', 16), h('span', { class: 'folder-item__name' }, 'Nova pasta')),
     );
   }
@@ -125,7 +141,7 @@ export function createFolders({ onSelect, onChanged }) {
   async function refresh() {
     try {
       const data = await get('/creatives/folders');
-      Object.assign(state, { folders: data.folders, total: data.total, unfiled: data.unfiledCount, loaded: true, error: null });
+      Object.assign(state, { folders: data.folders, tree: withTotals(data.folders), total: data.total, unfiled: data.unfiledCount, loaded: true, error: null });
       // A pasta aberta foi apagada (por outra aba ou por outra pessoa da equipe): volta para "Todos".
       if (typeof state.current === 'number' && !state.folders.some((f) => f.id === state.current)) {
         state.current = FOLDER_ALL;
@@ -138,13 +154,13 @@ export function createFolders({ onSelect, onChanged }) {
   }
 
   /**
-   * Devolve o ID da pasta com este nome (a comparação ignora maiúsculas e espaços extras), criando-a se ainda não existir.
+   * Devolve o ID da pasta de NÍVEL MAIS ALTO com este nome (a comparação ignora maiúsculas e espaços extras), criando-a se ainda não existir.
    * Usado ao soltar uma PASTA do computador: ela vira uma pasta da biblioteca com o mesmo nome. Lança Error com mensagem em português.
    */
   async function ensure(rawName) {
     const name = cleanFolderName(rawName);
     if (!name) throw new Error('A pasta solta não tem nome.');
-    const find = () => state.folders.find((f) => f.name.toLowerCase() === name.toLowerCase());
+    const find = () => state.folders.find((f) => f.parentId === null && f.name.toLowerCase() === name.toLowerCase());
     if (find()) return find().id;
     try {
       const { folder } = await post('/creatives/folders', { name });
@@ -160,7 +176,7 @@ export function createFolders({ onSelect, onChanged }) {
   }
 
   // ---------- criar / renomear ----------
-  function nameDialog({ title, submitLabel, initial = '', onSubmit }) {
+  function nameDialog({ title, submitLabel, initial = '', context = null, onSubmit }) {
     const name = field('Nome da pasta', { type: 'text', required: true, maxlength: MAX_FOLDER_NAME, value: initial, placeholder: 'Ex.: Oferta Emagrecimento', autocomplete: 'off' }, { hint: 'Use um nome por oferta, para achar os criativos rápido.' });
     const errorSlot = h('div');
     const submit = button(submitLabel, { variant: 'primary', type: 'submit' });
@@ -188,6 +204,7 @@ export function createFolders({ onSelect, onChanged }) {
           },
         },
         errorSlot,
+        context ? h('p', { class: 'muted' }, context) : null,
         name.element,
         h('div', { class: 'modal__footer' }, button('Cancelar', { onClick: () => modal.close() }), submit),
       ),
@@ -196,13 +213,15 @@ export function createFolders({ onSelect, onChanged }) {
     return modal;
   }
 
-  function openCreate({ then } = {}) {
+  /** Nova pasta; com `parentId`, nova SUBPASTA dentro dela. `then(folder)` (opcional) roda depois de criar, no lugar de abrir a pasta nova. */
+  function openCreate({ parentId = null, then } = {}) {
     nameDialog({
-      title: 'Nova pasta',
-      submitLabel: 'Criar pasta',
+      title: parentId === null ? 'Nova pasta' : 'Nova subpasta',
+      submitLabel: parentId === null ? 'Criar pasta' : 'Criar subpasta',
+      context: parentId === null ? null : `Será criada dentro de “${nameOf(parentId) ?? 'pasta'}”.`,
       onSubmit: async (value) => {
-        const { folder } = await post('/creatives/folders', { name: value });
-        toast(`Pasta "${folder.name}" criada.`);
+        const { folder } = await post('/creatives/folders', parentId === null ? { name: value } : { name: value, parentId });
+        toast(`${parentId === null ? 'Pasta' : 'Subpasta'} "${folder.name}" criada.`);
         await refresh();
         if (then) await then(folder);
         else select(folder.id); // abre a pasta nova (assim o próximo envio já cai nela)
@@ -225,18 +244,24 @@ export function createFolders({ onSelect, onChanged }) {
   }
 
   async function confirmDelete(folder) {
+    const subfolders = descendantIds(state.folders, folder.id).length;
+    const files = byId(folder.id)?.deepCount ?? folder.count;
     const ok = await confirmDialog({
       title: 'Excluir pasta',
-      message: `Excluir a pasta "${folder.name}"? ${folder.count ? `Os ${plural(folder.count, 'criativo', 'criativos')} dela NÃO são apagados: voltam para "Sem pasta".` : 'Ela está vazia.'}`,
+      message: `Excluir a pasta "${folder.name}"${subfolders ? ` e ${plural(subfolders, 'subpasta', 'subpastas')} dentro dela` : ''}? ${files ? `${plural(files, 'criativo', 'criativos')} dentro ${files === 1 ? 'dela NÃO é apagado: volta' : 'dela NÃO são apagados: voltam'} para "Sem pasta".` : subfolders ? 'Todas estão vazias.' : 'Ela está vazia.'}`,
       confirmLabel: 'Excluir pasta',
       danger: true,
     });
     if (!ok) return;
     try {
       await del(`/creatives/folders/${folder.id}`);
-      toast('Pasta excluída. Os criativos continuam na biblioteca.');
+      toast(subfolders ? 'Pasta e subpastas excluídas. Os criativos continuam na biblioteca.' : 'Pasta excluída. Os criativos continuam na biblioteca.');
+      // Estava dentro da pasta apagada (ou de uma subpasta dela)? Vai para a pasta de cima (ou "Todos").
+      const gone = new Set([folder.id, ...descendantIds(state.folders, folder.id)]);
+      const wasInside = typeof state.current === 'number' && gone.has(state.current);
+      if (wasInside) state.current = folder.parentId ?? FOLDER_ALL;
       await refresh();
-      if (state.current === folder.id) select(FOLDER_ALL);
+      if (wasInside) onSelect(state.current);
       else onChanged();
     } catch (err) {
       toast(err.message, 'danger');
@@ -247,7 +272,7 @@ export function createFolders({ onSelect, onChanged }) {
   /** Pop-up para escolher a pasta de destino (ou criar uma nova na hora). `ids`: criativos a mover. */
   function openMove(ids, { current = null } = {}) {
     const NEW = '__new__';
-    const options = [['', 'Sem pasta'], ...state.folders.map((f) => [String(f.id), f.name]), [NEW, '＋ Nova pasta…']];
+    const options = [['', 'Sem pasta'], ...treeOrder(state.folders).map(({ folder }) => [String(folder.id), nameOf(folder.id)]), [NEW, '＋ Nova pasta…']];
     const target = field('Mover para', { as: 'select', options, value: current === null ? '' : String(current) });
     const newName = field('Nome da nova pasta', { type: 'text', maxlength: MAX_FOLDER_NAME, autocomplete: 'off', placeholder: 'Ex.: Oferta Emagrecimento' });
     newName.element.hidden = true;
@@ -305,7 +330,10 @@ export function createFolders({ onSelect, onChanged }) {
     moveTo,
     bindMoveTarget,
     menuItems,
-    folders: () => state.folders,
+    folders: () => state.tree,
+    childrenOf,
+    canHaveChildren,
+    pathOf: (id) => pathOf(state.folders, id),
     folderName: nameOf,
     folderById: byId,
     currentFolder,

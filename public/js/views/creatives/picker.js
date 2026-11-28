@@ -3,6 +3,7 @@ import { h, setChildren } from '../../dom.js';
 import { formatBytes } from '../../format.js';
 import { can } from '../../state.js';
 import { alertBox, button, emptyState, openModal, spinner } from '../../ui.js';
+import { pathLabel, treeOrder } from '/shared/creative-folders.js';
 import { FOLDER_ALL, folderIdOf } from './folders.js';
 import { creativeThumb } from './thumb.js';
 import { createUploader, uploadButton } from './uploader.js';
@@ -135,7 +136,7 @@ export function pickCreatives({ kind, multiple = false, max = 1, selected = [], 
     get('/creatives/folders').then((data) => {
       st.folders = data.folders;
       if (!st.folders.length) return;
-      setChildren(folderSelect, h('option', { value: '' }, 'Todas as pastas'), h('option', { value: 'none' }, 'Sem pasta'), st.folders.map((f) => h('option', { value: String(f.id) }, `${f.name} (${f.count})`)));
+      setChildren(folderSelect, h('option', { value: '' }, 'Todas as pastas'), h('option', { value: 'none' }, 'Sem pasta'), treeOrder(st.folders).map(({ folder }) => h('option', { value: String(folder.id) }, `${pathLabel(st.folders, folder.id)} (${folder.count})`)));
       folderSelect.hidden = false;
     }).catch(() => {});
 

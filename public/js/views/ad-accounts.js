@@ -1,4 +1,4 @@
-import { ACCOUNT_LABELS, MAX_LABEL_BATCH, countByKind, isAccountLabel } from '/shared/account-labels.js';
+import { ACCOUNT_LABELS, MAX_LABEL_BATCH, accountHealth, countByKind, isAccountLabel } from '/shared/account-labels.js';
 import { get, patch } from '../api.js';
 import { h, setChildren } from '../dom.js';
 import { alertBox, badge, button, emptyState, toast } from '../ui.js';
@@ -13,6 +13,32 @@ const rowKey = (a) => `${a.businessCenterId}:${a.id}`; // a mesma conta pode apa
  * Mostra só as contas das BCs do próprio usuário e das compartilhadas com a equipe (mesma regra do resto do sistema).
  * Cada conta pode receber uma etiqueta (ex.: "Conta de agência"): ela aparece na publicação de campanhas e vale como filtro.
  */
+const dateTime = (iso) => new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+
+/**
+ * Situação da conta: o selo (ativa, encerrada, punida, em análise, acesso com erro…) e, embaixo, desde quando e quando foi lida no TikTok.
+ * Sem leitura ainda, orienta a clicar em "Atualizar" na Business Center.
+ */
+function statusCell(account) {
+  const health = accountHealth(account);
+  const since = account.accountStatusSince && health.key !== 'error' && health.key !== 'unknown' ? `${health.key === 'active' ? 'Ativa' : health.label} desde ${dateTime(account.accountStatusSince)}` : null;
+  const checked = account.accountStatusCheckedAt ? `Lida no TikTok em ${dateTime(account.accountStatusCheckedAt)}` : null;
+  const hint = health.key === 'unknown' ? 'A situação desta conta ainda não foi lida: clique em “Atualizar” na Business Center.' : health.key === 'error' ? 'A conexão está com erro de acesso: a situação mostrada pode estar desatualizada.' : null;
+  return h('div', { class: 'acc-status' }, h('span', { title: [since, checked, hint].filter(Boolean).join(' · ') || null }, badge(health.label, health.tone)), checked && health.key !== 'unknown' ? h('span', { class: 'acc-id', title: since ?? checked }, checked.replace('Lida no TikTok em', 'Lida em')) : null);
+}
+
+/** Aviso no fim da lista: quantas contas estão inativas no TikTok (encerradas, punidas, reprovadas ou em análise). */
+function inactiveAlert(advertisers) {
+  const counts = { inactive: 0, pending: 0 };
+  for (const a of advertisers) {
+    const { key } = accountHealth(a);
+    if (key in counts) counts[key] += 1;
+  }
+  if (!counts.inactive && !counts.pending) return null;
+  const parts = [counts.inactive ? `${counts.inactive} ${counts.inactive === 1 ? 'conta inativa' : 'contas inativas'} (encerradas, punidas ou reprovadas)` : null, counts.pending ? `${counts.pending} em análise ou aguardando o TikTok` : null].filter(Boolean);
+  return alertBox(`${parts.join(' e ')}. Use o filtro “Somente inativas” para ver quais. A situação é lida do TikTok ao clicar em “Atualizar” na Business Center e a cada 30 minutos.`, 'warning');
+}
+
 export async function adAccountsView() {
   const { advertisers } = await get('/tiktok/advertisers');
   const state = { q: '', bc: '' };
@@ -191,7 +217,7 @@ export async function adAccountsView() {
                 h('td', { 'data-label': 'Tipo' }, kindCell(a)),
                 h('td', { 'data-label': 'Moeda' }, currencyBadge(a.currency) ?? h('span', { class: 'muted' }, '—')),
                 h('td', { class: 'muted', 'data-label': 'Fuso horário' }, a.timezone ?? '—'),
-                h('td', { 'data-label': 'Status' }, a.businessCenterStatus === 'active' ? badge('Ativa', 'success') : badge('Acesso com erro', 'danger')),
+                h('td', { 'data-label': 'Status' }, statusCell(a)),
               ),
             ),
           ),
@@ -229,6 +255,7 @@ export async function adAccountsView() {
         bulkBar,
         body,
         advertisers.some((a) => a.businessCenterStatus !== 'active') ? alertBox('Algumas Business Centers estão com erro de acesso. Reautorize ou atualize o token na aba “Business Centers”.', 'warning') : null,
+        inactiveAlert(advertisers),
       ],
     }),
   };

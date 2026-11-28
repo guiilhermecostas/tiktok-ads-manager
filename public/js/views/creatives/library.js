@@ -27,7 +27,8 @@ export async function creativesView() {
   let disposed = false;
 
   const isFolderOpen = () => typeof folders.current === 'number';
-  const showFolderTiles = () => folders.current === FOLDER_ALL && !st.q && !st.kind && folders.folders().length > 0;
+  /** Cartões das pastas do lugar aberto: as de nível mais alto em "Todos os arquivos"; as subpastas dentro de uma pasta aberta; nenhum em "Sem pasta" ou com busca/filtro. */
+  const folderTiles = () => (st.q || st.kind || folders.current === FOLDER_NONE ? [] : folders.childrenOf(isFolderOpen() ? folders.current : null));
   const byId = (id) => st.creatives.find((c) => c.id === id);
 
   // Pastas (uma por oferta): trocar de pasta recarrega a lista; criativos movidos/pastas alteradas também.
@@ -224,11 +225,28 @@ export async function creativesView() {
     const home = button('Criativos', { small: true, onClick: () => folders.select(FOLDER_ALL) });
     home.classList.add('crumb');
     home.setAttribute('aria-label', 'Voltar para todos os arquivos');
-    const where = folders.current === FOLDER_NONE ? h('strong', { class: 'crumb crumb--now' }, icon('inbox', 15), 'Sem pasta') : folder ? h('strong', { class: 'crumb crumb--now', title: folder.name }, icon('folder', 15), h('span', null, folder.name)) : null;
+    const crumbLink = (target) => {
+      const link = button(target.name, { small: true, onClick: () => folders.select(target.id) });
+      link.classList.add('crumb');
+      link.title = target.name;
+      link.setAttribute('aria-label', `Abrir a pasta ${target.name}`);
+      return link;
+    };
+    let trail = null;
+    if (folders.current === FOLDER_NONE) trail = [h('strong', { class: 'crumb crumb--now' }, icon('inbox', 15), 'Sem pasta')];
+    else if (folder) {
+      const path = folders.pathOf(folder.id); // do nível mais alto até a pasta aberta: cada uma é um atalho, a última é a de agora
+      trail = [...path.slice(0, -1).flatMap((p) => [crumbLink(p), icon('chevron', 14)]), h('strong', { class: 'crumb crumb--now', title: folder.name }, icon('folder', 15), h('span', null, folder.name))];
+    }
     setChildren(
       crumbs,
-      h('nav', { class: 'crumbs', 'aria-label': 'Caminho' }, where ? [home, icon('chevron', 14), where] : h('strong', { class: 'crumb crumb--now' }, icon('box', 15), 'Todos os arquivos')),
-      folder ? h('span', { class: 'explorer__crumb-actions' }, button('Renomear pasta', { small: true, onClick: () => folders.openRename(folder) }), button('Excluir pasta', { small: true, variant: 'danger-ghost', onClick: () => folders.confirmDelete(folder) })) : null,
+      h('nav', { class: 'crumbs', 'aria-label': 'Caminho' }, trail ? [home, icon('chevron', 14), ...trail] : h('strong', { class: 'crumb crumb--now' }, icon('box', 15), 'Todos os arquivos')),
+      folder
+        ? h('span', { class: 'explorer__crumb-actions' },
+          folders.canHaveChildren(folder.id) ? button('Nova subpasta', { small: true, onClick: () => folders.openCreate({ parentId: folder.id }) }) : null,
+          button('Renomear pasta', { small: true, onClick: () => folders.openRename(folder) }),
+          button('Excluir pasta', { small: true, variant: 'danger-ghost', onClick: () => folders.confirmDelete(folder) }))
+        : null,
     );
   }
 
@@ -295,8 +313,9 @@ export async function creativesView() {
     closeContextMenu();
     if (st.error) return setChildren(grid, alertBox(st.error));
     if (st.loading && !st.creatives.length) return setChildren(grid, spinner());
-    const tiles = showFolderTiles()
-      ? h('section', { class: 'explorer__section', 'aria-label': 'Pastas' }, h('h2', { class: 'explorer__heading' }, `Pastas (${folders.folders().length})`), h('div', { class: 'folder-grid' }, folders.folders().map((f) => {
+    const shown = folderTiles();
+    const tiles = shown.length
+      ? h('section', { class: 'explorer__section', 'aria-label': isFolderOpen() ? 'Subpastas' : 'Pastas' }, h('h2', { class: 'explorer__heading' }, `${isFolderOpen() ? 'Subpastas' : 'Pastas'} (${shown.length})`), h('div', { class: 'folder-grid' }, shown.map((f) => {
           const tile = folderTile(f);
           folders.bindMoveTarget(tile, f.id);
           return tile;
@@ -306,9 +325,9 @@ export async function creativesView() {
       const filtered = st.kind || st.q;
       const inFolder = isFolderOpen();
       const unfiled = folders.current === FOLDER_NONE;
-      const text = filtered ? 'Tente outro filtro ou outra busca.' : unfiled ? 'Todos os seus criativos já estão em pastas.' : inFolder ? 'Arraste arquivos do computador para esta página (eles entram nesta pasta) ou arraste criativos da lista para o nome da pasta.' : 'Arraste imagens (JPG, PNG) e vídeos (MP4, MOV) para esta página, ou use o botão. Crie pastas para organizar por oferta.';
+      const text = filtered ? 'Tente outro filtro ou outra busca.' : unfiled ? 'Todos os seus criativos já estão em pastas.' : inFolder ? (tiles ? 'Abra uma subpasta, ou arraste arquivos do computador para esta página (eles entram nesta pasta).' : 'Arraste arquivos do computador para esta página (eles entram nesta pasta) ou arraste criativos da lista para o nome da pasta. Use “Nova subpasta” para organizar por dentro.') : 'Arraste imagens (JPG, PNG) e vídeos (MP4, MOV) para esta página, ou use o botão. Crie pastas para organizar por oferta.';
       return setChildren(grid, tiles, h('div', { class: 'card explorer__empty' }, emptyState({
-        title: filtered ? 'Nenhum criativo encontrado' : unfiled ? 'Nenhum criativo sem pasta' : inFolder ? 'Esta pasta está vazia' : 'Sua biblioteca está vazia',
+        title: filtered ? 'Nenhum criativo encontrado' : unfiled ? 'Nenhum criativo sem pasta' : inFolder ? (tiles ? 'Nenhum arquivo direto nesta pasta' : 'Esta pasta está vazia') : 'Sua biblioteca está vazia',
         text,
         action: filtered || unfiled ? null : uploadButton(uploader, { label: inFolder ? 'Enviar para esta pasta' : 'Enviar primeiros arquivos' }),
       })));
@@ -511,7 +530,7 @@ export async function creativesView() {
         const id = await folders.ensure(dir.name);
         if (!dir.files.length) toast(`A pasta "${dir.name}" não tem arquivos para enviar.`, 'danger');
         else uploader.add(dir.files, { folderId: id, folderLabel: folders.folderName(id) });
-        if (dir.subfolders) toast(`"${dir.name}": ${plural(dir.subfolders, 'subpasta foi ignorada', 'subpastas foram ignoradas')} (a biblioteca tem um nível de pastas só).`, 'danger');
+        if (dir.subfolders) toast(`"${dir.name}": ${plural(dir.subfolders, 'subpasta foi ignorada', 'subpastas foram ignoradas')} (arraste cada subpasta separadamente para enviar o conteúdo dela).`, 'danger');
         if (dir.ignored) toast(`"${dir.name}": só os primeiros ${dir.files.length} arquivos foram enviados.`, 'danger');
       } catch (err) {
         toast(`Não foi possível criar a pasta "${dir.name}": ${err.message}`, 'danger');

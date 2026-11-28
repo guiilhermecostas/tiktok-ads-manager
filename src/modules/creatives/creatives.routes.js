@@ -42,15 +42,19 @@ export function createCreativesRouter({ service, limits = {} }) {
     res.json(await service.listFolders(req.actor));
   });
 
+  // { name, parentId? }: com `parentId`, a pasta nasce DENTRO dessa pasta (subpasta).
   router.post('/folders', write, async (req, res) => {
-    res.status(201).json({ folder: await service.createFolder(req.actor, parseText(asObject(req.body).name, 'Nome da pasta', { min: 1, max: MAX_FOLDER_NAME })) });
+    const body = asObject(req.body);
+    if (body.parentId !== undefined && body.parentId !== null && !Number.isInteger(body.parentId)) throw badRequest('Pasta inválida.');
+    const parentId = body.parentId === undefined || body.parentId === null ? null : parseId(body.parentId);
+    res.status(201).json({ folder: await service.createFolder(req.actor, parseText(body.name, 'Nome da pasta', { min: 1, max: MAX_FOLDER_NAME }), parentId) });
   });
 
   router.patch('/folders/:id', write, async (req, res) => {
     res.json({ folder: await service.renameFolder(req.actor, parseId(req.params.id), parseText(asObject(req.body).name, 'Nome da pasta', { min: 1, max: MAX_FOLDER_NAME })) });
   });
 
-  // Apagar a pasta NÃO apaga os criativos: eles voltam para "sem pasta".
+  // Apagar a pasta apaga também as subpastas, mas NÃO apaga os criativos: eles voltam para "sem pasta".
   router.delete('/folders/:id', write, async (req, res) => {
     res.json(await service.deleteFolder(req.actor, parseId(req.params.id)));
   });

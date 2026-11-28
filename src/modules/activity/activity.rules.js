@@ -125,7 +125,13 @@ export function createActivityRules() {
         details: { count: result?.moved, items: snapshot ?? undefined, folder: body?.folderId === null ? 'Sem pasta' : (await lookups.folder(actor.id, body?.folderId))?.name },
       }),
     }),
-    rule('POST', /^\/api\/creatives\/folders$/, 'folder.create', { describe: ({ result }) => (result?.folder ? { target: result.folder.name } : null) }),
+    rule('POST', /^\/api\/creatives\/folders$/, 'folder.create', {
+      describe: async ({ actor, result, lookups }) => {
+        if (!result?.folder) return null;
+        const parent = result.folder.parentId ? await lookups.folder(actor.id, result.folder.parentId) : null;
+        return { target: result.folder.name, details: { folder: parent?.name } }; // "Pasta: Oferta A" = a pasta onde a nova foi criada
+      },
+    }),
     rule('PATCH', /^\/api\/creatives\/folders\/(\d+)$/, 'folder.rename', { describe: ({ result }) => (result?.folder ? { target: result.folder.name } : null) }),
     rule('DELETE', /^\/api\/creatives\/folders\/(\d+)$/, 'folder.delete', {
       before: async ({ actor, match, lookups }) => (await lookups.folder(actor.id, Number(match[1])))?.name ?? null,

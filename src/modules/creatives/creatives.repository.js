@@ -129,39 +129,72 @@ export function createCreativesRepository(db) {
     },
 
     // ---------- pastas ----------
-    /** Pastas do usuário com quantos criativos há em cada uma, mais os totais (todos e sem pasta). */
+    /**
+     * Pastas do usuário (lista simples; `parentId` nulo = nível mais alto) com quantos criativos há DIRETAMENTE em cada uma e o tamanho deles,
+     * mais os totais (todos e sem pasta). A tela monta a árvore e soma as subpastas (`shared/creative-folders.js`).
+     */
     async folders(userId) {
       const { rows } = await db.query(
-        `SELECT f.id, f.name, f.created_at, COUNT(c.id)::int AS total, COALESCE(SUM(c.size_bytes), 0)::bigint AS size
+        `SELECT f.id, f.name, f.parent_id, f.created_at, COUNT(c.id)::int AS total, COALESCE(SUM(c.size_bytes), 0)::bigint AS size
            FROM creative_folders f LEFT JOIN creatives c ON c.folder_id = f.id AND c.user_id = f.user_id
           WHERE f.user_id = $1 GROUP BY f.id ORDER BY lower(f.name), f.id`,
         [userId],
       );
       const counts = (await db.query('SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE folder_id IS NULL)::int AS unfiled FROM creatives WHERE user_id = $1', [userId])).rows[0];
-      return { folders: rows.map((r) => ({ id: r.id, name: r.name, count: r.total, sizeBytes: Number(r.size), createdAt: toIso(r.created_at) })), total: counts.total, unfiledCount: counts.unfiled };
+      return { folders: rows.map((r) => ({ id: r.id, name: r.name, parentId: r.parent_id ?? null, count: r.total, sizeBytes: Number(r.size), createdAt: toIso(r.created_at) })), total: counts.total, unfiledCount: counts.unfiled };
     },
     async getFolder(userId, id) {
-      const { rows } = await db.query('SELECT id, name FROM creative_folders WHERE user_id = $1 AND id = $2', [userId, id]);
-      return rows[0] ?? null;
+      const { rows } = await db.query('SELECT id, name, parent_id FROM creative_folders WHERE user_id = $1 AND id = $2', [userId, id]);
+      return rows[0] ? { id: rows[0].id, name: rows[0].name, parentId: rows[0].parent_id ?? null } : null;
     },
     async countFolders(userId) {
       const { rows } = await db.query('SELECT COUNT(*)::int AS n FROM creative_folders WHERE user_id = $1', [userId]);
       return rows[0].n;
     },
-    async createFolder(userId, name) {
-      const { rows } = await db.query('INSERT INTO creative_folders (user_id, name) VALUES ($1, $2) RETURNING id', [userId, name]);
-      return rows[0].id;
+    /** Quantos níveis há do topo até a pasta (a de nível mais alto = 1; 0 se ela não é do usuário). */
+    async folderDepth(userId, id) {
+      const { rows } = await db.query(
+        `WITH RECURSIVE up AS (
+           SELECT id, parent_id, 1 AS depth FROM creative_folders WHERE user_id = $1 AND id = $2
+           UNION ALL
+           SELECT f.id, f.parent_id, up.depth + 1 FROM creative_folders f JOIN up ON f.id = up.parent_id WHERE f.user_id = $1
+         ) SELECT COALESCE(MAX(depth), 0)::int AS depth FROM up`,
+        [userId, id],
+      );
+      return rows[0].depth;
+    },
+    /** Cria a pasta (dentro de `parentId`, se informado). Devolve o ID, ou null se o pai não é do usuário (nada é criado). */
+    async createFolder(userId, name, parentId = null) {
+      const { rows } = await db.query(
+        `INSERT INTO creative_folders (user_id, name, parent_id)
+         SELECT $1, $2, $3::int WHERE $3::int IS NULL OR EXISTS (SELECT 1 FROM creative_folders WHERE id = $3 AND user_id = $1)
+         RETURNING id`,
+        [userId, name, parentId],
+      );
+      return rows[0]?.id ?? null;
     },
     async renameFolder(userId, id, name) {
       const { rowCount } = await db.query('UPDATE creative_folders SET name = $3, updated_at = now() WHERE user_id = $1 AND id = $2', [userId, id, name]);
       return rowCount > 0;
     },
-    /** Apaga a pasta; os criativos dela ficam sem pasta (devolve quantos eram, ou null se a pasta não existe). */
+    /**
+     * Apaga a pasta E as subpastas dela (em qualquer nível); os criativos de todas elas NÃO são apagados, ficam sem pasta. Devolve
+     * `{ files, folders }` (quantos criativos estavam em toda a árvore e quantas subpastas ela tinha), ou null se a pasta não existe.
+     */
     async deleteFolder(userId, id) {
       return db.transaction(async (tx) => {
-        const { rows } = await tx.query('SELECT COUNT(*)::int AS n FROM creatives WHERE user_id = $1 AND folder_id = $2', [userId, id]);
+        const { rows } = await tx.query(
+          `WITH RECURSIVE tree AS (
+             SELECT id FROM creative_folders WHERE user_id = $1 AND id = $2
+             UNION ALL
+             SELECT f.id FROM creative_folders f JOIN tree t ON f.parent_id = t.id WHERE f.user_id = $1
+           )
+           SELECT (SELECT COUNT(*)::int FROM creatives WHERE user_id = $1 AND folder_id IN (SELECT id FROM tree)) AS files,
+                  (SELECT COUNT(*)::int FROM tree) AS folders`,
+          [userId, id],
+        );
         const { rowCount } = await tx.query('DELETE FROM creative_folders WHERE user_id = $1 AND id = $2', [userId, id]);
-        return rowCount > 0 ? rows[0].n : null;
+        return rowCount > 0 ? { files: rows[0].files, folders: rows[0].folders - 1 } : null;
       });
     },
     /**

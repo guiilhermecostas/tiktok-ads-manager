@@ -113,7 +113,10 @@ export function fileTable(creatives, { selected, showFolder, folderNameOf, sort,
 
 /** Cartão de pasta (visão "Todos os arquivos"): abre com um clique; aceita soltar criativos e arquivos do computador. */
 export function folderTile(folder) {
-  const meta = `${plural(folder.count, 'arquivo', 'arquivos')}${folder.count ? ` · ${formatBytes(folder.sizeBytes ?? 0)}` : ''}`;
+  // Os totais somam as subpastas (`withTotals`); sem eles (lista simples), vale o que há direto na pasta.
+  const files = folder.deepCount ?? folder.count;
+  const size = folder.deepSizeBytes ?? folder.sizeBytes ?? 0;
+  const meta = [plural(files, 'arquivo', 'arquivos'), folder.subfolderCount ? plural(folder.subfolderCount, 'subpasta', 'subpastas') : null, files ? formatBytes(size) : null].filter(Boolean).join(' · ');
   return h(
     'div',
     { class: 'folder-tile', 'data-folder-id': String(folder.id), 'data-drop-folder': String(folder.id) },

@@ -4,6 +4,8 @@
  * (e na restrição CHECK da coluna `tiktok_advertisers.label`, por uma nova migração).
  */
 
+import { DOWN_STATUSES, accountStatusLabel } from './assistant-ops.js';
+
 export const ACCOUNT_LABELS = Object.freeze({
   agency: 'Conta de agência',
 });
@@ -25,14 +27,29 @@ export const KIND_FILTERS = Object.freeze([
   { value: 'agency', label: 'Contas de agência' },
 ]);
 
-/** Filtro por situação: acesso funcionando (ativas) ou Business Center com erro de acesso (inativas). */
+/** Filtro por situação: ativas (acesso funcionando e conta aprovada no TikTok) ou inativas (encerrada, punida, em análise… ou Business Center com erro de acesso). */
 export const STATUS_FILTERS = Object.freeze([
   { value: 'all', label: 'Ativas e inativas' },
   { value: 'active', label: 'Somente ativas' },
   { value: 'inactive', label: 'Somente inativas' },
 ]);
 
-export const isActiveAccount = (account) => account.businessCenterStatus === 'active';
+/**
+ * Situação de uma conta de anúncio para mostrar, juntando o acesso da conexão e a situação da CONTA no TikTok (`accountStatus`, lida ao atualizar a
+ * conexão e na coleta por hora). Devolve { key, label, tone }: `error` (conexão com erro: o que se sabe da conta pode estar velho), `unknown` (situação ainda não lida),
+ * `active`, `inactive` (encerrada, punida ou reprovada) e `pending` (em análise ou aguardando algo do TikTok).
+ */
+export function accountHealth(account) {
+  if (account.businessCenterStatus !== 'active') return { key: 'error', label: 'Acesso com erro', tone: 'danger' };
+  const status = account.accountStatus ?? null;
+  if (!status) return { key: 'unknown', label: 'Sem informação', tone: 'neutral' };
+  if (status === 'STATUS_ENABLE') return { key: 'active', label: 'Ativa', tone: 'success' };
+  const down = status === 'STATUS_DISABLE' || DOWN_STATUSES.includes(status);
+  return { key: down ? 'inactive' : 'pending', label: accountStatusLabel(status), tone: down ? 'danger' : 'warning' };
+}
+
+/** Ativa = conexão funcionando e conta não conhecida como inativa. Sem situação lida ainda (`unknown`) conta como ativa: não dá para afirmar o contrário. */
+export const isActiveAccount = (account) => ['active', 'unknown'].includes(accountHealth(account).key);
 
 /** Filtro de contas: tipo, situação, moeda e Business Center (`center` = o ID da BC como texto, ou 'all'). Todos os filtros se combinam (E). */
 export function matchesAccountFilter(account, { kind = 'all', status = 'all', currency = 'all', center = 'all' } = {}) {

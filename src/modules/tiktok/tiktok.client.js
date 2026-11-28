@@ -85,7 +85,8 @@ const PIXEL_LINK_MAX_PAGES = 10;
 const IDENTITY_ID_RE = /^[A-Za-z0-9][\w\-.:]{2,98}[A-Za-z0-9]$/;
 const IDENTITY_PAGE_SIZE = 100; // documentação oficial de /identity/get/: page_size de 1 a 100
 const IDENTITY_MAX_PAGES = 5;
-const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id'];
+const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id', 'status']; // status: situação da conta (STATUS_ENABLE, STATUS_DISABLE, STATUS_LIMIT…)
+const ACCOUNT_STATUS_RE = /^STATUS_[A-Z_]{2,60}$/;
 const PROFILE_FIELDS = ['advertiser_id', 'company', 'country', 'currency', 'timezone', 'email', 'industry']; // nomes do /advertiser/info/ na documentação oficial
 // Códigos que indicam token revogado/inválido: é preciso trocar o token da Business Center.
 const TOKEN_ERROR_CODES = new Set([40104, 40105]);
@@ -361,6 +362,7 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
             currency: a.currency ?? null,
             timezone: a.timezone ?? null,
             ownerBcId: digitsOrNull(a.owner_bc_id),
+            status: ACCOUNT_STATUS_RE.test(String(a.status ?? '')) ? a.status : null, // situação da conta no TikTok (nula se o TikTok não informou)
           });
         }
       }
@@ -377,7 +379,7 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         const data = await call('/advertiser/info/', { token, query: { advertiser_ids: ids, fields: ['advertiser_id', 'name', 'status'] } });
         for (const a of data.list ?? []) {
           const id = digitsOrNull(a.advertiser_id);
-          if (id && /^STATUS_[A-Z_]{2,60}$/.test(String(a.status ?? ''))) result.push({ id, name: String(a.name ?? id).slice(0, 120), status: a.status });
+          if (id && ACCOUNT_STATUS_RE.test(String(a.status ?? ''))) result.push({ id, name: String(a.name ?? id).slice(0, 120), status: a.status });
         }
       }
       return result;

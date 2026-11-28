@@ -71,7 +71,7 @@ describe('cliente TikTok: envelope e erros', () => {
   const call = (handler) => setup(handler).client.getAdvertiserInfo(TOKEN, ['1']);
 
   it('aceita code 0 e também envelope sem `code` mas com `data` (SDK oficial: code só em erros)', async () => {
-    assert.deepEqual(await call(() => json({ code: 0, message: 'OK', data: { list: [{ advertiser_id: 1, name: 'A' }] } })), [{ id: '1', name: 'A', currency: null, timezone: null, ownerBcId: null }]);
+    assert.deepEqual(await call(() => json({ code: 0, message: 'OK', data: { list: [{ advertiser_id: 1, name: 'A' }] } })), [{ id: '1', name: 'A', currency: null, timezone: null, ownerBcId: null, status: null }]);
     assert.equal((await call(() => json({ data: { list: [{ advertiser_id: 2, name: 'B' }] } })))[0].id, '2');
   });
 
@@ -145,7 +145,7 @@ describe('cliente TikTok: paginação e limites', () => {
     assert.equal(calls.length, 3);
     assert.deepEqual(calls.map((c) => JSON.parse(c.url.searchParams.get('advertiser_ids')).length), [100, 100, 50]);
     assert.equal(result.length, 250);
-    assert.deepEqual(result[0], { id: '1', name: 'C1', currency: 'BRL', timezone: 'America/Sao_Paulo', ownerBcId: null });
+    assert.deepEqual(result[0], { id: '1', name: 'C1', currency: 'BRL', timezone: 'America/Sao_Paulo', ownerBcId: null, status: null });
     const none = setup(() => json({ code: 0, data: {} }));
     assert.deepEqual(await none.client.getAdvertiserInfo(TOKEN, []), []);
     assert.equal(none.calls.length, 0, 'lista vazia não chama a API');
@@ -332,7 +332,16 @@ describe('cliente TikTok: Business Center dona da conta (owner_bc_id)', () => {
     const { client, calls } = setup(() => info([{ advertiser_id: 9001, name: 'A', currency: 'BRL', timezone: 'X', owner_bc_id: '7000000000000000001' }, { advertiser_id: '9002', name: 'B', owner_bc_id: 'abc' }, { advertiser_id: '9003', name: 'C' }, { advertiser_id: '9004', name: 'D', owner_bc_id: '1; DROP TABLE' }]));
     const result = await client.getAdvertiserInfo(TOKEN, ['9001', '9002', '9003', '9004']);
     assert.deepEqual(result.map((a) => [a.id, a.ownerBcId]), [['9001', '7000000000000000001'], ['9002', null], ['9003', null], ['9004', null]], 'valor que não é número do TikTok nunca é guardado');
-    assert.deepEqual(JSON.parse(calls[0].url.searchParams.get('fields')), ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id']);
+    assert.deepEqual(JSON.parse(calls[0].url.searchParams.get('fields')), ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id', 'status']);
+  });
+
+  it('lê a situação da conta (`status`): só valores no formato do TikTok (STATUS_…); qualquer outra coisa vira nulo', async () => {
+    const { client } = setup(() => info([
+      { advertiser_id: '9001', name: 'A', status: 'STATUS_ENABLE' }, { advertiser_id: '9002', name: 'B', status: 'STATUS_DISABLE' }, { advertiser_id: '9003', name: 'C', status: 'banida!' },
+      { advertiser_id: '9004', name: 'D', status: 42 }, { advertiser_id: '9005', name: 'E' }, { advertiser_id: '9006', name: 'F', status: 'status_enable' },
+    ]));
+    const result = await client.getAdvertiserInfo(TOKEN, ['9001', '9002', '9003', '9004', '9005', '9006']);
+    assert.deepEqual(result.map((a) => a.status), ['STATUS_ENABLE', 'STATUS_DISABLE', null, null, null, null]);
   });
 
   it('se o TikTok recusar o parâmetro `fields`, repete SEM ele (a sincronização nunca quebra por causa do ID da BC) e não insiste nas páginas seguintes', async () => {

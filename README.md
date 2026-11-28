@@ -163,6 +163,12 @@ quando o acompanhamento começou); o TikTok não dá o horário exato da reprova
    **Pendente de conferência com o TikTok real:** a permissão do token (precisa ser de administrador da BC com acesso à gestão de contas), o formato da
    resposta (o ID é lido de forma defensiva) e as exigências por país (ex.: Brasil, México e França pedem documentos/CNPJ e e-mail; o sistema mostra o
    erro do TikTok quando faltarem — ainda não há envio de documentos).
+   **Situação das contas de anúncio (ativa, encerrada, punida, em análise…):** “Atualizar” (e a conexão, e a coleta por hora a cada 30 min) lê `status` em `/advertiser/info/` (tabela “Advertiser Status” do TikTok) e
+   guarda em `advertiser_status` (a mesma tabela do assistente: cada mudança vira um evento, então uma conta que cai aparece em “contas que caíram” já ao atualizar). A aba **Contas de anúncio** mostra o
+   selo de cada conta (Ativa, Encerrada, Punida pelo TikTok, Reprovada, Em análise…, “Acesso com erro” se a conexão caiu, “Sem informação” se ainda não foi lida) com desde quando e quando foi lida; o filtro
+   “Somente ativas/inativas” e a publicação de campanhas usam essa situação (conta sem leitura ainda conta como ativa); o cartão da conexão mostra “N inativas” e o aviso do “Atualizar” diz quantas.
+   Regras de rótulo e tom em `shared/account-labels.js` (`accountHealth`). A leitura é melhor esforço: se falhar, a atualização das contas continua. API: `GET /api/tiktok/advertisers` traz `accountStatus`, `accountStatusSince`,
+   `accountStatusCheckedAt`; os cartões (`GET /api/tiktok/business-centers`) trazem `inactiveCount`.
    **Vincular pixel a contas de anúncio (“⋯ → Vincular pixel…”):** faz pela API o que se faz no Gerenciador de Eventos (pixel → Ativos → escolher a conta de
    anúncio), para várias contas de uma vez. O pop-up lista os pixels que uma conta da conexão já enxerga (`/pixel/list/`, com nome, **código** e a BC dona
    `owner_bc_id`) ou aceita digitar o código; as contas da conexão aparecem com uma marca “Vinculada” quando já têm o pixel (`/bc/pixel/link/get/`).
@@ -397,6 +403,15 @@ outras moedas só entram com a **cotação** cadastrada pelo admin (sem ela, a t
   configuráveis por `CREATIVES_*`) e, no assistente de campanha, **seleciona** do que já está armazenado. Também é possível registrar um
   criativo que já está na conta do TikTok (por ID).
 - Envio com barra de progresso, miniaturas, pré-visualização, busca, filtros (imagens/vídeos), renomear e excluir. Arquivo repetido não duplica.
+- **Pastas e subpastas:** os criativos se organizam em pastas por oferta e **cada pasta pode ter subpastas, até 5 níveis** (no máximo 100 pastas por usuário, todas contadas).
+  O nome é único só entre pastas **irmãs** (sem diferenciar maiúsculas); em lugares diferentes pode repetir. Na tela: a barra lateral mostra as pastas de nível mais alto e,
+  sob a pasta aberta, o caminho até ela e as subpastas dela (com recuo); o **caminho** (“Criativos › Oferta A › Verão”) tem atalhos para cada nível; dentro de uma pasta há os
+  cartões das **subpastas** e o botão “Nova subpasta” (também no menu de contexto); a etiqueta de um arquivo em “Todos os arquivos” mostra o caminho inteiro. A contagem de uma
+  pasta soma as subpastas; a lista de arquivos de uma pasta mostra só os arquivos **diretos** dela. **Apagar** uma pasta apaga também as subpastas, mas **nunca os criativos**:
+  todos voltam para “Sem pasta” (a confirmação diz quantas subpastas e quantos criativos). API: `POST /api/creatives/folders` com `{ name, parentId? }` (409 `folder_too_deep` no 6º nível,
+  404 se o pai não é seu, 409 `folder_exists` entre irmãs); `GET /api/creatives/folders` devolve `parentId` e a contagem direta de cada pasta; `DELETE` devolve `{ moved, subfolders }`.
+  Migração 28: `creative_folders.parent_id` (`ON DELETE CASCADE`) e índice único por (usuário, pai, nome sem maiúsculas). **Ainda não há** mover uma pasta para dentro de outra
+  (o pai é definido ao criar) nem enviar uma pasta do computador com subpastas (as subpastas soltas são ignoradas com aviso; arraste cada uma). Regras da árvore em `shared/creative-folders.js`.
 - Ao publicar, o sistema envia a versão limpa dos arquivos escolhidos para a conta de anúncio no TikTok e usa os IDs devolvidos.
 - **Criativos blindados:** a cada publicação, em **cada conta de anúncio e em cada campanha**, vídeos e imagens passam por uma limpeza e o
   que vai ao TikTok é uma versão **nova e única** (o arquivo da biblioteca nunca é alterado). A limpeza (`src/modules/creatives/creative-cleaner.js`,

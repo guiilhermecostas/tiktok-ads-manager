@@ -433,7 +433,7 @@ describe('ID da Business Center nas conexões por link', () => {
     assert.deepEqual(accounts.map((a) => [a.id, a.ownerBcId]), [['9301', '7123450000000000001'], ['9302', '7123450000000000001']]);
     assert.deepEqual((await all(ctx.db, 'SELECT DISTINCT owner_bc_id FROM tiktok_advertisers')).map((r) => r.owner_bc_id), ['7123450000000000001']);
     const infoCall = fake.callsTo('/advertiser/info/')[0];
-    assert.deepEqual(JSON.parse(infoCall.query.fields), ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id']);
+    assert.deepEqual(JSON.parse(infoCall.query.fields), ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id', 'status']);
   });
 
   it('autorização com contas de BCs diferentes mostra todas as BCs (sem repetir, em ordem)', async () => {

@@ -1,4 +1,4 @@
-import { countByKind } from '/shared/account-labels.js';
+import { accountHealth, countByKind } from '/shared/account-labels.js';
 import { countByCurrency, currencySymbol, distinctCurrencies, isMainCurrency } from '/shared/currency.js';
 import { ACCOUNT_FIELDS, applyAccountOverrides, getPath, validateConfig } from '/shared/campaign-spec.js';
 import { h, setChildren } from '../../dom.js';
@@ -139,6 +139,8 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     if (publication?.status === 'partial') return badge('Parcial: retoma de onde parou', 'danger');
     if (publication?.status === 'failed') return badge('Falhou antes: tentar de novo', 'danger');
     if (!isUsable(account)) return badge('Acesso com erro', 'danger');
+    const health = accountHealth(account);
+    if (health.key === 'inactive' || health.key === 'pending') return badge(health.label, health.tone); // conta encerrada, punida ou em análise no TikTok
     return null;
   }
 

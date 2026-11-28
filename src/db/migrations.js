@@ -883,6 +883,22 @@ export const MIGRATIONS = [
       ${protectTables({ rls: ['billing_rates', 'billing_invoices'], revoke: ['billing_rates', 'billing_invoices'], identity: ['billing_invoices'] })}
     `,
   },
+  {
+    version: 28,
+    description: 'Pastas dentro de pastas na biblioteca de criativos (subpastas)',
+    sql: `
+      -- Cada pasta pode ter uma pasta "pai" (nula = pasta de nível mais alto). Apagar uma pasta apaga as subpastas dela (ON DELETE CASCADE);
+      -- os criativos NUNCA são apagados: voltam para "sem pasta" (creatives.folder_id é ON DELETE SET NULL). A profundidade máxima (5 níveis) é
+      -- conferida no servidor (shared/creative-folders.js): o pai de uma pasta não muda depois de criada, então a profundidade nunca muda.
+      ALTER TABLE creative_folders ADD COLUMN parent_id INTEGER REFERENCES creative_folders(id) ON DELETE CASCADE;
+
+      -- O nome continua único sem diferenciar maiúsculas, mas agora só entre pastas IRMÃS (mesmo pai): duas subpastas "Vídeos" em ofertas
+      -- diferentes são permitidas. COALESCE trata "sem pai" como um grupo só (NULL nunca é igual a NULL em índice único).
+      DROP INDEX creative_folders_user_name_key;
+      CREATE UNIQUE INDEX creative_folders_sibling_name_key ON creative_folders (user_id, COALESCE(parent_id, 0), lower(name));
+      CREATE INDEX idx_creative_folders_parent ON creative_folders (user_id, parent_id);
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_KEY = 727_001; // chave da trava de migração (advisory lock)
