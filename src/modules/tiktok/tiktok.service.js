@@ -1,8 +1,12 @@
 import { AREAS_NEEDING_DOCUMENTS, accountNames, forbidsQualification, normalizeTimezone, requiresPromotionLink } from '../../../shared/advertiser-create.js';
 import { isIndustryFor } from '../../../shared/tiktok-industries.js';
 import { isAccountLabel } from '../../../shared/account-labels.js';
+import { createHash, randomBytes } from 'node:crypto';
+import { IDENTITY_NAME_MAX, IDENTITY_PHOTO_MAX_BYTES, IDENTITY_PHOTO_MIN_SIDE, LISTABLE_IDENTITY_TYPES } from '../../../shared/identity.js';
+import { MAX_LINK_ADVERTISERS, PIXEL_LINK_ACTIONS, normalizePixelCode } from '../../../shared/pixel-link.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest, forbidden, notFound } from '../../lib/http-error.js';
+import { imageInfo } from '../../lib/image-size.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
 import { sumTotals } from './tiktok.client.js';
 import { buildAdGroupPayload, buildAdPayload, buildCampaignPayload } from './tiktok.payloads.js';
@@ -31,6 +35,18 @@ function explainCreateError(err) {
   return hint ? new HttpError(err.status, `${hint} (${err.message})`, err.code) : err;
 }
 
+/** Erros comuns do TikTok ao vincular pixel, em português e com o que fazer (a mensagem original segue entre parênteses). */
+const PIXEL_LINK_HINTS = [
+  [/(permission|not authorized|admin|role)/i, 'Sem permissão: o seu usuário precisa ser administrador do pixel e das contas de anúncio na Business Center.'],
+  [/pixel.*(not exist|not found|invalid|does not)|invalid.*pixel/i, 'O TikTok não encontrou este pixel. Confira o código (o mesmo do Gerenciador de Eventos).'],
+  [/(belong|owner|asset)/i, 'O pixel e as contas precisam estar na mesma Business Center.'],
+];
+function explainPixelLinkError(err) {
+  if (!(err instanceof HttpError) || err.code !== 'tiktok_error') return err;
+  const hint = PIXEL_LINK_HINTS.find(([pattern]) => pattern.test(err.message))?.[1];
+  return hint ? new HttpError(err.status, `${hint} (${err.message})`, err.code) : err;
+}
+
 const isoDate = (date) => date.toISOString().slice(0, 10);
 
 /**
@@ -45,6 +61,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
   // `guards`: ganchos ligados depois da montagem (assinaturas): `beforeConnect(ownerId, { bcIds, advertiserIds })` pode recusar a conexão;
   // `beforeRemove(connection)` roda antes de apagar uma conexão. Sem ganchos, nada acontece (a integração com o TikTok não depende deles).
   const creating = new Set(); // conexões com criação de contas em andamento (evita clique duplo / pedidos simultâneos)
+  const linking = new Set(); // conexões com vínculo de pixel em andamento (mesma proteção contra clique duplo)
   const dataCache = new TtlCache({ ttlMs: 60_000 });
   const overviewCache = new TtlCache({ ttlMs: 5 * 60_000, maxEntries: 200 });
   const invalidate = () => {
@@ -96,6 +113,13 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
     if (!bc || !(isAdmin(actor) || bc.ownerId === actor.id || bc.shared)) throw notFound('Business Center não encontrada.');
     if (!canManage(actor, bc)) throw forbidden('Somente o dono da Business Center ou um administrador pode alterá-la.');
     return bc;
+  }
+
+  /** A conexão precisa estar ativa e a Business Center informada precisa ser uma das dela (nunca confiamos no ID que veio da tela). */
+  function requirePixelLinkScope(bc, tiktokBcId) {
+    if (bc.status !== 'active') throw new HttpError(409, 'Esta conexão está com erro. Renove o acesso ou atualize o token antes de vincular pixels.', 'tiktok_connection_error');
+    const allowed = bc.bcId ? [bc.bcId] : bc.ownerBcIds;
+    if (!allowed.includes(tiktokBcId)) throw badRequest('Esta Business Center do TikTok não pertence a esta conexão.');
   }
 
   /** No cadastro, "token recusado" vira erro de validação (400), não de reconexão. */
@@ -409,6 +433,49 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       return { requested: count, created, visible, failure, businessCenter: present(actor, await repo.get(bcRowId)) };
     },
 
+    /**
+     * Contas de anúncio já vinculadas a um pixel (`pixelCode`) da Business Center `tiktokBcId` desta conexão. Devolve só os IDs que a pessoa
+     * enxerga nesta conexão (o TikTok pode listar contas de outras conexões; elas não são reveladas).
+     */
+    async pixelLinks(actor, bcRowId, { bcId: tiktokBcId, pixelCode }) {
+      const bc = await requireManageable(actor, bcRowId);
+      requirePixelLinkScope(bc, tiktokBcId);
+      const mine = new Set(await repo.advertiserIds(bcRowId));
+      const linked = await withBusinessCenterToken(bcRowId, (token, api) => api.getPixelLinks(token, { bcId: tiktokBcId, pixelCode })).catch((err) => { throw explainPixelLinkError(err); });
+      return { advertiserIds: linked.filter((id) => mine.has(id)) };
+    },
+
+    /**
+     * Vincula (`LINK`) ou desvincula (`UNLINK`) um pixel a contas de anúncio, pela Business Center dona do pixel. Só contas DESTA conexão
+     * (nada é enviado ao TikTok com ID de conta alheia). Um pedido por vez em cada conexão. Depois, relê o vínculo para confirmar.
+     */
+    async updatePixelLinks(actor, bcRowId, { bcId: tiktokBcId, pixelCode, advertiserIds, action }) {
+      if (!PIXEL_LINK_ACTIONS.includes(action)) throw badRequest('Ação inválida: use vincular ou desvincular.');
+      const unique = [...new Set(advertiserIds)];
+      if (!unique.length || unique.length > MAX_LINK_ADVERTISERS) throw badRequest(`Escolha de 1 a ${MAX_LINK_ADVERTISERS} contas de anúncio.`);
+      if (!normalizePixelCode(pixelCode)) throw badRequest('Código do pixel inválido (letras e números, como no Gerenciador de Eventos).');
+      const bc = await requireManageable(actor, bcRowId);
+      requirePixelLinkScope(bc, tiktokBcId);
+      const mine = new Set(await repo.advertiserIds(bcRowId));
+      if (unique.some((id) => !mine.has(id))) throw notFound('Alguma conta de anúncio não pertence a esta conexão.');
+      if (linking.has(bcRowId)) throw new HttpError(409, 'Já existe um vínculo de pixel em andamento nesta conexão. Aguarde terminar.', 'link_in_progress');
+      linking.add(bcRowId);
+      try {
+        await withBusinessCenterToken(bcRowId, (token, api) => api.updatePixelLink(token, { bcId: tiktokBcId, pixelCode, advertiserIds: unique, action })).catch((err) => { throw explainPixelLinkError(err); });
+      } finally {
+        linking.delete(bcRowId);
+      }
+      invalidate(); // as listas de pixels por conta (cache de 60 s) passam a mostrar o pixel recém-vinculado
+      log.info(`[tiktok] pixel ${action === 'LINK' ? 'vinculado' : 'desvinculado'}: usuário ${actor.id}, conexão ${bcRowId}, ${unique.length} conta(s)`); // sem token
+      let linked = null;
+      try {
+        linked = (await withBusinessCenterToken(bcRowId, (token, api) => api.getPixelLinks(token, { bcId: tiktokBcId, pixelCode }))).filter((id) => mine.has(id));
+      } catch {
+        /* o vínculo foi feito; a conferência é só um extra: a tela consulta de novo ao reabrir */
+      }
+      return { action, requested: unique.length, advertiserIds: linked };
+    },
+
     async removeBusinessCenter(actor, id) {
       const connection = await requireManageable(actor, id);
       await guards.beforeRemove?.(connection); // guarda o gasto e, havendo débito, bloqueia a BC (se falhar, a remoção NÃO acontece)
@@ -551,6 +618,57 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       return dataCache.remember(key, () =>
         withBusinessCenterToken(advertiser.businessCenterId, (token, api) => api.listPixels(token, advertiserId)),
       );
+    },
+
+    /**
+     * Identidades de UM tipo que a conta de anúncio pode usar (para escolher no anúncio em vez de digitar o ID). Em cache por 60 s.
+     * Só os tipos que o TikTok lista (identidade personalizada, conta do TikTok vinculada, conta da Business Center).
+     */
+    async identities(actor, advertiserId, { type, fresh = false } = {}) {
+      if (!LISTABLE_IDENTITY_TYPES.includes(type)) throw badRequest('Tipo de identidade inválido.');
+      const advertiser = await requireAdvertiser(actor, advertiserId);
+      const bcId = advertiser.ownerBcId ?? advertiser.bcId; // a BC dona da conta (o tipo BC_AUTH_TT pergunta por ela)
+      if (type === 'BC_AUTH_TT' && !bcId) return [];
+      const key = `identities:${advertiser.businessCenterId}:${advertiserId}:${type}`;
+      if (fresh) dataCache.delete(key); // "Atualizar" / recém-criada: mostra na hora
+      return dataCache.remember(key, () =>
+        withBusinessCenterToken(advertiser.businessCenterId, (token, api) => api.listIdentities(token, advertiserId, { identityType: type, bcId })),
+      );
+    },
+
+    /**
+     * Cria uma identidade personalizada (nome + foto opcional) na conta de anúncio, no TikTok. A foto (JPG/PNG, quadrada 1:1, até 2 MB) é
+     * conferida AQUI pelo conteúdo (não pelo tipo declarado), enviada à biblioteca de imagens da conta e só então usada na identidade.
+     * @param {{ name: string, image?: Buffer|null }} identity
+     */
+    async createIdentity(actor, advertiserId, { name, image = null }) {
+      const clean = String(name ?? '').replace(/\s+/g, ' ').trim();
+      if (!clean || clean.length > IDENTITY_NAME_MAX) throw badRequest(`O nome da identidade deve ter de 1 a ${IDENTITY_NAME_MAX} caracteres.`);
+      let photo = null;
+      if (image) {
+        if (image.length > IDENTITY_PHOTO_MAX_BYTES) throw new HttpError(413, 'A foto é grande demais (máximo 2 MB).', 'photo_too_large');
+        const info = imageInfo(image);
+        if (!info) throw badRequest('A foto precisa ser JPG ou PNG.', 'photo_invalid');
+        if (info.width !== info.height) throw badRequest('A foto precisa ser quadrada (largura igual à altura, formato 1:1).', 'photo_not_square');
+        if (info.width < IDENTITY_PHOTO_MIN_SIDE) throw badRequest(`A foto é pequena demais (use pelo menos ${IDENTITY_PHOTO_MIN_SIDE} × ${IDENTITY_PHOTO_MIN_SIDE} pixels).`, 'photo_too_small');
+        photo = { buffer: image, ext: info.type === 'png' ? 'png' : 'jpg' };
+      }
+      const advertiser = await requireAdvertiser(actor, advertiserId);
+      const id = await withBusinessCenterToken(advertiser.businessCenterId, async (token, api) => {
+        let imageId = null;
+        if (photo) {
+          imageId = await api.uploadImage(token, {
+            advertiserId,
+            data: photo.buffer,
+            fileName: `identidade-${randomBytes(6).toString('hex')}.${photo.ext}`, // o TikTok não aceita dois nomes iguais na mesma conta
+            md5: createHash('md5').update(photo.buffer).digest('hex'), // assinatura pedida pelo TikTok (não é senha)
+          });
+        }
+        return api.createIdentity(token, { advertiserId, displayName: clean, imageId });
+      });
+      invalidate(); // a lista de identidades da conta (cache de 60 s) passa a incluir a nova
+      log.info(`[tiktok] identidade personalizada criada: usuário ${actor.id}, conta ${advertiserId}, ${photo ? 'com' : 'sem'} foto`); // sem nome nem token
+      return { id, type: 'CUSTOMIZED_USER', name: clean, username: '', available: true };
     },
 
     report: async (actor, advertiserId, days) => cachedReport(await requireAdvertiser(actor, advertiserId), days),

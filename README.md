@@ -163,6 +163,18 @@ quando o acompanhamento começou); o TikTok não dá o horário exato da reprova
    **Pendente de conferência com o TikTok real:** a permissão do token (precisa ser de administrador da BC com acesso à gestão de contas), o formato da
    resposta (o ID é lido de forma defensiva) e as exigências por país (ex.: Brasil, México e França pedem documentos/CNPJ e e-mail; o sistema mostra o
    erro do TikTok quando faltarem — ainda não há envio de documentos).
+   **Vincular pixel a contas de anúncio (“⋯ → Vincular pixel…”):** faz pela API o que se faz no Gerenciador de Eventos (pixel → Ativos → escolher a conta de
+   anúncio), para várias contas de uma vez. O pop-up lista os pixels que uma conta da conexão já enxerga (`/pixel/list/`, com nome, **código** e a BC dona
+   `owner_bc_id`) ou aceita digitar o código; as contas da conexão aparecem com uma marca “Vinculada” quando já têm o pixel (`/bc/pixel/link/get/`).
+   “Vincular (N)” / “Desvincular (N)” chamam `POST /open_api/v1.3/bc/pixel/link/update/` (`bc_id`, `pixel_code`, `advertiser_ids`, `relation_status` = `LINK`/`UNLINK`);
+   desvincular pede confirmação e depois o vínculo é lido de volta para conferir. O mesmo pop-up abre pelo botão “Vincular pixel…” ao lado da lista de pixels
+   do campo “ID do Pixel” do assistente (só para quem é dono da conexão), e a lista da conta é atualizada na hora. API (dono da conexão ou admin; área “Contas TikTok”):
+   `GET /api/tiktok/business-centers/:id/pixel-links?bcId=&pixelCode=` → `{ advertiserIds }` e `POST /api/tiktok/business-centers/:id/pixel-links` com
+   `{ bcId, pixelCode, advertiserIds: [1 a 50], action: 'LINK' | 'UNLINK' }`. Regras: o código tem 6 a 40 letras/números; a BC do TikTok precisa ser uma da conexão
+   (400); só contas DESTA conexão (404, nada é enviado ao TikTok); um vínculo por vez por conexão (409); no máximo 30 pedidos a cada 10 minutos por usuário; só a conexão
+   ativa; o token nunca sai do servidor; a ação entra no registro de atividades (“Vinculou ou desvinculou um pixel…”). Regras e limites em `shared/pixel-link.js`.
+   **Pendente de conferência com o TikTok real:** a permissão do token (administrador do pixel e das contas na BC), e se `/bc/pixel/link/get/` pagina (a documentação não
+   tem parâmetros de página; o código pede as páginas seguintes só se a resposta disser que há mais e para quando nada novo chega).
    **Cada usuário enxerga e usa apenas as próprias BCs** (Início, TikTok Ads e publicação de campanhas). Nunca vê as de outros.
 3. **Compartilhamento:** somente o admin pode marcar uma BC como "compartilhada com a equipe" (em Conectar/Editar). BCs
    compartilhadas aparecem para todos como somente leitura. As BCs que existiam antes desta mudança ficaram compartilhadas.
@@ -554,6 +566,20 @@ Menu **Automação → Campanha one-click** (exige a área “Campanhas”). A p
 - **Publicação segura:** uma trava por campanha impede publicações simultâneas (sem itens duplicados no TikTok) e bloqueia editar/excluir
   enquanto publica. O início do grupo de anúncios é sempre enviado (obrigatório no TikTok), no fuso da conta.
 - O banco evolui por **migrações** (`src/db/migrations.js`), sem perder dados.
+
+### Identidade do anúncio (identidade personalizada com nome e foto)
+
+No passo **Anúncio** (e nos ajustes por conta da publicação), o campo **“ID da identidade”** lista as identidades que a conta de anúncio já tem, do tipo escolhido
+(`GET /api/tiktok/advertisers/:id/identities?type=CUSTOMIZED_USER|TT_USER|BC_AUTH_TT`, que lê `/identity/get/` do TikTok, em cache de 60 s; `BC_AUTH_TT` usa a
+BC dona da conta; `AUTH_CODE` não é listado pelo TikTok e continua sendo só o campo para colar). O ID **não é o @ do perfil**: é o que o TikTok dá à identidade.
+Para o tipo **identidade personalizada** há o botão **“Criar identidade”**: pede o **nome** (1 a 100) e uma **foto** opcional (JPG, PNG ou WebP). A foto é **recortada no
+navegador em quadrado (1:1)** pelo centro (exigência do TikTok), vira JPEG de até 640 px e nunca sai do computador sem esse recorte. O servidor
+(`POST /api/tiktok/advertisers/:id/identities?name=…`, corpo = a imagem `image/jpeg` ou `image/png`, ou JSON vazio sem foto) **confere a foto pelo conteúdo**
+(`src/lib/image-size.js`: tipo e tamanho lidos do cabeçalho; precisa ser quadrada, de pelo menos 100 px e de até 2 MB), envia a imagem à biblioteca da conta
+(`/file/image/ad/upload/`, nome único, MD5) e cria a identidade (`/identity/create/` com `display_name` e `image_uri`). Sem foto, o TikTok usa uma imagem padrão.
+Depois de criar, a lista é relida e o ID novo já entra no campo. Trocar o “Tipo de identidade” **limpa o ID** (o de um tipo não vale para outro). No máximo 20 criações a
+cada 10 minutos por usuário; só quem tem as áreas “Campanhas” ou “Contas TikTok”; conta de outra pessoa é 404. Regras e limites em `shared/identity.js`.
+**Pendente de conferência com o TikTok real:** a permissão do token para criar identidade e a exigência de tamanho mínimo da foto (o código usa 100 px por segurança).
 
 ## Estrutura
 

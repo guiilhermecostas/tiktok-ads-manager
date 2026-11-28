@@ -1665,3 +1665,25 @@ button.activity__person:hover { border-color: var(--tt-cyan-dark); }
 .oneclick-publish__banner:not(:empty) { padding: 14px 20px 0; }
 .oneclick-publish__footer { flex: none; display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); background: #fafafa; }
 .oneclick-publish__intro { margin: 0 0 12px; }
+
+/* Foto da identidade personalizada (pop-up "Criar identidade") */
+.identity-photo { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.identity-photo__preview { display: grid; place-items: center; width: 112px; height: 112px; border: 1px dashed var(--border); border-radius: 50%; overflow: hidden; background: #fafafa; font-size: 12px; }
+.identity-photo__canvas { display: block; width: 112px; height: 112px; }
+.identity-photo__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.identity-photo__actions label { cursor: pointer; }
+
+/* Vincular pixel a contas de anúncio (pop-up) */
+.link-pixel { display: flex; flex-direction: column; gap: 12px; }
+.link-pixel__tools { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.link-pixel__list { max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+.link-pixel__row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.link-pixel__row:last-child { border-bottom: 0; }
+.link-pixel__row:hover { background: #f9f9fa; }
+.link-pixel__row.is-selected { background: #f2fffe; }
+.link-pixel__row:focus-within { outline: 2px solid var(--tt-cyan-dark); outline-offset: -2px; }
+.link-pixel__name { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.link-pixel__name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-pixel__empty { padding: 14px; text-align: center; }
+.link-pixel__counter { margin: 6px 0 0; font-size: 12px; }
+.link-pixel__status:empty { display: none; }

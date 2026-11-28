@@ -48,6 +48,15 @@ export function createFakeTiktok() {
     createDelayMs: 0, // simula latência nas criações (testes de concorrência)
     pixels: {}, // conta de anúncio -> [{ pixel_id, pixel_code, pixel_name }] devolvidos por /pixel/list/
     failPixels: false, // true: /pixel/list/ responde erro do TikTok
+    identities: {}, // conta de anúncio -> identidades ([{ identity_id, identity_type, display_name, username?, available_status? }]) de /identity/get/
+    identityCreates: [], // corpos recebidos em /identity/create/
+    failIdentityCreate: '', // texto: /identity/create/ responde este erro do TikTok
+    failIdentityList: false, // true: /identity/get/ responde erro do TikTok
+    pixelLinks: {}, // "bcId:códigoDoPixel" -> contas vinculadas ([advertiserId, …]), como em /bc/pixel/link/*
+    pixelLinkCalls: [], // corpos recebidos em /bc/pixel/link/update/
+    failPixelLink: '', // texto: /bc/pixel/link/update/ responde este erro do TikTok
+    pixelLinkDelayMs: 0, // latência de /bc/pixel/link/update/ (testes de pedidos simultâneos)
+    pixelLinkPageSize: 0, // n>0: /bc/pixel/link/get/ devolve n contas por página (a página vem em `page`)
     createdAdvertisers: [], // corpos recebidos em /bc/advertiser/create/
     failAdvertiserCreateOnCall: 0, // n>0: a n-ésima criação de conta desde `createdAdvertisers = []` responde erro do TikTok
     advertiserCreateError: 'No permission to create ad accounts', // mensagem desse erro
@@ -454,6 +463,49 @@ export function createFakeTiktok() {
         const size = Number(query.page_size);
         const page = Number(query.page);
         return reply({ pixels: all.slice((page - 1) * size, page * size), page_info: { page, page_size: size, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / size)) } });
+      }
+      case '/bc/pixel/link/update/': {
+        state.pixelLinkCalls.push(body);
+        if (state.pixelLinkDelayMs) await new Promise((resolve) => { setTimeout(resolve, state.pixelLinkDelayMs); });
+        if (state.failPixelLink) return reply({}, 40002, state.failPixelLink);
+        if (!state.bcs[body?.bc_id]) return reply({}, 40002, 'No permission to this business center');
+        if (!/^[A-Za-z0-9]{6,40}$/.test(String(body.pixel_code ?? '')) || !Array.isArray(body.advertiser_ids) || !body.advertiser_ids.length) return reply({}, 40002, 'Missing required parameter');
+        if (!['LINK', 'UNLINK'].includes(body.relation_status)) return reply({}, 40002, 'relation_status is invalid');
+        const key = `${body.bc_id}:${body.pixel_code}`;
+        const current = new Set(state.pixelLinks[key] ?? []);
+        for (const id of body.advertiser_ids) {
+          if (body.relation_status === 'LINK') current.add(id);
+          else current.delete(id);
+        }
+        state.pixelLinks[key] = [...current];
+        return reply({});
+      }
+      case '/bc/pixel/link/get/': {
+        if (!state.bcs[query.bc_id]) return reply({}, 40002, 'No permission to this business center');
+        if (!query.pixel_code) return reply({}, 40002, 'Missing required parameter');
+        const all = state.pixelLinks[`${query.bc_id}:${query.pixel_code}`] ?? [];
+        const size = state.pixelLinkPageSize || all.length || 1;
+        const page = Number(query.page ?? 1);
+        return reply({ list: all.slice((page - 1) * size, page * size).map((advertiser_id) => ({ advertiser_id })), page_info: { page, page_size: size, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / size)) } });
+      }
+      case '/identity/get/': {
+        if (state.failIdentityList) return reply({}, 40002, 'No permission to access identities');
+        if (Number(query.page_size) < 1 || Number(query.page_size) > 100) return reply({}, 40002, 'page_size must be between 1 and 100');
+        if (!['CUSTOMIZED_USER', 'AUTH_CODE', 'TT_USER', 'BC_AUTH_TT'].includes(query.identity_type)) return reply({}, 40002, 'identity_type is invalid');
+        if (query.identity_type === 'BC_AUTH_TT' && !query.identity_authorized_bc_id) return reply({}, 40002, 'identity_authorized_bc_id is required when identity_type is BC_AUTH_TT');
+        const all = (state.identities[query.advertiser_id] ?? []).filter((i) => i.identity_type === query.identity_type);
+        const size = Number(query.page_size ?? 20);
+        const page = Number(query.page ?? 1);
+        return reply({ identity_list: all.slice((page - 1) * size, page * size), page_info: { page, page_size: size, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / size)) } });
+      }
+      case '/identity/create/': {
+        state.identityCreates.push(body);
+        if (state.failIdentityCreate) return reply({}, 40002, state.failIdentityCreate);
+        if (typeof body?.advertiser_id !== 'string' || !body.display_name) return reply({}, 40002, 'Missing required parameter');
+        if (body.display_name.length > 100) return reply({}, 40002, 'display_name is too long');
+        const identity = { identity_id: `7${String(1000000 + ++state.nextId).padStart(18, '0')}`, identity_type: 'CUSTOMIZED_USER', display_name: body.display_name, image_uri: body.image_uri ?? null };
+        state.identities[body.advertiser_id] = [...(state.identities[body.advertiser_id] ?? []), identity];
+        return reply({ identity_id: identity.identity_id });
       }
       case '/campaign/get/': {
         if (state.failCampaignsFor.has(query.advertiser_id)) return reply({}, 40001, 'No permission to get campaigns');

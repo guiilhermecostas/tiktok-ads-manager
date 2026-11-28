@@ -81,6 +81,10 @@ const FEED_LOG_RE = /^[\w-]{1,64}$/;
 const AD_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 const PIXEL_PAGE_SIZE = 20; // documentação oficial de /pixel/list/: page_size de 1 a 20
 const PIXEL_MAX_PAGES = 10;
+const PIXEL_LINK_MAX_PAGES = 10;
+const IDENTITY_ID_RE = /^[A-Za-z0-9][\w\-.:]{2,98}[A-Za-z0-9]$/;
+const IDENTITY_PAGE_SIZE = 100; // documentação oficial de /identity/get/: page_size de 1 a 100
+const IDENTITY_MAX_PAGES = 5;
 const INFO_FIELDS = ['advertiser_id', 'name', 'currency', 'timezone', 'owner_bc_id'];
 const PROFILE_FIELDS = ['advertiser_id', 'company', 'country', 'currency', 'timezone', 'email', 'industry']; // nomes do /advertiser/info/ na documentação oficial
 // Códigos que indicam token revogado/inválido: é preciso trocar o token da Business Center.
@@ -479,11 +483,71 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         const list = Array.isArray(data.pixels) ? data.pixels : Array.isArray(data.list) ? data.list : [];
         for (const item of list) {
           const id = digitsOrNull(item?.pixel_id);
-          if (id && !found.has(id)) found.set(id, { id, code: String(item?.pixel_code ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64), name: String(item?.pixel_name ?? '').slice(0, 120) });
+          if (id && !found.has(id)) found.set(id, { id, code: String(item?.pixel_code ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64), name: String(item?.pixel_name ?? '').slice(0, 120), ownerBcId: digitsOrNull(item?.owner_bc_id) }); // owner_bc_id: BC dona do pixel (precisa dela para vincular)
         }
         if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
       }
       return [...found.values()];
+    },
+
+    /**
+     * Identidades que a conta de anúncio pode usar (`/identity/get/`), de UM tipo: [{ id, type, name, username, available }].
+     * `bcId` (BC dona da conta) é obrigatório no tipo `BC_AUTH_TT`. Contas do TikTok (`TT_USER`/`BC_AUTH_TT`) só estão disponíveis
+     * quando o TikTok diz `AVAILABLE`; a identidade personalizada está sempre disponível. Lê o formato de forma defensiva.
+     */
+    async listIdentities(token, advertiserId, { identityType, bcId = null }) {
+      const found = new Map();
+      for (let page = 1; page <= IDENTITY_MAX_PAGES; page += 1) {
+        const query = { advertiser_id: advertiserId, identity_type: identityType, page, page_size: IDENTITY_PAGE_SIZE };
+        if (identityType === 'BC_AUTH_TT') query.identity_authorized_bc_id = bcId;
+        const data = await call('/identity/get/', { token, query });
+        const list = Array.isArray(data.identity_list) ? data.identity_list : Array.isArray(data.list) ? data.list : [];
+        for (const item of list) {
+          const id = String(item?.identity_id ?? '');
+          if (!IDENTITY_ID_RE.test(id) || found.has(id)) continue;
+          const accountType = identityType !== 'CUSTOMIZED_USER';
+          found.set(id, {
+            id,
+            type: identityType,
+            name: String(item?.display_name ?? '').slice(0, 100),
+            username: String(item?.username ?? '').replace(/[^\w.]/g, '').slice(0, 64),
+            available: accountType ? (item?.available_status === undefined || item?.available_status === null || item.available_status === 'AVAILABLE') : true,
+          });
+        }
+        if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
+      }
+      return [...found.values()];
+    },
+
+    /** Cria uma identidade personalizada (`/identity/create/`): nome (até 100) e, opcional, o `image_id` da foto (1:1) já enviada. Devolve o ID. */
+    async createIdentity(token, { advertiserId, displayName, imageId = null }) {
+      const body = { advertiser_id: advertiserId, display_name: displayName };
+      if (imageId) body.image_uri = imageId;
+      const data = await call('/identity/create/', { token, method: 'POST', body });
+      return requireMediaId(data.identity_id, 'da identidade');
+    },
+
+    /**
+     * Contas de anúncio vinculadas a um pixel (`/bc/pixel/link/get/`): lista de IDs. O pedido não documenta paginação; se a resposta disser
+     * que há mais páginas, pede as seguintes e para quando uma página não trouxer ninguém novo (nunca fica em laço).
+     */
+    async getPixelLinks(token, { bcId, pixelCode }) {
+      const found = new Set();
+      for (let page = 1; page <= PIXEL_LINK_MAX_PAGES; page += 1) {
+        const data = await call('/bc/pixel/link/get/', { token, query: page === 1 ? { bc_id: bcId, pixel_code: pixelCode } : { bc_id: bcId, pixel_code: pixelCode, page } });
+        const before = found.size;
+        for (const item of Array.isArray(data.list) ? data.list : []) {
+          const id = digitsOrNull(item?.advertiser_id);
+          if (id) found.add(id);
+        }
+        if (found.size === before || page >= (num(data.page_info?.total_page) || 1)) break;
+      }
+      return [...found];
+    },
+
+    /** Vincula (`LINK`) ou desvincula (`UNLINK`) um pixel de contas de anúncio (`/bc/pixel/link/update/`). O pixel é indicado pelo CÓDIGO. */
+    async updatePixelLink(token, { bcId, pixelCode, advertiserIds, action }) {
+      await call('/bc/pixel/link/update/', { token, method: 'POST', body: { bc_id: bcId, pixel_code: pixelCode, advertiser_ids: advertiserIds, relation_status: action } });
     },
 
     /**
@@ -903,15 +967,15 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
 
     /**
      * Envia uma imagem da biblioteca para a biblioteca de criativos do TikTok (conta de anúncio) e devolve o image_id.
-     * O arquivo é transmitido do disco (sem carregar tudo na memória). `md5` é a assinatura que o TikTok exige.
+     * O arquivo é transmitido do disco (sem carregar tudo na memória) ou, para imagens pequenas, vem em `data`. `md5` é a assinatura que o TikTok exige.
      */
-    async uploadImage(token, { advertiserId, filePath, fileName, md5 }) {
+    async uploadImage(token, { advertiserId, filePath, data: bytes = null, fileName, md5 }) {
       const form = new FormData();
       form.set('advertiser_id', advertiserId);
       form.set('upload_type', 'UPLOAD_BY_FILE');
       form.set('image_signature', md5);
       form.set('file_name', fileName);
-      form.set('image_file', await fs.openAsBlob(filePath), fileName);
+      form.set('image_file', bytes ? new Blob([bytes]) : await fs.openAsBlob(filePath), fileName); // `data`: imagem pequena já em memória (ex.: foto da identidade)
       const data = await call('/file/image/ad/upload/', { token, method: 'POST', form, timeoutMs: UPLOAD_TIMEOUT_MS });
       return requireMediaId(data.image_id ?? data.id ?? data.list?.[0]?.image_id ?? data[0]?.image_id, 'da imagem');
     },

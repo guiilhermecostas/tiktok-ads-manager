@@ -1,5 +1,6 @@
 import { get } from '../../api.js';
 import { h, setChildren } from '../../dom.js';
+import { linkPixelDialog } from '../link-pixel.js';
 
 const TTL_MS = 60_000;
 const cache = new Map(); // ID da conta -> { at, pixels }
@@ -31,6 +32,7 @@ export function createPixelPicker({ id, value, disabled = false, error = false, 
   });
   const select = h('select', { class: 'input pixel-picker__select', 'aria-label': 'Pixels que já existem na conta', disabled: true });
   const refresh = h('button', { type: 'button', class: 'btn btn--secondary btn--sm', disabled, 'aria-label': 'Atualizar a lista de pixels' }, 'Atualizar');
+  const link = h('button', { type: 'button', class: 'btn btn--secondary btn--sm', disabled, hidden: true, title: 'Liga um pixel da Business Center a esta conta (Gerenciador de Eventos → Ativos), sem sair daqui' }, 'Vincular pixel…');
   const status = h('p', { class: 'field__hint pixel-picker__status', 'aria-live': 'polite' });
   const accountSelect = accounts.length > 1
     ? h('select', { class: 'input pixel-picker__account', 'aria-label': 'Conta de anúncio de onde listar os pixels', disabled }, accounts.map((a) => h('option', { value: a.id }, `${a.name}${a.currency ? ` · ${a.currency}` : ''}`)))
@@ -47,8 +49,12 @@ export function createPixelPicker({ id, value, disabled = false, error = false, 
     select.disabled = disabled || !pixels.length;
   }
 
+  /** Só quem gerencia a conexão (dono ou admin) pode vincular pixel: para os outros o botão nem aparece. */
+  const syncLink = () => { link.hidden = !accounts.find((a) => a.id === advertiserId)?.businessCenterOwned; };
+
   async function load({ force = false } = {}) {
     const current = ++loadId;
+    syncLink();
     select.disabled = true;
     setChildren(select, h('option', { value: '' }, 'Carregando pixels…'));
     status.textContent = '';
@@ -60,7 +66,7 @@ export function createPixelPicker({ id, value, disabled = false, error = false, 
       const account = accounts.find((a) => a.id === advertiserId);
       status.textContent = pixels.length
         ? `${pixels.length === 1 ? '1 pixel' : `${pixels.length} pixels`} na conta ${account.name}. O ID do pixel vale só para a conta onde ele foi criado.`
-        : `A conta ${account.name} ainda não tem pixels. Crie em Gerenciador de Eventos → Pixel ou digite o ID.`;
+        : `A conta ${account.name} ainda não tem pixels. Crie em Gerenciador de Eventos → Pixel, use “Vincular pixel…” se ele já existe na Business Center, ou digite o ID.`;
     } catch (err) {
       if (current !== loadId) return;
       pixels = [];
@@ -82,13 +88,22 @@ export function createPixelPicker({ id, value, disabled = false, error = false, 
     load();
   });
   refresh.addEventListener('click', () => load({ force: true }));
+  link.addEventListener('click', () => {
+    const a = accounts.find((x) => x.id === advertiserId);
+    if (!a) return;
+    linkPixelDialog({
+      bc: { id: a.businessCenterId, name: a.businessCenterName, bcIds: a.businessCenterBcId ? [a.businessCenterBcId] : [a.ownerBcId].filter(Boolean) },
+      preset: { advertiserId: a.id },
+      onDone: () => load({ force: true }), // o pixel recém-vinculado já aparece na lista da conta
+    });
+  });
 
   load();
   return h(
     'div',
     { class: 'pixel-picker' },
     accountSelect,
-    h('div', { class: 'pixel-picker__row' }, select, refresh),
+    h('div', { class: 'pixel-picker__row' }, select, refresh, link),
     input,
     status,
   );

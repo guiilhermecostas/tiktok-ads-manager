@@ -1,20 +1,9 @@
 import { decryptBuffer, encryptBuffer } from '../../lib/crypto.js';
 import { HttpError, badRequest, notFound } from '../../lib/http-error.js';
+import { readBody } from '../../lib/read-body.js';
 import { ATTACHMENT_EXTENSIONS, MAX_FILES_PER_ACCOUNT, MAX_FILE_BYTES, MAX_TOTAL_BYTES, detectAttachment, sanitizeFilename } from './file-types.js';
 
 const TOO_LARGE = () => new HttpError(413, `O arquivo excede o limite de ${MAX_FILE_BYTES / 1024 / 1024} MB.`, 'file_too_large');
-
-/** Lê o corpo inteiro na memória, parando (e recusando) ao passar do limite. O limite é pequeno (5 MB), então é seguro. */
-async function readBody(stream, maxBytes) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of stream) {
-    size += chunk.length;
-    if (size > maxBytes) throw TOO_LARGE();
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
 
 /**
  * Anexos da conta (ex.: arquivos de logins para a equipe). O conteúdo é criptografado em repouso (AES-256-GCM, com o ID do dono
@@ -42,7 +31,7 @@ export function createFilesService({ repo, encryptionKey }) {
       const usage = await repo.usage(owner.id);
       if (usage.count >= MAX_FILES_PER_ACCOUNT) throw new HttpError(413, `Limite de ${MAX_FILES_PER_ACCOUNT} arquivos atingido. Exclua algum para enviar outro.`, 'quota_exceeded');
 
-      const buffer = await readBody(stream, MAX_FILE_BYTES);
+      const buffer = await readBody(stream, MAX_FILE_BYTES, TOO_LARGE);
       if (buffer.length === 0) throw badRequest('O arquivo está vazio.', 'empty_file');
       if (usage.bytes + buffer.length > MAX_TOTAL_BYTES) throw new HttpError(413, 'O espaço de anexos da conta está cheio. Exclua arquivos para liberar espaço.', 'quota_exceeded');
       // O que vale é o CONTEÚDO: a extensão precisa bater com o que o arquivo realmente é.

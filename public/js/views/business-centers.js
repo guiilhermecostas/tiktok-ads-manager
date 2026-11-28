@@ -6,6 +6,7 @@ import { alertBox, button, confirmDialog, emptyState, field, openModal, toast } 
 import { openContextMenu } from './context-menu.js';
 import { connectByLink } from './connect-link.js';
 import { createAdvertisersDialog } from './create-advertisers.js';
+import { linkPixelDialog } from './link-pixel.js';
 import { hubLayout, plural } from './hub.js';
 
 const isAdmin = () => state.user.role === 'admin';
@@ -191,6 +192,7 @@ export async function businessCentersView() {
           y: rect.bottom + 4,
           label: `Ações de ${bc.name}`,
           items: [
+            ...(active ? [{ label: 'Vincular pixel…', icon: 'link', onClick: () => linkPixelDialog({ bc, onDone: reload }) }] : []),
             ...(canRenew && active ? [{ label: 'Renovar acesso', icon: 'link', onClick: renew }] : []),
             ...(active || canRenew ? [{ label: 'Editar', icon: 'edit', onClick: edit }] : []),
             'separator',
@@ -222,6 +224,7 @@ export async function businessCentersView() {
     { class: 'hub-legend' },
     h('div', null, h('dt', null, '+ CA'), h('dd', null, 'cria novas contas de anúncio dentro da Business Center, no TikTok.')),
     h('div', null, h('dt', null, 'Atualizar'), h('dd', null, 'busca de novo, no TikTok, a lista de contas de anúncio.')),
+    h('div', null, h('dt', null, '⋯ Vincular pixel'), h('dd', null, 'liga um pixel a várias contas de anúncio de uma vez (Gerenciador de Eventos → Ativos).')),
     h('div', null, h('dt', null, '⋯ Renovar acesso'), h('dd', null, 'refaz a autorização pelo link (use se aparecer “Com erro”).')),
     h('div', null, h('dt', null, '⋯ Editar'), h('dd', null, 'muda o nome (e, na conexão por token, o token).')),
     h('div', null, h('dt', null, '⋯ Remover'), h('dd', null, 'apaga esta conexão do sistema. Nada é apagado no TikTok.')),

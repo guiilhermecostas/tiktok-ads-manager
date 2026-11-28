@@ -30,3 +30,27 @@ export async function uploadedId(client, options = {}) {
   if (res.status !== 201) throw new Error(`upload falhou: ${res.status} ${res.text}`);
   return res.json.creative.id;
 }
+
+/** PNG mínimo com a largura e a altura pedidas no cabeçalho (assinatura + IHDR): o que o servidor lê para conferir a forma da imagem. */
+export function pngWithSize(width, height) {
+  const head = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(head, 0);
+  head.writeUInt32BE(13, 8);
+  head.write('IHDR', 12, 'latin1');
+  head.writeUInt32BE(width, 16);
+  head.writeUInt32BE(height, 20);
+  return head;
+}
+
+/** JPEG mínimo (SOI + APP0 + quadro SOF) com a largura e a altura pedidas; `sof` troca o tipo do quadro (0xc0 baseline, 0xc2 progressivo). */
+export function jpegWithSize(width, height, { sof = 0xc0 } = {}) {
+  const app = Buffer.from([0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]);
+  const frame = Buffer.alloc(19);
+  frame[0] = 0xff;
+  frame[1] = sof;
+  frame.writeUInt16BE(17, 2);
+  frame[4] = 8;
+  frame.writeUInt16BE(height, 5);
+  frame.writeUInt16BE(width, 7);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), app, frame, Buffer.from([0xff, 0xd9])]);
+}

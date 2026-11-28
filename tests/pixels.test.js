@@ -5,7 +5,7 @@ import { GOOD_TOKEN, OTHER_TOKEN, createFakeTiktok, tiktokTestConfig } from './f
 import { createUser, startTestServer } from './helpers.js';
 
 const LIMITS = { register: 1000, loginIp: 1000, loginAccount: 1000, tiktokRead: 1000, tiktokWrite: 1000, teamRead: 1000, teamWrite: 1000, teamInvite: 1000, inviteLookup: 1000, inviteAccept: 1000 };
-const pixel = (id, name = `Pixel ${id}`, code = `C${id}ABC`) => ({ pixel_id: id, pixel_code: code, pixel_name: name });
+const pixel = (id, name = `Pixel ${id}`, code = `C${id}ABC`, owner = undefined) => ({ pixel_id: id, pixel_code: code, pixel_name: name, owner_bc_id: owner });
 let counter = 0;
 const emailOf = () => `px${++counter}@example.com`;
 
@@ -37,10 +37,18 @@ describe('Pixels que já existem na conta de anúncio', () => {
     fake.state.pixels = { 9001: [pixel('7001', 'Loja – compra'), pixel('7002', 'Leads')] };
     const res = await user.client.get('/api/tiktok/advertisers/9001/pixels');
     assert.equal(res.status, 200);
-    assert.deepEqual(res.json.pixels, [{ id: '7001', code: 'C7001ABC', name: 'Loja – compra' }, { id: '7002', code: 'C7002ABC', name: 'Leads' }]);
+    assert.deepEqual(res.json.pixels, [{ id: '7001', code: 'C7001ABC', name: 'Loja – compra', ownerBcId: null }, { id: '7002', code: 'C7002ABC', name: 'Leads', ownerBcId: null }]);
     assert.equal(pixelCalls()[0].query.advertiser_id, '9001');
     assert.equal(pixelCalls()[0].token ?? pixelCalls()[0].headers?.['Access-Token'], pixelCalls()[0].token ?? GOOD_TOKEN);
     assert.deepEqual((await user.client.get('/api/tiktok/advertisers/9002/pixels')).json, { pixels: [] }, 'conta sem pixel: lista vazia');
+  });
+
+  it('devolve a Business Center dona do pixel (owner_bc_id), necessária para vincular o pixel a outras contas; valor estranho vira nulo', async () => {
+    const user = await owner();
+    await connect(user);
+    fake.state.pixels = { 9001: [pixel('7010', 'Com dona', 'C7010ABC', '111'), pixel('7011', 'Dona inválida', 'C7011ABC', 'abc<script>')] };
+    const { pixels } = (await user.client.get('/api/tiktok/advertisers/9001/pixels')).json;
+    assert.deepEqual(pixels.map((p) => p.ownerBcId), ['111', null]);
   });
 
   it('o nome do pixel vem como TEXTO (HTML não é interpretado) e valores estranhos são descartados', async () => {

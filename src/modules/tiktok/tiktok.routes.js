@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import { MAX_LABEL_BATCH, isAccountLabel } from '../../../shared/account-labels.js';
 import { MAX_ACCOUNT_BASE_NAME, MAX_CREATE_ADVERTISERS, normalizeCountry, normalizeCurrency, normalizePromotionLink, normalizeTimezone } from '../../../shared/advertiser-create.js';
+import { IDENTITY_NAME_MAX, IDENTITY_PHOTO_MAX_BYTES, LISTABLE_IDENTITY_TYPES } from '../../../shared/identity.js';
+import { MAX_LINK_ADVERTISERS, PIXEL_LINK_ACTIONS, normalizePixelCode } from '../../../shared/pixel-link.js';
 import { isIndustryFor } from '../../../shared/tiktok-industries.js';
 import { RateLimiter } from '../../lib/rate-limit.js';
-import { badRequest, tooMany } from '../../lib/http-error.js';
+import { HttpError, badRequest, tooMany } from '../../lib/http-error.js';
+import { readBody } from '../../lib/read-body.js';
 import { asObject, parseEmail, parseId, parseText } from '../../lib/validation.js';
 import { requireArea } from '../../middleware/workspace.js';
 
@@ -32,6 +35,21 @@ function parseOptionalBool(value, label) {
 function parseAdvertiserId(value) {
   if (typeof value !== 'string' || !NUMERIC_ID_RE.test(value)) throw badRequest('Conta de anúncio inválida.');
   return value;
+}
+
+/** Código do pixel (o do Gerenciador de Eventos do TikTok). */
+function parsePixelCode(value) {
+  const code = normalizePixelCode(value);
+  if (!code) throw badRequest('Código do pixel inválido (letras e números, como no Gerenciador de Eventos).');
+  return code;
+}
+
+/** Corpo de "vincular pixel": BC do TikTok, código do pixel, 1 a MAX contas (IDs numéricos, sem repetição) e a ação. */
+function parsePixelLinkRequest(body) {
+  const b = asObject(body);
+  if (!Array.isArray(b.advertiserIds) || b.advertiserIds.length < 1 || b.advertiserIds.length > MAX_LINK_ADVERTISERS) throw badRequest(`Escolha de 1 a ${MAX_LINK_ADVERTISERS} contas de anúncio.`);
+  if (!PIXEL_LINK_ACTIONS.includes(b.action)) throw badRequest('Ação inválida: use vincular ou desvincular.');
+  return { bcId: parseBcId(b.bcId), pixelCode: parsePixelCode(b.pixelCode), advertiserIds: [...new Set(b.advertiserIds.map(parseAdvertiserId))], action: b.action };
 }
 
 /** Corpo de "etiquetar contas": `{ advertiserIds: ['…'], label: 'agency' | null }` (null remove a etiqueta). */
@@ -106,6 +124,10 @@ export function createTiktokRouter({ service, limits = {} }) {
   };
   // Criar contas é irreversível por aqui e consome o limite do TikTok: poucos pedidos por 10 minutos, por usuário.
   const createLimiter = new RateLimiter({ max: limits.tiktokCreate ?? 6, windowMs: 10 * 60 * 1000 });
+  // Vincular pixel altera ativos da Business Center no TikTok: limite próprio, por usuário.
+  const pixelLinkLimiter = new RateLimiter({ max: limits.tiktokPixelLink ?? 30, windowMs: 10 * 60 * 1000 });
+  // Criar identidade cria algo no TikTok e envia uma imagem: poucos pedidos por 10 minutos, por usuário.
+  const identityLimiter = new RateLimiter({ max: limits.tiktokIdentity ?? 20, windowMs: 10 * 60 * 1000 });
   const read = throttle(readLimiter);
   const write = [throttle(writeLimiter)];
   // Permissões de colaborador (o dono sempre passa): gerenciar conexões = "accounts"; relatórios = "reports";
@@ -164,6 +186,17 @@ export function createTiktokRouter({ service, limits = {} }) {
     res.status(201).json(await service.createAdvertisers(req.actor, parseId(req.params.id), parseCreateAdvertisersRequest(req.body)));
   });
 
+  // Pixel × contas de anúncio (Gerenciador de Eventos → pixel → Ativos). Só o dono da conexão ou o admin.
+  // GET ?bcId=&pixelCode= → { advertiserIds }: contas desta conexão que já têm o pixel vinculado.
+  router.get('/business-centers/:id/pixel-links', accounts, read, async (req, res) => {
+    res.json(await service.pixelLinks(req.actor, parseId(req.params.id), { bcId: parseBcId(req.query.bcId), pixelCode: parsePixelCode(req.query.pixelCode) }));
+  });
+
+  // POST { bcId, pixelCode, advertiserIds: [...], action: 'LINK' | 'UNLINK' }
+  router.post('/business-centers/:id/pixel-links', accounts, ...write, throttle(pixelLinkLimiter), async (req, res) => {
+    res.json(await service.updatePixelLinks(req.actor, parseId(req.params.id), parsePixelLinkRequest(req.body)));
+  });
+
   router.delete('/business-centers/:id', accounts, ...write, async (req, res) => {
     await service.removeBusinessCenter(req.actor, parseId(req.params.id));
     res.status(204).end();
@@ -201,6 +234,32 @@ export function createTiktokRouter({ service, limits = {} }) {
     res.json({ pixels: await service.pixels(req.actor, parseAdvertiserId(req.params.advertiserId), { fresh: req.query.fresh === '1' }) });
   });
 
+  // Identidades que a conta pode usar no anúncio (seletor do passo "Anúncio"). ?type= CUSTOMIZED_USER | TT_USER | BC_AUTH_TT; ?fresh=1 ignora o cache.
+  router.get('/advertisers/:advertiserId/identities', requireArea('campaigns', 'accounts'), read, async (req, res) => {
+    const type = typeof req.query.type === 'string' ? req.query.type : 'CUSTOMIZED_USER';
+    if (!LISTABLE_IDENTITY_TYPES.includes(type)) throw badRequest('Tipo de identidade inválido.');
+    res.json({ identities: await service.identities(req.actor, parseAdvertiserId(req.params.advertiserId), { type, fresh: req.query.fresh === '1' }) });
+  });
+
+  // Cria uma identidade personalizada: o nome vai em ?name=; a foto (opcional) é o CORPO da requisição (image/jpeg ou image/png, quadrada, até 2 MB).
+  // Sem foto, o corpo é JSON vazio. O servidor confere a imagem pelo conteúdo.
+  router.post('/advertisers/:advertiserId/identities', requireArea('campaigns', 'accounts'), ...write, throttle(identityLimiter), async (req, res) => {
+    const advertiserId = parseAdvertiserId(req.params.advertiserId);
+    const name = parseText(req.query.name, 'Nome da identidade', { min: 1, max: IDENTITY_NAME_MAX });
+    const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+    let image = null;
+    if (type === 'image/jpeg' || type === 'image/png') {
+      const declared = Number(req.headers['content-length']);
+      const tooLarge = () => new HttpError(413, 'A foto é grande demais (máximo 2 MB).', 'photo_too_large');
+      if (Number.isFinite(declared) && declared > IDENTITY_PHOTO_MAX_BYTES) throw tooLarge(); // recusa antes de ler
+      image = await readBody(req, IDENTITY_PHOTO_MAX_BYTES, tooLarge);
+      if (!image.length) image = null;
+    } else if (type !== 'application/json') {
+      throw new HttpError(415, 'Envie a foto como JPG ou PNG (ou nenhuma foto).', 'unsupported_media_type');
+    }
+    res.status(201).json({ identity: await service.createIdentity(req.actor, advertiserId, { name, image }) });
+  });
+
   router.get('/advertisers/:advertiserId/report', reports, read, async (req, res) => {
     res.json(await service.report(req.actor, parseAdvertiserId(req.params.advertiserId), parseDays(req.query.days)));
   });
@@ -213,6 +272,8 @@ export function createTiktokRouter({ service, limits = {} }) {
   router.stop = () => {
     readLimiter.stop();
     writeLimiter.stop();
+    pixelLinkLimiter.stop();
+    identityLimiter.stop();
     createLimiter.stop();
   };
   return router;

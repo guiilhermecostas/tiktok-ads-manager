@@ -248,14 +248,14 @@ export function createBusinessCentersRepository(db, { encryptionKey }) {
     /** Se a mesma conta existir em mais de uma BC visível, prefere a do próprio usuário. */
     async findAdvertiser(advertiserId, userId) {
       const { rows } = await db.query(
-        `SELECT a.advertiser_id, a.name, a.currency, a.timezone, bc.id AS bc_row_id
+        `SELECT a.advertiser_id, a.name, a.currency, a.timezone, a.owner_bc_id, bc.id AS bc_row_id, bc.bc_id AS bc_external_id
            FROM tiktok_advertisers a JOIN tiktok_business_centers bc ON bc.id = a.business_center_id
           WHERE a.advertiser_id = $1 AND bc.status = 'active' AND (bc.owner_id = $2 OR bc.shared)
           ORDER BY (bc.owner_id = $2) DESC, bc.id LIMIT 1`,
         [advertiserId, userId],
       );
       const row = rows[0];
-      return row ? { id: row.advertiser_id, name: row.name, currency: row.currency, timezone: row.timezone, businessCenterId: row.bc_row_id } : null;
+      return row ? { id: row.advertiser_id, name: row.name, currency: row.currency, timezone: row.timezone, businessCenterId: row.bc_row_id, ownerBcId: row.owner_bc_id ?? null, bcId: row.bc_external_id ?? null } : null;
     },
   };
 }

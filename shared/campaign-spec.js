@@ -289,7 +289,7 @@ export const FIELDS = {
         { value: 'CUSTOMIZED_USER', label: 'Identidade personalizada' }, { value: 'AUTH_CODE', label: 'Conta do TikTok (código de autorização)' },
         { value: 'TT_USER', label: 'Conta do TikTok vinculada' }, { value: 'BC_AUTH_TT', label: 'Conta do TikTok da Business Center' },
       ] },
-    { key: 'identityId', perAccount: true, label: 'ID da identidade', help: 'O número da conta do TikTok que vai assinar o anúncio.', type: 'string', step: 'ad', group: 'Identidade', required: true, pattern: MEDIA_ID_PATTERN, patternMessage: 'Use letras, números, _ ou - (4 a 100 caracteres).', max: 100 },
+    { key: 'identityId', perAccount: true, label: 'ID da identidade', help: 'O ID que o TikTok dá à identidade (não é o @ do perfil). Escolha uma da lista ou crie uma identidade personalizada com nome e foto.', type: 'string', step: 'ad', group: 'Identidade', required: true, pattern: MEDIA_ID_PATTERN, patternMessage: 'Use letras, números, _ ou - (4 a 100 caracteres).', max: 100 },
     { key: 'displayName', label: 'Nome exibido (identidade personalizada)', help: 'O nome que as pessoas veem acima do vídeo, ex.: o nome da sua marca.', type: 'string', step: 'ad', group: 'Identidade', min: 1, max: 40, showWhen: { 'ad.identityType': ['CUSTOMIZED_USER'] } },
     // Criativos vêm da BIBLIOTECA do usuário (ids inteiros). No momento da publicação o servidor envia o arquivo ao TikTok
     // (ou reaproveita o envio anterior para a mesma conta de anúncio) e usa o ID que o TikTok devolver.

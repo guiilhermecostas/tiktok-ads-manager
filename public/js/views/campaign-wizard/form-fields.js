@@ -5,6 +5,7 @@ import { centsToInput, parseMoneyToCents } from '../../format.js';
 import { creativeThumb } from '../creatives/thumb.js';
 import { createMultiChoice } from './choice-controls.js';
 import { createCatalogPicker, createProductSetPicker } from './catalog-picker.js';
+import { createIdentityPicker } from './identity-picker.js';
 import { createPixelPicker } from './pixel-picker.js';
 
 let uid = 0;
@@ -83,6 +84,12 @@ function renderField({ section, field }, ctx) {
   // Pixel: escolhe entre os que já existem na conta (e ainda dá para digitar o ID). Só quando o contexto traz contas usáveis.
   if (field.key === 'pixelId' && ctx.pixelAccounts?.length) {
     const picker = createPixelPicker({ id, value, disabled, error: Boolean(error), describedBy, accounts: ctx.pixelAccounts, onPick: (v) => ctx.set(path, v) });
+    return wrapper({ path, field, id, wide: true, error, describedBy, control: picker, required });
+  }
+
+  // Identidade: escolhe entre as que já existem na conta, ou cria uma personalizada (nome + foto) sem sair do assistente.
+  if (field.key === 'identityId' && ctx.pixelAccounts?.length) {
+    const picker = createIdentityPicker({ id, value, disabled, error: Boolean(error), describedBy, accounts: ctx.pixelAccounts, identityType: getPath(ctx.config, 'ad.identityType'), onPick: (v) => ctx.set(path, v) });
     return wrapper({ path, field, id, wide: true, error, describedBy, control: picker, required });
   }
 
@@ -227,7 +234,10 @@ function enumControl(field, initialValue, path, ctx, { id, describedBy, error, d
   }
   const select = h(
     'select',
-    { id, class: `input${error ? ' input--error' : ''}`, disabled, 'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy, onChange: (e) => ctx.set(path, e.target.value || undefined, { rerender: true }) },
+    { id, class: `input${error ? ' input--error' : ''}`, disabled, 'aria-invalid': error ? 'true' : null, 'aria-describedby': describedBy, onChange: (e) => {
+      if (path === 'ad.identityType') ctx.set('ad.identityId', undefined); // o ID de um tipo de identidade não vale para outro
+      ctx.set(path, e.target.value || undefined, { rerender: true });
+    } },
     h('option', { value: '' }, field.required || isRequired(field, ctx.config) ? 'Selecione…' : '— Nenhum —'),
     options.map((o) => h('option', { value: o.value }, o.label)),
   );

@@ -52,6 +52,8 @@ export const ACTIONS = Object.freeze({
   'bc.sync': { group: 'accounts', label: 'Atualizou as contas de uma conexão' },
   'bc.remove': { group: 'accounts', label: 'Removeu uma conexão' },
   'advertiser.create': { group: 'accounts', label: 'Criou contas de anúncio' },
+  'identity.create': { group: 'accounts', label: 'Criou uma identidade personalizada' },
+  'pixel.link': { group: 'accounts', label: 'Vinculou ou desvinculou um pixel de contas de anúncio' },
   'proxy.create': { group: 'accounts', label: 'Cadastrou uma proxy' },
   'proxy.update': { group: 'accounts', label: 'Editou uma proxy' },
   'proxy.delete': { group: 'accounts', label: 'Removeu uma proxy' },

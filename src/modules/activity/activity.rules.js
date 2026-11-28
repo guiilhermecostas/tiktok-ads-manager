@@ -175,6 +175,17 @@ export function createActivityRules() {
         return created.length ? { target: result.businessCenter?.name, details: { count: created.length, accounts: created.map((c) => (c.name ? `${c.name} (ID ${c.id})` : `ID ${c.id}`)) } } : null;
       },
     }),
+    // Identidade personalizada (nome + foto): só o nome e a conta de anúncio (a foto nunca é copiada).
+    rule('POST', /^\/api\/tiktok\/advertisers\/(\d+)\/identities$/, 'identity.create', {
+      describe: async ({ actor, match, result, lookups }) => (result?.identity ? { target: result.identity.name, details: { account: named(await lookups.advertiser(match[1], actor.id)) ?? `ID ${match[1]}` } } : null),
+    }),
+    rule('POST', new RegExp(`^${B}/(\\d+)/pixel-links$`), 'pixel.link', {
+      describe: ({ body, result }) => {
+        if (!result || !Array.isArray(body?.advertiserIds)) return null;
+        const ids = body.advertiserIds.filter((id) => typeof id === 'string');
+        return { target: typeof body.pixelCode === 'string' ? `Pixel ${body.pixelCode}` : undefined, details: { change: body.action === 'UNLINK' ? 'Desvinculou' : 'Vinculou', count: ids.length, accounts: ids.map((id) => `ID ${id}`) } };
+      },
+    }),
     rule('POST', /^\/api\/proxies$/, 'proxy.create', { describe: ({ result }) => ({ target: result?.proxy?.name }) }),
     rule('PATCH', /^\/api\/proxies\/(\d+)$/, 'proxy.update', { describe: ({ result }) => ({ target: result?.proxy?.name }) }),
     rule('DELETE', /^\/api\/proxies\/(\d+)$/, 'proxy.delete', {
