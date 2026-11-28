@@ -52,6 +52,8 @@ export function createFakeTiktok() {
     identityCreates: [], // corpos recebidos em /identity/create/
     failIdentityCreate: '', // texto: /identity/create/ responde este erro do TikTok
     failIdentityList: false, // true: /identity/get/ responde erro do TikTok
+    pixelEventCreates: [], // corpos recebidos em /pixel/event/create/
+    failPixelEventCreate: '', // texto: /pixel/event/create/ responde este erro do TikTok
     pixelLinks: {}, // "bcId:códigoDoPixel" -> contas vinculadas ([advertiserId, …]), como em /bc/pixel/link/*
     pixelLinkCalls: [], // corpos recebidos em /bc/pixel/link/update/
     failPixelLink: '', // texto: /bc/pixel/link/update/ responde este erro do TikTok
@@ -507,6 +509,18 @@ export function createFakeTiktok() {
         state.identities[body.advertiser_id] = [...(state.identities[body.advertiser_id] ?? []), identity];
         return reply({ identity_id: identity.identity_id });
       }
+      case '/pixel/event/create/': {
+        state.pixelEventCreates.push(body);
+        if (state.failPixelEventCreate) return reply({}, 40002, state.failPixelEventCreate);
+        const pixel = (state.pixels[body?.advertiser_id] ?? []).find((p) => p.pixel_id === body?.pixel_id);
+        if (!pixel) return reply({}, 40002, 'Pixel not found');
+        const VALID = ['SHOPPING', 'INITIATE_ORDER', 'ON_WEB_CART', 'ADD_BILLING', 'ON_WEB_DETAIL', 'FORM', 'ON_WEB_REGISTER', 'ON_WEB_SUBSCRIBE', 'ON_WEB_SEARCH', 'ON_WEB_ADD_TO_WISHLIST', 'CONSULT', 'DOWNLOAD_START'];
+        for (const event of body.pixel_events ?? []) {
+          if (!VALID.includes(event.event_type)) return reply({}, 40002, 'event_type is invalid');
+          pixel.events = [...(pixel.events ?? []), { event_type: event.event_type, optimization_event: event.event_type, event_name: event.event_name ?? '', event_id: String(++state.nextId) }];
+        }
+        return reply({});
+      }
       case '/campaign/get/': {
         if (state.failCampaignsFor.has(query.advertiser_id)) return reply({}, 40001, 'No permission to get campaigns');
         if (state.rateLimitFor.has(query.advertiser_id)) return reply({}, 40100, 'Too many requests');
@@ -789,6 +803,11 @@ export function createFakeTiktok() {
       case '/adgroup/create/':
         if (state.failForAdvertiser.get(body?.advertiser_id) === 'adGroup') return reply({}, 40002, 'Invalid optimization goal for this objective');
         if (state.failCreate.has('adGroup')) return reply({}, 40002, 'Invalid optimization goal for this objective');
+        // Comportamento real do TikTok: o evento de conversão precisa existir NO PIXEL (só confere quando o pixel da conta declara `events`).
+        if (body?.pixel_id && body?.optimization_event) {
+          const pixel = (state.pixels[body.advertiser_id] ?? []).find((p) => p.pixel_id === body.pixel_id);
+          if (Array.isArray(pixel?.events) && !pixel.events.some((e) => e.optimization_event === body.optimization_event)) return reply({}, 40002, 'This pixel event type does not exist. Please make sure that you have created the pixel event in Events Manager.');
+        }
         if (state.strictCatalog && catalogAdGroupError(body)) return reply({}, 40002, catalogAdGroupError(body));
         state.adgroupsById[String(state.nextId + 1)] = body;
         return reply({ adgroup_id: String(++state.nextId) });

@@ -83,7 +83,7 @@ function renderField({ section, field }, ctx) {
 
   // Pixel: escolhe entre os que já existem na conta (e ainda dá para digitar o ID). Só quando o contexto traz contas usáveis.
   if (field.key === 'pixelId' && ctx.pixelAccounts?.length) {
-    const picker = createPixelPicker({ id, value, disabled, error: Boolean(error), describedBy, accounts: ctx.pixelAccounts, onPick: (v) => ctx.set(path, v) });
+    const picker = createPixelPicker({ id, value, disabled, error: Boolean(error), describedBy, accounts: ctx.pixelAccounts, getEvent: () => getPath(ctx.config, 'adGroup.optimizationEvent'), onPick: (v) => ctx.set(path, v) });
     return wrapper({ path, field, id, wide: true, error, describedBy, control: picker, required });
   }
 

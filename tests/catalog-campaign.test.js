@@ -64,7 +64,7 @@ describe('Campanha de catálogo: regras do assistente (contrato oficial de Catal
     assert.ok(paths({ adGroup: { optimizationGoal: 'CLICK', billingEvent: 'OCPM' } }).includes('adGroup.billingEvent'), 'Cliques = CPC');
     assert.deepEqual(paths({ adGroup: { optimizationGoal: 'CLICK', billingEvent: 'CPC' } }), []);
     assert.ok(paths({ adGroup: { optimizationGoal: 'CONVERT', billingEvent: 'CPC' } }).includes('adGroup.billingEvent'), 'Conversão = oCPM');
-    assert.ok(paths({ adGroup: { optimizationGoal: 'VALUE', optimizationEvent: 'ADD_TO_CART' } }).includes('adGroup.optimizationEvent'), 'Valor = Compra (geral)');
+    assert.ok(paths({ adGroup: { optimizationGoal: 'VALUE', optimizationEvent: 'ON_WEB_CART' } }).includes('adGroup.optimizationEvent'), 'Valor = Compra (geral)');
     assert.ok(paths({ adGroup: { optimizationGoal: 'VALUE', optimizationEvent: 'SHOPPING', bidType: 'BID_TYPE_CUSTOM', bidPrice: 500 } }).includes('adGroup.bidType'), 'Valor = menor custo');
     assert.deepEqual(paths({ adGroup: { optimizationGoal: 'VALUE', optimizationEvent: 'SHOPPING' } }), []);
     assert.ok(paths({ adGroup: { bidType: 'BID_TYPE_NO_BID', pacing: 'PACING_MODE_FAST' } }).includes('adGroup.pacing'), 'menor custo = ritmo padrão');

@@ -181,6 +181,9 @@ export function createActivityRules() {
         return created.length ? { target: result.businessCenter?.name, details: { count: created.length, accounts: created.map((c) => (c.name ? `${c.name} (ID ${c.id})` : `ID ${c.id}`)) } } : null;
       },
     }),
+    rule('POST', /^\/api\/tiktok\/advertisers\/(\d+)\/pixel-events$/, 'pixel.event_create', {
+      describe: async ({ actor, match, body, result, lookups }) => (result?.created ? { target: typeof body?.pixelId === 'string' ? `Pixel ${body.pixelId}` : undefined, details: { account: named(await lookups.advertiser(match[1], actor.id)) ?? `ID ${match[1]}`, change: typeof body?.eventType === 'string' ? body.eventType : undefined } } : null),
+    }),
     // Identidade personalizada (nome + foto): só o nome e a conta de anúncio (a foto nunca é copiada).
     rule('POST', /^\/api\/tiktok\/advertisers\/(\d+)\/identities$/, 'identity.create', {
       describe: async ({ actor, match, result, lookups }) => (result?.identity ? { target: result.identity.name, details: { account: named(await lookups.advertiser(match[1], actor.id)) ?? `ID ${match[1]}` } } : null),

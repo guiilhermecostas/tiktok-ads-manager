@@ -582,6 +582,22 @@ Menu **Automação → Campanha one-click** (exige a área “Campanhas”). A p
   enquanto publica. O início do grupo de anúncios é sempre enviado (obrigatório no TikTok), no fuso da conta.
 - O banco evolui por **migrações** (`src/db/migrations.js`), sem perder dados.
 
+### Evento de conversão do pixel (erro “This pixel event type does not exist”)
+
+Em campanha de **conversões**, o grupo de anúncios otimiza por um **evento do pixel** (Compra, Início de pedido…) e o TikTok só aceita se o evento **já existir no pixel**; vincular o pixel
+à conta **não** cria eventos. O campo “Evento de conversão” oferece agora exatamente os **12 eventos web da tabela oficial** (`shared/pixel-events.js`: `SHOPPING`, `INITIATE_ORDER`,
+`ON_WEB_CART`, `ADD_BILLING`, `ON_WEB_DETAIL`, `FORM`, `ON_WEB_REGISTER`, `ON_WEB_SUBSCRIBE`, `ON_WEB_SEARCH`, `ON_WEB_ADD_TO_WISHLIST`, `CONSULT`, `DOWNLOAD_START`). As versões antigas ofereciam
+“Pagamento concluído” (`COMPLETE_PAYMENT`) e “Adicionar ao carrinho” (`ADD_TO_CART`), valores que **não existem** no TikTok: campanhas e configurações salvas com eles são corrigidas sozinhas
+(Pagamento concluído → Compra; Carrinho → `ON_WEB_CART`).
+- **Seletor de pixel:** ao escolher um pixel da lista, mostra os **eventos que ele já tem** (`events` de `/pixel/list/`, só os padrões) e, se o evento da campanha não estiver entre eles, um aviso com o botão
+  **“Criar ‘Compra’ no pixel”**. O pop-up cria o evento pela API (`POST /api/tiktok/advertisers/:id/pixel-events` com `{ pixelId, eventType, name? }` → `/pixel/event/create/`, sem regras, estatística
+  “toda vez”): só mostra os eventos que o pixel ainda não tem; o servidor confere que o pixel está na lista da conta (404 se não) e não recria evento que já existe; limite de 20 criações a cada 10 min por usuário; entra
+  no registro de atividades. **Para o evento contar conversões o site precisa enviá-lo** (código do pixel ou API de Eventos): criar o evento só o registra no pixel.
+- **Antes de publicar:** se o pixel aparece na lista da conta COM eventos e o escolhido não está entre eles, a publicação é recusada **antes de criar qualquer coisa** (422 `pixel_event_missing`, dizendo o que o pixel
+  tem e o que fazer). Pixel novo (lista vazia: o TikTok atualiza essa lista a cada 2 a 4 horas), pixel que não aparece ou falha na consulta **não bloqueiam**; se o TikTok recusar mesmo assim, o erro vem
+  **explicado em português** (mantendo a mensagem original entre parênteses) e a campanha retoma de onde parou depois de criar o evento.
+**Pendente de conferência com o TikTok real:** se `/pixel/event/create/` sem regras registra o evento em todos os tipos de pixel (a documentação não detalha) e a permissão do token para alterar o pixel.
+
 ### Identidade do anúncio (identidade personalizada com nome e foto)
 
 No passo **Anúncio** (e nos ajustes por conta da publicação), o campo **“ID da identidade”** lista as identidades que a conta de anúncio já tem, do tipo escolhido

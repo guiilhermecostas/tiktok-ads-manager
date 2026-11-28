@@ -157,6 +157,19 @@ export function numericFields(object) {
 }
 
 /** ID numérico do TikTok (só dígitos) ou null: nunca guardamos texto livre vindo da resposta. */
+/**
+ * Eventos que o pixel já tem (`events` de /pixel/list/): [{ optimizationEvent, name }]. Só os eventos padrão com `optimization_event` no formato do TikTok
+ * (o valor que o grupo de anúncios usa); eventos personalizados e valores estranhos ficam de fora. Sem repetição.
+ */
+function pixelEventsOf(list) {
+  const found = new Map();
+  for (const item of Array.isArray(list) ? list : []) {
+    const value = String(item?.optimization_event ?? '');
+    if (/^[A-Z][A-Z0-9_]{1,59}$/.test(value) && !found.has(value)) found.set(value, { optimizationEvent: value, name: String(item?.event_name ?? item?.name ?? '').slice(0, 80) });
+  }
+  return [...found.values()];
+}
+
 const digitsOrNull = (value) => (/^\d{1,24}$/.test(String(value ?? '')) ? String(value) : null);
 const chunk = (list, size) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 const num = (value) => {
@@ -485,7 +498,7 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         const list = Array.isArray(data.pixels) ? data.pixels : Array.isArray(data.list) ? data.list : [];
         for (const item of list) {
           const id = digitsOrNull(item?.pixel_id);
-          if (id && !found.has(id)) found.set(id, { id, code: String(item?.pixel_code ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64), name: String(item?.pixel_name ?? '').slice(0, 120), ownerBcId: digitsOrNull(item?.owner_bc_id) }); // owner_bc_id: BC dona do pixel (precisa dela para vincular)
+          if (id && !found.has(id)) found.set(id, { id, code: String(item?.pixel_code ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64), name: String(item?.pixel_name ?? '').slice(0, 120), ownerBcId: digitsOrNull(item?.owner_bc_id), events: pixelEventsOf(item?.events) }); // owner_bc_id: BC dona do pixel (precisa dela para vincular); events: o que o pixel já tem
         }
         if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
       }
@@ -527,6 +540,16 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
       if (imageId) body.image_uri = imageId;
       const data = await call('/identity/create/', { token, method: 'POST', body });
       return requireMediaId(data.identity_id, 'da identidade');
+    },
+
+    /**
+     * Cria um evento padrão no pixel (`/pixel/event/create/`): `eventType` é o valor de `optimization_event` (ex.: SHOPPING = Compra). Sem regras: o evento passa
+     * a existir no pixel e começa a contar quando o site enviá-lo. O nome é opcional (até 40 caracteres).
+     */
+    async createPixelEvent(token, { advertiserId, pixelId, eventType, eventName = '' }) {
+      const event = { event_type: eventType, statistic_type: 'EVERY_TIME' };
+      if (eventName) event.event_name = eventName;
+      await call('/pixel/event/create/', { token, method: 'POST', body: { advertiser_id: advertiserId, pixel_id: pixelId, pixel_events: [event] } });
     },
 
     /**

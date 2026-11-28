@@ -3,6 +3,7 @@ import { isIndustryFor } from '../../../shared/tiktok-industries.js';
 import { isAccountLabel } from '../../../shared/account-labels.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { IDENTITY_NAME_MAX, IDENTITY_PHOTO_MAX_BYTES, IDENTITY_PHOTO_MIN_SIDE, LISTABLE_IDENTITY_TYPES } from '../../../shared/identity.js';
+import { PIXEL_EVENT_NAME_MAX, isPixelEvent, pixelEventLabel } from '../../../shared/pixel-events.js';
 import { MAX_LINK_ADVERTISERS, PIXEL_LINK_ACTIONS, normalizePixelCode } from '../../../shared/pixel-link.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest, forbidden, notFound } from '../../lib/http-error.js';
@@ -45,6 +46,34 @@ function explainPixelLinkError(err) {
   if (!(err instanceof HttpError) || err.code !== 'tiktok_error') return err;
   const hint = PIXEL_LINK_HINTS.find(([pattern]) => pattern.test(err.message))?.[1];
   return hint ? new HttpError(err.status, `${hint} (${err.message})`, err.code) : err;
+}
+
+/** O TikTok recusa o grupo de anúncios quando o evento de conversão não existe no pixel: explica em português e diz o que fazer. */
+const PIXEL_EVENT_REJECTED = /pixel event (type )?does not exist|create(d)? the pixel event/i;
+function explainPublishError(err) {
+  if (!(err instanceof HttpError) || err.code !== 'tiktok_error' || !PIXEL_EVENT_REJECTED.test(err.message)) return err;
+  const explained = new HttpError(422, `O pixel escolhido não tem o evento de conversão da campanha. Crie o evento no pixel (no passo “Meta e conversão”, em “Criar evento no pixel”, ou no Gerenciador de Eventos do TikTok) ou escolha um evento que o pixel já tenha. O pixel precisa ter recebido ou configurado o evento; o TikTok atualiza essa lista a cada 2 a 4 horas. (${err.message})`, 'pixel_event_missing');
+  explained.createdIds = err.createdIds;
+  return explained;
+}
+
+/**
+ * Confere, ANTES de criar a campanha, se o pixel da campanha já tem o evento de conversão escolhido. Só recusa quando consegue afirmar: o pixel aparece na
+ * lista da conta COM eventos e o escolhido não está entre eles. Pixel que não aparece, lista vazia (pixel novo: o TikTok atualiza a cada 2 a 4 horas) ou falha ao
+ * consultar não bloqueiam (vale a resposta do TikTok, que também é explicada acima). Melhor esforço.
+ */
+async function assertPixelEvent(api, token, advertiserId, config) {
+  const { pixelId, optimizationEvent } = config.adGroup ?? {};
+  if (!pixelId || !optimizationEvent) return;
+  let pixel;
+  try {
+    pixel = (await api.listPixels(token, advertiserId)).find((p) => p.id === pixelId);
+  } catch {
+    return;
+  }
+  if (!pixel?.events?.length || pixel.events.some((e) => e.optimizationEvent === optimizationEvent)) return;
+  const has = pixel.events.map((e) => pixelEventLabel(e.optimizationEvent)).join(', ');
+  throw new HttpError(422, `O pixel ${pixel.name || pixelId} ainda não tem o evento “${pixelEventLabel(optimizationEvent)}” (ele tem: ${has}). Crie o evento no pixel (“Criar evento no pixel”, no passo “Meta e conversão”) ou escolha um que ele já tenha. Nada foi criado no TikTok.`, 'pixel_event_missing');
 }
 
 const isoDate = (date) => date.toISOString().slice(0, 10);
@@ -588,6 +617,8 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       const ids = { campaignId: existing.campaignId ?? null, adGroupId: existing.adGroupId ?? null, adId: existing.adId ?? null };
       return withBusinessCenterToken(advertiser.businessCenterId, async (token, api) => {
         try {
+          // Antes de criar QUALQUER coisa: o evento de conversão precisa existir no pixel (senão o grupo de anúncios é recusado depois da campanha criada).
+          if (!ids.campaignId && !ids.adGroupId) await assertPixelEvent(api, token, advertiserId, campaignConfig);
           if (!ids.campaignId) {
             ids.campaignId = await api.createCampaign(token, buildCampaignPayload(advertiserId, campaignConfig));
             await onCreated?.('campaign', ids.campaignId);
@@ -602,7 +633,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
           }
         } catch (err) {
           err.createdIds = { ...ids }; // o chamador registra o que já foi criado
-          throw err;
+          throw explainPublishError(err);
         }
         invalidate();
         return ids;
@@ -691,6 +722,28 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
       invalidate(); // a lista de identidades da conta (cache de 60 s) passa a incluir a nova
       log.info(`[tiktok] identidade personalizada criada: usuário ${actor.id}, conta ${advertiserId}, ${photo ? 'com' : 'sem'} foto`); // sem nome nem token
       return { id, type: 'CUSTOMIZED_USER', name: clean, username: '', available: true };
+    },
+
+    /**
+     * Cria um evento padrão no pixel da conta (ex.: Compra) para a campanha poder otimizar por ele. O pixel precisa ser um dos que a conta enxerga (a lista é
+     * conferida AQUI antes de pedir ao TikTok); o evento que já existe não é criado de novo.
+     * @param {{ pixelId: string, eventType: string, name?: string }} event
+     */
+    async createPixelEvent(actor, advertiserId, { pixelId, eventType, name = '' }) {
+      if (!isPixelEvent(eventType)) throw badRequest('Tipo de evento inválido.');
+      const clean = String(name ?? '').replace(/\s+/g, ' ').trim();
+      if (clean.length > PIXEL_EVENT_NAME_MAX) throw badRequest(`O nome do evento deve ter até ${PIXEL_EVENT_NAME_MAX} caracteres.`);
+      const advertiser = await requireAdvertiser(actor, advertiserId);
+      const result = await withBusinessCenterToken(advertiser.businessCenterId, async (token, api) => {
+        const pixel = (await api.listPixels(token, advertiserId)).find((p) => p.id === pixelId);
+        if (!pixel) throw notFound('Este pixel não aparece na lista da conta de anúncio. Vincule o pixel à conta primeiro.');
+        if (pixel.events.some((e) => e.optimizationEvent === eventType)) return { created: false };
+        await api.createPixelEvent(token, { advertiserId, pixelId, eventType, eventName: clean });
+        return { created: true };
+      });
+      invalidate(); // a lista de pixels (com os eventos) da conta passa a mostrar o evento novo
+      if (result.created) log.info(`[tiktok] evento criado no pixel: usuário ${actor.id}, conta ${advertiserId}, evento ${eventType}`); // sem token
+      return { eventType, ...result };
     },
 
     report: async (actor, advertiserId, days) => cachedReport(await requireAdvertiser(actor, advertiserId), days),

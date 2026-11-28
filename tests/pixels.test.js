@@ -37,7 +37,7 @@ describe('Pixels que já existem na conta de anúncio', () => {
     fake.state.pixels = { 9001: [pixel('7001', 'Loja – compra'), pixel('7002', 'Leads')] };
     const res = await user.client.get('/api/tiktok/advertisers/9001/pixels');
     assert.equal(res.status, 200);
-    assert.deepEqual(res.json.pixels, [{ id: '7001', code: 'C7001ABC', name: 'Loja – compra', ownerBcId: null }, { id: '7002', code: 'C7002ABC', name: 'Leads', ownerBcId: null }]);
+    assert.deepEqual(res.json.pixels, [{ id: '7001', code: 'C7001ABC', name: 'Loja – compra', ownerBcId: null, events: [] }, { id: '7002', code: 'C7002ABC', name: 'Leads', ownerBcId: null, events: [] }]);
     assert.equal(pixelCalls()[0].query.advertiser_id, '9001');
     assert.equal(pixelCalls()[0].token ?? pixelCalls()[0].headers?.['Access-Token'], pixelCalls()[0].token ?? GOOD_TOKEN);
     assert.deepEqual((await user.client.get('/api/tiktok/advertisers/9002/pixels')).json, { pixels: [] }, 'conta sem pixel: lista vazia');

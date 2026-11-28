@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { MAX_LABEL_BATCH, isAccountLabel } from '../../../shared/account-labels.js';
 import { MAX_ACCOUNT_BASE_NAME, MAX_CREATE_ADVERTISERS, normalizeCountry, normalizeCurrency, normalizePromotionLink, normalizeTimezone } from '../../../shared/advertiser-create.js';
+import { PIXEL_EVENT_NAME_MAX, isPixelEvent } from '../../../shared/pixel-events.js';
 import { IDENTITY_NAME_MAX, IDENTITY_PHOTO_MAX_BYTES, LISTABLE_IDENTITY_TYPES } from '../../../shared/identity.js';
 import { MAX_LINK_ADVERTISERS, PIXEL_LINK_ACTIONS, normalizePixelCode } from '../../../shared/pixel-link.js';
 import { isIndustryFor } from '../../../shared/tiktok-industries.js';
@@ -127,6 +128,8 @@ export function createTiktokRouter({ service, limits = {} }) {
   // Vincular pixel altera ativos da Business Center no TikTok: limite próprio, por usuário.
   const pixelLinkLimiter = new RateLimiter({ max: limits.tiktokPixelLink ?? 30, windowMs: 10 * 60 * 1000 });
   // Criar identidade cria algo no TikTok e envia uma imagem: poucos pedidos por 10 minutos, por usuário.
+  // Criar evento no pixel altera o pixel no TikTok: limite próprio, por usuário.
+  const pixelEventLimiter = new RateLimiter({ max: limits.tiktokPixelEvent ?? 20, windowMs: 10 * 60 * 1000 });
   const identityLimiter = new RateLimiter({ max: limits.tiktokIdentity ?? 20, windowMs: 10 * 60 * 1000 });
   const read = throttle(readLimiter);
   const write = [throttle(writeLimiter)];
@@ -260,6 +263,15 @@ export function createTiktokRouter({ service, limits = {} }) {
     res.status(201).json({ identity: await service.createIdentity(req.actor, advertiserId, { name, image }) });
   });
 
+  // Cria um evento padrão no pixel da conta (para a campanha otimizar por ele): { pixelId, eventType, name? }.
+  router.post('/advertisers/:advertiserId/pixel-events', requireArea('campaigns', 'accounts'), ...write, throttle(pixelEventLimiter), async (req, res) => {
+    const body = asObject(req.body);
+    if (typeof body.pixelId !== 'string' || !NUMERIC_ID_RE.test(body.pixelId)) throw badRequest('Pixel inválido.');
+    if (!isPixelEvent(body.eventType)) throw badRequest('Tipo de evento inválido.');
+    const name = body.name === undefined || body.name === null || body.name === '' ? '' : parseText(body.name, 'Nome do evento', { min: 1, max: PIXEL_EVENT_NAME_MAX });
+    res.status(201).json(await service.createPixelEvent(req.actor, parseAdvertiserId(req.params.advertiserId), { pixelId: body.pixelId, eventType: body.eventType, name }));
+  });
+
   router.get('/advertisers/:advertiserId/report', reports, read, async (req, res) => {
     res.json(await service.report(req.actor, parseAdvertiserId(req.params.advertiserId), parseDays(req.query.days)));
   });
@@ -274,6 +286,7 @@ export function createTiktokRouter({ service, limits = {} }) {
     writeLimiter.stop();
     pixelLinkLimiter.stop();
     identityLimiter.stop();
+    pixelEventLimiter.stop();
     createLimiter.stop();
   };
   return router;

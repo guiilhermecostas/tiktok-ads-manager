@@ -16,6 +16,8 @@
  * documentada da Marketing API; o TikTok faz a validação final no momento da publicação.
  */
 
+import { LEGACY_PIXEL_EVENTS, PIXEL_EVENTS } from './pixel-events.js';
+
 // ---------------------------------------------------------------------------
 // Catálogos
 // ---------------------------------------------------------------------------
@@ -219,12 +221,9 @@ export const FIELDS = {
       // Conversões no site sempre usa pixel; em campanha de catálogo só nas metas de conversão (com meta "Cliques" o TikTok recusa o pixel).
       showWhen: [{ 'campaign.objective': ['WEB_CONVERSIONS'] }, CATALOG_CONVERSION], requiredWhen: [{ 'campaign.objective': ['WEB_CONVERSIONS'] }, CATALOG_CONVERSION],
       help: 'Escolha o pixel da sua conta: é ele que mede as conversões do seu site.' },
-    { key: 'optimizationEvent', label: 'Evento de conversão (a ação que conta como resultado)', type: 'enum', step: 'adGroup', group: 'Meta e conversão', help: 'A ação do seu site que o pixel registra e que o TikTok vai buscar (ex.: Compra).',
-      options: [
-        { value: 'SHOPPING', label: 'Compra (geral)' }, { value: 'COMPLETE_PAYMENT', label: 'Pagamento concluído' },
-        { value: 'ADD_TO_CART', label: 'Adicionar ao carrinho' }, { value: 'INITIATE_ORDER', label: 'Início de pedido' },
-        { value: 'FORM', label: 'Envio de formulário' }, { value: 'ON_WEB_REGISTER', label: 'Cadastro' },
-      ],
+    { key: 'optimizationEvent', label: 'Evento de conversão (a ação que conta como resultado)', type: 'enum', step: 'adGroup', group: 'Meta e conversão', help: 'A ação do seu site que o pixel registra e que o TikTok vai buscar (ex.: Compra). O evento precisa existir no pixel escolhido: veja os eventos dele acima e crie o que faltar.',
+      options: PIXEL_EVENTS.map(([value, label]) => ({ value, label })),
+      legacy: LEGACY_PIXEL_EVENTS, // valores antigos que não existem no TikTok viram o evento certo (Pagamento concluído → Compra)
       showWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'], 'adGroup.optimizationGoal': CONVERSION_GOALS },
       requiredWhen: { 'campaign.objective': ['WEB_CONVERSIONS', 'PRODUCT_SALES'], 'adGroup.optimizationGoal': CONVERSION_GOALS } },
 
@@ -440,6 +439,8 @@ function parseValue(field, raw, config) {
     case 'objective': {
       if (typeof raw !== 'string') return { error: 'Opção inválida.' };
       if (getOptions(field, config).some((o) => o.value === raw)) return { value: raw };
+      const current = field.legacy?.[raw]; // valor de uma versão antiga: vale o atual equivalente
+      if (current && getOptions(field, config).some((o) => o.value === current)) return { value: current };
       // "Obsoleto" = já foi uma opção válida para OUTRO valor do campo pai (a pessoa mudou o objetivo): descarta sem erro. Um valor que nunca
       // existiu em nenhuma lista é erro de verdade (nunca é trocado em silêncio pelo padrão).
       const wasValid = field.optionsBy ? Object.values(field.optionsBy.map).some((list) => list.some((o) => o.value === raw)) : false;
@@ -604,6 +605,7 @@ export function reconcileConfig(config) {
   for (const section of SECTION_KEYS) next[section] = isPlainObject(config?.[section]) ? { ...config[section] } : {};
   for (const section of SECTION_KEYS) {
     for (const field of FIELDS[section]) {
+      if (field.legacy && typeof next[section][field.key] === 'string' && field.legacy[next[section][field.key]]) next[section][field.key] = field.legacy[next[section][field.key]];
       const value = next[section][field.key];
       if (!isVisible(field, next)) {
         if (field.default !== undefined) next[section][field.key] = field.default;

@@ -1,6 +1,9 @@
+import { pixelEventLabel } from '/shared/pixel-events.js';
 import { get } from '../../api.js';
 import { h, setChildren } from '../../dom.js';
+import { alertBox, badge, button } from '../../ui.js';
 import { linkPixelDialog } from '../link-pixel.js';
+import { openPixelEventDialog } from './pixel-event-dialog.js';
 
 const TTL_MS = 60_000;
 const cache = new Map(); // ID da conta -> { at, pixels }
@@ -19,9 +22,10 @@ async function loadPixels(advertiserId, { force = false } = {}) {
  * digitar o ID (caso o pixel não apareça ou a lista não carregue). Com mais de uma conta, uma lista escolhe de qual conta
  * mostrar os pixels. Todo texto vindo do TikTok entra como texto (nunca HTML).
  *  - accounts: contas usáveis [{ id, name, currency }]
+ *  - getEvent(): evento de conversão escolhido na campanha (para avisar se o pixel ainda não o tem)
  *  - onPick(valor | undefined): chamado ao escolher ou digitar
  */
-export function createPixelPicker({ id, value, disabled = false, error = false, describedBy = null, accounts, onPick }) {
+export function createPixelPicker({ id, value, disabled = false, error = false, describedBy = null, accounts, getEvent = () => null, onPick }) {
   let advertiserId = accounts[0].id;
   let loadId = 0;
   let pixels = [];
@@ -34,6 +38,7 @@ export function createPixelPicker({ id, value, disabled = false, error = false, 
   const refresh = h('button', { type: 'button', class: 'btn btn--secondary btn--sm', disabled, 'aria-label': 'Atualizar a lista de pixels' }, 'Atualizar');
   const link = h('button', { type: 'button', class: 'btn btn--secondary btn--sm', disabled, hidden: true, title: 'Liga um pixel da Business Center a esta conta (Gerenciador de Eventos → Ativos), sem sair daqui' }, 'Vincular pixel…');
   const status = h('p', { class: 'field__hint pixel-picker__status', 'aria-live': 'polite' });
+  const eventsBox = h('div', { class: 'pixel-picker__events', 'aria-live': 'polite' });
   const accountSelect = accounts.length > 1
     ? h('select', { class: 'input pixel-picker__account', 'aria-label': 'Conta de anúncio de onde listar os pixels', disabled }, accounts.map((a) => h('option', { value: a.id }, `${a.name}${a.currency ? ` · ${a.currency}` : ''}`)))
     : null;
@@ -47,7 +52,34 @@ export function createPixelPicker({ id, value, disabled = false, error = false, 
     );
     select.value = known ? input.value : '';
     select.disabled = disabled || !pixels.length;
+    drawEvents();
   }
+
+  /**
+   * Eventos do pixel escolhido (os que o TikTok já registrou ou que foram criados) e, se o evento de conversão da campanha não estiver entre eles, um aviso com
+   * o botão para criá-lo: o TikTok recusa o grupo de anúncios quando o evento não existe no pixel. Só aparece para pixels da lista (os digitados à mão não dá para conferir).
+   */
+  function drawEvents() {
+    const pixel = pixels.find((p) => p.id === input.value);
+    if (!pixel) return eventsBox.replaceChildren();
+    const wanted = getEvent();
+    const has = new Set(pixel.events.map((e) => e.optimizationEvent));
+    const missing = Boolean(wanted) && !has.has(wanted);
+    const chips = pixel.events.map((e) => badge(pixelEventLabel(e.optimizationEvent), e.optimizationEvent === wanted ? 'success' : 'neutral'));
+    const create = disabled ? null : button(missing ? `Criar “${pixelEventLabel(wanted)}” no pixel` : 'Criar evento no pixel…', {
+      small: true,
+      variant: missing ? 'primary' : 'secondary',
+      onClick: () => openPixelEventDialog({ advertiser: selectedAccount(), pixel, suggested: wanted, existing: has, onCreated: () => load({ force: true }) }),
+    });
+    return setChildren(
+      eventsBox,
+      h('p', { class: 'field__hint' }, pixel.events.length ? 'Eventos que este pixel já tem:' : 'Este pixel ainda não tem eventos registrados (o TikTok atualiza essa lista a cada 2 a 4 horas).'),
+      chips.length ? h('div', { class: 'pixel-picker__chips' }, chips) : null,
+      missing ? alertBox(`O evento de conversão da campanha, “${pixelEventLabel(wanted)}”, ainda não existe neste pixel: o TikTok recusa a campanha sem ele. Crie o evento ou escolha outro evento de conversão.`, 'warning') : null,
+      create,
+    );
+  }
+  const selectedAccount = () => accounts.find((a) => a.id === advertiserId);
 
   /** Só quem gerencia a conexão (dono ou admin) pode vincular pixel: para os outros o botão nem aparece. */
   const syncLink = () => { link.hidden = !accounts.find((a) => a.id === advertiserId)?.businessCenterOwned; };
@@ -77,10 +109,12 @@ export function createPixelPicker({ id, value, disabled = false, error = false, 
 
   select.addEventListener('change', () => {
     input.value = select.value;
+    drawEvents();
     onPick(select.value || undefined);
   });
   input.addEventListener('input', () => {
     select.value = pixels.some((p) => p.id === input.value) ? input.value : '';
+    drawEvents();
     onPick(input.value || undefined);
   });
   accountSelect?.addEventListener('change', () => {
@@ -106,5 +140,6 @@ export function createPixelPicker({ id, value, disabled = false, error = false, 
     h('div', { class: 'pixel-picker__row' }, select, refresh, link),
     input,
     status,
+    eventsBox,
   );
 }
