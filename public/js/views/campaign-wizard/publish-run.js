@@ -41,7 +41,7 @@ async function postPatient(path, body, onWait) {
  * Publica nas contas escolhidas, UMA conta de cada vez, e em cada conta TODAS as campanhas (`campaignIds`: uma quando é só uma campanha; várias quando a pessoa escolheu
  * "campanhas por conta"). Cada conta tem progresso, erro e retomada próprios e a falha de uma não impede as outras; dentro de uma conta, se uma campanha falha as seguintes
  * não são tentadas (o erro tende a ser o mesmo). Campanha que já foi publicada nesta conta (tentativa anterior) conta como feita. `activate`: publicar já ativa.
- * `targets` é o painel "Publicar em". Devolve { succeeded: [ids das contas 100% publicadas], failed: nº de contas com erro, renamed: [{ id, name }], created: campanhas criadas agora }.
+ * `targets` é o painel "Publicar em". Devolve { succeeded: [ids das contas 100% publicadas], failed: nº de contas com erro, renamed: [{ id, name }], created: campanhas criadas agora, unverified: contas cuja publicação o servidor não pôde conferir no TikTok }.
  * Se a sessão cair (401) para: o resto falharia do mesmo jeito.
  */
 export async function publishToAccounts({ campaignIds, ids, targets, activate = false }) {
@@ -50,9 +50,11 @@ export async function publishToAccounts({ campaignIds, ids, targets, activate = 
   const renamed = []; // contas onde o TikTok já tinha uma campanha com o mesmo nome: o sistema numerou ("Nome (2)")
   let failed = 0;
   let created = 0;
+  let unverified = 0; // publicações que o servidor não conseguiu conferir no TikTok
   for (const id of ids) {
     let done = 0;
     let broken = false;
+    let accountUnverified = false;
     for (const [index, campaignId] of campaignIds.entries()) {
       const where = total > 1 ? `Campanha ${index + 1} de ${total}` : null;
       targets.setResult(id, { state: 'running', note: where ? `${where}…` : null });
@@ -66,6 +68,7 @@ export async function publishToAccounts({ campaignIds, ids, targets, activate = 
         done += 1;
         created += 1;
         if (result.renamedTo) renamed.push({ id, name: result.renamedTo });
+        if (result.verified !== true) accountUnverified = true;
       } catch (err) {
         if (err.code === 'already_published') { // publicada numa tentativa anterior: não é erro
           done += 1;
@@ -75,14 +78,20 @@ export async function publishToAccounts({ campaignIds, ids, targets, activate = 
         broken = true;
         const published = done ? ` (${done} ${done === 1 ? 'já foi publicada' : 'já foram publicadas'} nesta conta)` : '';
         targets.setResult(id, { state: 'failed', message: where ? `${where}: ${failureMessage(err)}${published}. As próximas não foram tentadas nesta conta; ao publicar de novo, as que já existem são puladas.` : failureMessage(err) });
-        if (err.status === 401) return { succeeded, failed, renamed, created };
+        if (err.status === 401) return { succeeded, failed, renamed, created, unverified };
         break;
       }
     }
     if (!broken) {
-      targets.setResult(id, { state: 'done', label: doneLabel({ copies: total, activate }) });
+      if (accountUnverified) unverified += 1;
+      targets.setResult(id, { state: 'done', label: doneLabel({ copies: total, activate, verified: !accountUnverified }) });
       succeeded.push(id);
     }
   }
-  return { succeeded, failed, renamed, created };
+  return { succeeded, failed, renamed, created, unverified };
+}
+
+/** "Conferir no TikTok": o servidor confere por ID se o que está registrado como publicado existe de verdade e devolve { results }. `advertiserId` (opcional) restringe a uma conta. */
+export async function verifyPublished({ campaignId, advertiserId = null }) {
+  return (await post(`/campaigns/${campaignId}/verify`, advertiserId ? { advertiserId } : {})).results;
 }

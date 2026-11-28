@@ -14,6 +14,7 @@ export const tiktokTestConfig = ({ oauth = true } = {}) => ({
     apiBase: 'https://business-api.tiktok.com',
     encryptionKey: randomBytes(32),
     configured: true,
+    verifyBackoffMs: [0, 0, 0], // a conferência do que foi criado não espera nos testes
     oauth: oauth
       ? { appId: OAUTH_APP_ID, appSecret: OAUTH_APP_SECRET, redirectUri: OAUTH_REDIRECT_URI, enabled: true }
       : { appId: null, appSecret: null, redirectUri: null, enabled: false },
@@ -56,6 +57,12 @@ export function createFakeTiktok() {
     uniqueCampaignNames: false, // true: /campaign/create/ recusa nome repetido na mesma conta, como o TikTok ("Campaign name already exists")
     campaignNamesByAdvertiser: {}, // conta -> nomes de campanha já criados
     pixelEventCreates: [], // corpos recebidos em /pixel/event/create/
+    // Conferência por ID (/campaign|adgroup|ad/get/ com filtering): o que as rotas de criação registraram, para o servidor confirmar que existe de verdade.
+    createdEntities: { campaigns: new Map(), adgroups: new Map(), ads: new Map() }, // id -> { advertiser, lag }
+    dropCreated: new Set(), // 'campaign' | 'adgroup' | 'ad': o TikTok RESPONDE que criou mas NÃO cria (o defeito que a conferência precisa pegar)
+    createdLag: 0, // n > 0: o que foi criado só aparece nas consultas por ID depois de n consultas (atraso normal do TikTok para listar)
+    droppedIds: new Set(), // IDs que o TikTok respondeu mas não criou, ou que foram excluídos depois: usar um deles como PAI (campanha/grupo) dá erro, como no TikTok de verdade
+    failByIdGets: false, // true: as consultas por ID respondem erro (a conferência não consegue rodar)
     pixelEventDenied: new Set(), // contas de anúncio por onde /pixel/event/create/ responde "Pixel cannot be modified." (pixel só compartilhado / sem permissão)
     failPixelEventCreate: '', // texto: /pixel/event/create/ responde este erro do TikTok
     pixelLinks: {}, // "bcId:códigoDoPixel" -> contas vinculadas ([advertiserId, …]), como em /bc/pixel/link/*
@@ -279,6 +286,40 @@ export function createFakeTiktok() {
   };
   const catalogOf = (bc, id) => (state.catalogs[bc] ?? []).find((c) => c.catalog_id === String(id));
 
+  /** Consulta por ID das rotas /campaign|adgroup|ad/get/ (filtering com campaign_ids, adgroup_ids ou ad_ids): responde só com o que foi criado e continua visível. */
+  const BY_ID = { campaigns: ['campaign_ids', 'campaign_id'], adgroups: ['adgroup_ids', 'adgroup_id'], ads: ['ad_ids', 'ad_id'] };
+  const byIdQuery = (kind, query) => {
+    let filtering;
+    try {
+      filtering = JSON.parse(query.filtering ?? '{}');
+    } catch {
+      return null;
+    }
+    const [filterKey, idField] = BY_ID[kind];
+    if (!Array.isArray(filtering[filterKey])) return null; // não é consulta por ID: segue o comportamento de sempre
+    if (state.failByIdGets) return reply({}, 50001, 'Internal error');
+    const list = [];
+    for (const id of filtering[filterKey]) {
+      const entity = state.createdEntities[kind].get(String(id));
+      if (!entity || entity.advertiser !== query.advertiser_id) continue;
+      if (entity.lag > 0) {
+        entity.lag -= 1; // ainda não aparece
+        continue;
+      }
+      list.push({ [idField]: String(id), operation_status: entity.status });
+    }
+    return reply({ list, page_info: { page: 1, page_size: Number(query.page_size) || 10, total_number: list.length, total_page: 1 } });
+  };
+  const registerCreated = (kind, drop, id, advertiser, status) => {
+    if (state.dropCreated.has(drop)) state.droppedIds.add(String(id));
+    else state.createdEntities[kind].set(String(id), { advertiser, status, lag: state.createdLag });
+  };
+  /** Simula alguém excluir (ou o TikTok perder) uma campanha, um grupo ou um anúncio criado: some das consultas e deixa de servir de pai. */
+  const deleteCreated = (kind, id) => {
+    state.createdEntities[kind].delete(String(id));
+    state.droppedIds.add(String(id));
+  };
+
   const fetchFn = async (url, init) => {
     const u = new URL(url);
     // Falha de rede simulada para TODA chamada que sai por uma proxy (proxy fora do ar).
@@ -438,6 +479,7 @@ export function createFakeTiktok() {
         return reply({ [state.balanceListKey]: all.slice((size - 1) * per, size * per), page_info: { page: size, page_size: per, total_number: all.length, total_page: Math.max(1, Math.ceil(all.length / per)) } });
       }
       case '/ad/get/': {
+        { const byId = byIdQuery('ads', query); if (byId) return byId; }
         if (state.rateLimitFor.has(query.advertiser_id)) return reply({}, 40100, 'Too many requests');
         if (state.failAdsFor.has(query.advertiser_id)) return reply({}, 40001, 'No permission to get ads');
         if (Number(query.page_size) > 1000 || Number(query.page_size) < 1) return reply({}, 40002, 'page_size must be between 1 and 1000');
@@ -529,6 +571,7 @@ export function createFakeTiktok() {
         return reply({});
       }
       case '/campaign/get/': {
+        { const byId = byIdQuery('campaigns', query); if (byId) return byId; }
         if (state.failCampaignsFor.has(query.advertiser_id)) return reply({}, 40001, 'No permission to get campaigns');
         if (state.rateLimitFor.has(query.advertiser_id)) return reply({}, 40100, 'Too many requests');
         if (Number(query.page_size) > 1000 || Number(query.page_size) < 1) return reply({}, 40002, 'page_size must be between 1 and 1000');
@@ -549,6 +592,7 @@ export function createFakeTiktok() {
         });
       }
       case '/adgroup/get/': {
+        { const byId = byIdQuery('adgroups', query); if (byId) return byId; }
         if (state.failAdgroupsFor.has(query.advertiser_id)) return reply({}, 40001, 'No permission to get ad groups');
         if (state.rateLimitFor.has(query.advertiser_id)) return reply({}, 40100, 'Too many requests');
         if (Number(query.page_size) > 1000 || Number(query.page_size) < 1) return reply({}, 40002, 'page_size must be between 1 and 1000');
@@ -811,6 +855,7 @@ export function createFakeTiktok() {
           used.add(body?.campaign_name);
         }
         state.campaignsById[String(state.nextId + 1)] = body;
+        registerCreated('campaigns', 'campaign', state.nextId + 1, body?.advertiser_id, body?.operation_status);
         return reply({ campaign_id: String(++state.nextId) });
       case '/adgroup/create/':
         if (state.failForAdvertiser.get(body?.advertiser_id) === 'adGroup') return reply({}, 40002, 'Invalid optimization goal for this objective');
@@ -821,7 +866,9 @@ export function createFakeTiktok() {
           if (Array.isArray(pixel?.events) && !pixel.events.some((e) => e.optimization_event === body.optimization_event)) return reply({}, 40002, 'This pixel event type does not exist. Please make sure that you have created the pixel event in Events Manager.');
         }
         if (state.strictCatalog && catalogAdGroupError(body)) return reply({}, 40002, catalogAdGroupError(body));
+        if (state.droppedIds.has(String(body?.campaign_id))) return reply({}, 40002, 'The campaign does not exist.');
         state.adgroupsById[String(state.nextId + 1)] = body;
+        registerCreated('adgroups', 'adgroup', state.nextId + 1, body?.advertiser_id, body?.operation_status);
         return reply({ adgroup_id: String(++state.nextId) });
       case '/ad/create/':
         if (state.failForAdvertiser.get(body?.advertiser_id) === 'ad') return reply({}, 40002, 'Identity not found');
@@ -830,11 +877,13 @@ export function createFakeTiktok() {
           const problem = catalogAdError(body?.creatives?.[0] ?? {}, state.adgroupsById[body?.adgroup_id]);
           if (problem) return reply({}, 40002, problem);
         }
+        if (state.droppedIds.has(String(body?.adgroup_id))) return reply({}, 40002, 'The ad group does not exist.');
+        registerCreated('ads', 'ad', state.nextId + 1, body?.advertiser_id, body?.creatives?.[0]?.operation_status);
         return reply({ ad_ids: [String(++state.nextId)] });
       default:
         return reply({}, 40000, 'Unknown path');
     }
   };
 
-  return { state, fetchFn, grantAuthCode, callsTo: (path) => state.calls.filter((c) => c.path === path) };
+  return { state, fetchFn, grantAuthCode, deleteCreated, callsTo: (path) => state.calls.filter((c) => c.path === path) };
 }

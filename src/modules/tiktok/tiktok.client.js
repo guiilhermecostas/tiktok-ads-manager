@@ -544,6 +544,22 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
       return [...found.values()];
     },
 
+    /**
+     * Confere NO TIKTOK, por ID, se a campanha, o grupo de anúncios e o anúncio existem (e não foram excluídos): `{ campaign, adGroup, ad }` com true/false para cada um que foi pedido
+     * (o que não foi pedido fica de fora). Usa os filtros por ID de `/campaign/get/`, `/adgroup/get/` e `/ad/get/` (até 100 IDs). Falha de consulta passa como erro: quem chama decide.
+     */
+    async findCreated(token, advertiserId, { campaignId = null, adGroupId = null, adId = null }) {
+      const asked = [['campaign', 'campaigns', campaignId], ['adGroup', 'adgroups', adGroupId], ['ad', 'ads', adId]].filter(([, , id]) => id);
+      const found = {};
+      for (const [key, level, id] of asked) {
+        const spec = LEVEL_SPECS[level];
+        const filterKey = { campaigns: 'campaign_ids', adgroups: 'adgroup_ids', ads: 'ad_ids' }[level];
+        const data = await call(spec.listPath, { token, query: { advertiser_id: advertiserId, fields: [spec.idField], filtering: { [filterKey]: [String(id)], primary_status: 'STATUS_NOT_DELETE' }, page: 1, page_size: 10 } });
+        found[key] = (Array.isArray(data.list) ? data.list : []).some((item) => digitsOrNull(item?.[spec.idField]) === String(id));
+      }
+      return found;
+    },
+
     /** Cria uma identidade personalizada (`/identity/create/`): nome (até 100) e, opcional, o `image_id` da foto (1:1) já enviada. Devolve o ID. */
     async createIdentity(token, { advertiserId, displayName, imageId = null }) {
       const body = { advertiser_id: advertiserId, display_name: displayName };

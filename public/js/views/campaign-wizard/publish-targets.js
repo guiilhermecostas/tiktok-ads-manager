@@ -25,7 +25,7 @@ const SEARCH_THRESHOLD = 6; // a partir de quantas contas a busca aparece
  * Há filtros por Business Center, por tipo (comuns / de agência) e por situação (ativas / inativas) e um atalho para marcar todas as contas listadas:
  * assim dá para publicar um tipo de cada vez. Retorna { element, refresh, selectedIds, overridesFor, validate, setResult, setBusy, deselect }.
  */
-export function createPublishTargets({ advertisers, getConfig, getPublications, onChange, alwaysSearch = false }) {
+export function createPublishTargets({ advertisers, getConfig, getPublications, onChange, alwaysSearch = false, onVerify = null }) {
   const selected = new Set();
   const overrides = new Map(); // id -> { adGroup: {...}, ad: {...} }
   const expanded = new Set(); // contas com o painel de ajustes aberto
@@ -226,7 +226,10 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
       ),
       h('div', { class: 'targets__status' }, statusChip(account)),
       message ? h('p', { class: 'targets__error', role: 'status' }, message) : null,
-      publication?.status === 'published' && publication.tiktokCampaignId ? h('p', { class: 'muted targets__ids' }, `Campanha ${publication.tiktokCampaignId} · Anúncio ${publication.tiktokAdId ?? '—'}`) : null,
+      publication?.status === 'published' && onVerify
+        ? h('button', { type: 'button', class: 'link-btn targets__verify', disabled: busy, title: 'Confere no TikTok, por ID, se a campanha, o conjunto de anúncios e o anúncio existem de verdade', onClick: () => onVerify(account) }, 'Conferir no TikTok')
+        : null,
+      publication?.status === 'published' && publication.tiktokCampaignId ? h('p', { class: 'muted targets__ids' }, `Campanha ${publication.tiktokCampaignId} · Conjunto ${publication.tiktokAdGroupId ?? '—'} · Anúncio ${publication.tiktokAdId ?? '—'}`) : null,
       showAdjust
         ? h(
             'div',

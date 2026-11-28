@@ -596,6 +596,21 @@ No painel “Publicar em” (assistente de campanha e Automação → Campanha o
 - Os textos (confirmação, resumo, avisos) ficam em `shared/publish-messages.js` e as regras das cópias em `shared/campaign-copies.js`, ambos testados. Isso também corrigiu um aviso enganoso no assistente (mostrava “Nenhuma conta foi publicada”
   mesmo quando a publicação dava certo).
 
+### Publicada de verdade: conferência no TikTok (campanha sem conjunto de anúncios e sem anúncio)
+
+Uma publicação só é dada como concluída se **campanha, conjunto de anúncios e anúncio existem de verdade no TikTok**. O sistema não confia só na resposta de "criado": depois de criar, **confere por ID**
+(`/campaign/get/`, `/adgroup/get/` e `/ad/get/` com `campaign_ids`/`adgroup_ids`/`ad_ids`, sem os excluídos), tentando algumas vezes porque o TikTok pode demorar um instante para listar o que acabou de criar
+(esperas em `config.tiktok.verifyBackoffMs`, padrão 0,4 s, 1,2 s e 3 s). O que acontece:
+- **Falta algum nível:** a publicação **não** vira "publicada": o erro aparece na tela (“O TikTok respondeu que criou, mas não encontramos o conjunto de anúncios…”, 502 `tiktok_not_found`), o ID do nível que não existe (e o dos que dependem
+  dele) é esquecido (`src/lib/created-levels.js`) e a próxima tentativa recria **só o que falta**, na mesma campanha.
+- **Retomada com IDs guardados:** os IDs de uma tentativa anterior são conferidos ANTES de retomar; o que foi excluído no TikTok é recriado (antes, o sistema pulava o nível e dava "publicada" sem criar nada).
+- **"Já publicada":** a recusa (409) agora também confere por ID; se faltar algo no TikTok, a conta volta para "tentar de novo" e recria o que falta.
+- **Não deu para conferir** (a consulta falhou): publica mesmo assim e **avisa** (“não deu para conferir no TikTok”, `verified: false` na resposta): nunca afirma mais do que sabe, e nunca bloqueia por não conseguir ler.
+- **"Conferir no TikTok":** botão em cada conta publicada (assistente e Campanha one-click) e `POST /api/campaigns/:id/verify` (`{ advertiserId? }`; sem ele, todas as contas publicadas da campanha, até 60). Se faltar algo, a conta volta para "tentar de novo"
+  (sem excluir nada no TikTok). **Ao abrir uma campanha já publicada**, a conferência roda sozinha (até 5 contas, uma vez por abertura) e só fala se achar problema.
+- A linha de cada conta publicada mostra os três IDs (“Campanha … · Conjunto … · Anúncio …”) e o rótulo “conferida no TikTok”, para você comparar com o Gerenciador do TikTok.
+Campanhas vazias que tentativas antigas que falharam deixaram no TikTok **continuam lá** (este sistema nunca exclui nada no TikTok): apague-as pelo Gerenciador ou use "Conferir no TikTok" na campanha para completá-las.
+
 ### Nome de campanha repetido (erro “Campaign name already exists”)
 
 O TikTok não aceita duas campanhas com o mesmo nome na mesma conta de anúncio. Rodar a mesma configuração one-click de novo cria um rascunho NOVO com o mesmo nome, então isso acontecia quando

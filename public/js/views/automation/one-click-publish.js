@@ -1,8 +1,8 @@
-import { confirmLabel, confirmMessage, resultToasts } from '/shared/publish-messages.js';
+import { confirmLabel, confirmMessage, resultToasts, verifyToasts } from '/shared/publish-messages.js';
 import { get, post } from '../../api.js';
 import { h, icon } from '../../dom.js';
 import { alertBox, button, confirmDialog, openModal, spinner, toast } from '../../ui.js';
-import { publishToAccounts } from '../campaign-wizard/publish-run.js';
+import { publishToAccounts, verifyPublished } from '../campaign-wizard/publish-run.js';
 import { createPublishTargets } from '../campaign-wizard/publish-targets.js';
 
 let active = null; // um pop-up por vez (duplo clique no botão não abre dois)
@@ -81,7 +81,7 @@ export function openOneClickPublish({ template, onDone }) {
       drawFooter();
       return undefined;
     }
-    const { succeeded, failed, renamed, created } = await publishToAccounts({ campaignIds: drafts, ids, targets, activate });
+    const { succeeded, failed, renamed, created, unverified } = await publishToAccounts({ campaignIds: drafts, ids, targets, activate });
     if (succeeded.length) published = true;
     try {
       if (drafts.length === 1) publications = (await get(`/campaigns/${drafts[0]}`)).campaign.publications;
@@ -91,14 +91,33 @@ export function openOneClickPublish({ template, onDone }) {
     targets.deselect(succeeded);
     busy = false;
     targets.setBusy(false);
-    for (const { message, tone } of resultToasts({ requested: ids.length, succeeded: succeeded.length, failed, created, copies, activate, renamed })) toast(message, tone);
+    for (const { message, tone } of resultToasts({ requested: ids.length, succeeded: succeeded.length, failed, created, copies, activate, renamed, unverified })) toast(message, tone);
     drawFooter();
     return undefined;
   }
 
+  /** "Conferir no TikTok" de uma conta publicada: confere por ID e, se faltar algo, a conta volta para "tentar de novo". */
+  async function verifyAccount(account) {
+    if (busy || drafts.length !== 1) return;
+    busy = true;
+    targets.setBusy(true);
+    drawFooter();
+    try {
+      for (const { message, tone } of verifyToasts(await verifyPublished({ campaignId: drafts[0], advertiserId: account.id }))) toast(message, tone);
+      publications = (await get(`/campaigns/${drafts[0]}`)).campaign.publications;
+      targets.setResult(account.id, null); // o selo da rodada anterior ("publicada") não vale mais: a situação volta a vir do registro
+    } catch (err) {
+      toast(err.message, 'danger');
+    }
+    busy = false;
+    targets.setBusy(false);
+    targets.refresh();
+    drawFooter();
+  }
+
   get('/tiktok/advertisers')
     .then(({ advertisers }) => {
-      targets = createPublishTargets({ advertisers, getConfig: () => template.config, getPublications: () => (drafts.length > 1 ? [] : publications), onChange: drawFooter, alwaysSearch: true });
+      targets = createPublishTargets({ advertisers, getConfig: () => template.config, getPublications: () => (drafts.length > 1 ? [] : publications), onChange: drawFooter, alwaysSearch: true, onVerify: verifyAccount });
       body.replaceChildren(
         h('p', { class: 'muted oneclick-publish__intro' }, 'Escolha em quais contas de anúncio publicar esta configuração. Use a busca (nome ou ID da conta) e os filtros por Business Center e situação para achar mais rápido.'),
         targets.element,

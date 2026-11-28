@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { confirmLabel, confirmMessage, doneLabel, renamedNotice, resultToasts, statusWord } from '../shared/publish-messages.js';
+import { confirmLabel, confirmMessage, doneLabel, renamedNotice, resultToasts, statusWord, verifyToasts } from '../shared/publish-messages.js';
 
 describe('Textos do publicar (ativa ou pausada, várias campanhas)', () => {
   it('statusWord concorda com a quantidade', () => {
@@ -29,9 +29,10 @@ describe('Textos do publicar (ativa ou pausada, várias campanhas)', () => {
     assert.equal(confirmLabel({ accounts: 1, activate: true }), 'Publicar (ativa)');
     assert.equal(confirmLabel({ accounts: 3, activate: true }), 'Publicar em 3 contas (ativas)');
     assert.equal(confirmLabel({ accounts: 3, copies: 5 }), 'Publicar 15 campanhas (pausadas)');
-    assert.equal(doneLabel({}), '✓ Publicada (pausada)');
-    assert.equal(doneLabel({ activate: true }), '✓ Publicada (ativa)');
-    assert.equal(doneLabel({ copies: 5, activate: true }), '✓ 5 campanhas publicadas (ativas)');
+    assert.equal(doneLabel({}), '✓ Publicada (pausada) · conferida no TikTok');
+    assert.equal(doneLabel({ activate: true }), '✓ Publicada (ativa) · conferida no TikTok');
+    assert.equal(doneLabel({ copies: 5, activate: true }), '✓ 5 campanhas publicadas (ativas) · conferida no TikTok');
+    assert.equal(doneLabel({ activate: true, verified: false }), '✓ Publicada (ativa) · não deu para conferir no TikTok', 'sem conferência o rótulo não afirma mais do que se sabe');
   });
 
   it('depois de publicar há UM resultado principal: tudo certo, parcial ou nenhum (nunca o aviso de falha junto com o de sucesso)', () => {
@@ -57,5 +58,23 @@ describe('Textos do publicar (ativa ou pausada, várias campanhas)', () => {
     assert.deepEqual(renamed.map((t) => t.tone), ['success', 'warning']);
     assert.match(renamed[1].message, /ficou como “Nome \(2\)”/);
     assert.equal(renamedNotice([]), null);
+    const unverified = resultToasts({ requested: 1, succeeded: 1, failed: 0, unverified: 1 });
+    assert.deepEqual(unverified.map((t) => t.tone), ['success', 'warning']);
+    assert.match(unverified[1].message, /não pôde ser conferida no TikTok/);
+    assert.match(resultToasts({ requested: 3, succeeded: 3, failed: 0, unverified: 2 })[1].message, /^2 publicações não pôde ser conferida/);
+  });
+
+  it('depois de "Conferir no TikTok": diz o que existe, o que faltou (e que a conta voltou para tentar de novo) e o que não deu para conferir', () => {
+    assert.deepEqual(verifyToasts([]).map((t) => t.tone), ['warning']);
+    const ok = verifyToasts([{ advertiserId: '1', state: 'ok', missing: [] }]);
+    assert.deepEqual(ok.map((t) => t.tone), ['success']);
+    assert.match(ok[0].message, /a campanha, o conjunto de anúncios e o anúncio existem/);
+    assert.match(verifyToasts([{ advertiserId: '1', state: 'ok', missing: [] }, { advertiserId: '2', state: 'ok', missing: [] }])[0].message, /2 publicações/);
+    const broken = verifyToasts([{ advertiserId: '9001', state: 'ok', missing: [] }, { advertiserId: '9002', state: 'missing', missing: ['adGroup', 'ad'] }]);
+    assert.deepEqual(broken.map((t) => t.tone), ['success', 'danger']);
+    assert.match(broken[1].message, /Conta 9002: não encontramos o conjunto de anúncios e o anúncio no TikTok/);
+    assert.match(broken[1].message, /voltou para “tentar de novo”/);
+    const unknown = verifyToasts([{ advertiserId: '1', state: 'unverified', missing: [] }]);
+    assert.deepEqual(unknown.map((t) => t.tone), ['warning'], 'sem conseguir conferir, nunca afirma que está tudo certo');
   });
 });

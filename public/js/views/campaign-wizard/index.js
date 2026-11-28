@@ -9,13 +9,14 @@ import { parseMoneyToCents } from '../../format.js';
 import { alertBox, button, confirmDialog, field as formField, openModal, spinner, stepper as stepperView, toast } from '../../ui.js';
 import { pickCreatives } from '../creatives/picker.js';
 import { renderStepForm } from './form-fields.js';
-import { confirmLabel, confirmMessage, resultToasts } from '/shared/publish-messages.js';
-import { publishToAccounts } from './publish-run.js';
+import { confirmLabel, confirmMessage, resultToasts, verifyToasts } from '/shared/publish-messages.js';
+import { publishToAccounts, verifyPublished } from './publish-run.js';
 import { createPublishTargets } from './publish-targets.js';
 import { renderReview } from './review.js';
 
 const FORM_STEPS = STEPS.slice(0, -1).map((s) => s.id);
 const REVIEW_INDEX = STEPS.length - 1;
+const AUTO_VERIFY_MAX = 5; // contas publicadas conferidas automaticamente ao abrir (cada uma são até 3 consultas ao TikTok)
 const TEMPLATE_API = '/automation/one-click';
 const NO_PUBLISH = { status: 'none', published: 0, partial: 0, failed: 0, locks: { campaign: false, adGroup: false, ad: false } };
 
@@ -129,7 +130,28 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
       getConfig: () => st.config,
       getPublications: () => st.publications,
       onChange: () => drawFooter(),
+      onVerify: (account) => verifyAccount(account),
     });
+
+    /** "Conferir no TikTok" de uma conta publicada: confere por ID e, se faltar algo, a conta volta para "tentar de novo" (publicar de novo recria só o que falta). */
+    async function verifyAccount(account) {
+      if (st.busy) return;
+      st.busy = 'verify';
+      targets.setBusy(true);
+      try {
+        for (const { message, tone } of verifyToasts(await verifyPublished({ campaignId: st.id, advertiserId: account.id }))) toast(message, tone);
+        const fresh = (await get(`/campaigns/${st.id}`)).campaign;
+        st.publish = fresh.publish;
+        st.publications = fresh.publications;
+        st.changed = true;
+        targets.setResult(account.id, null); // o selo da rodada anterior ("publicada") não vale mais: a situação volta a vir do registro
+      } catch (err) {
+        toast(err.message, 'danger');
+      }
+      st.busy = null;
+      targets.setBusy(false);
+      draw();
+    }
 
     // ---------- o que já existe no TikTok fica travado (o servidor também impõe isso) ----------
     const locked = () => {
@@ -233,9 +255,34 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
     }
 
     // ---------- navegação ----------
+    let autoVerified = false; // a conferência automática roda uma vez por abertura do assistente (declarada ANTES de enterReview, que pode rodar na montagem)
     function enterReview() {
       st.allErrors = toList(collect(FORM_STEPS));
       targets?.refresh();
+      autoVerify();
+    }
+
+    /**
+     * Ao abrir o passo final de uma campanha que JÁ foi publicada, confere por ID no TikTok (uma vez por abertura, até 5 contas) se campanha, conjunto de anúncios e anúncio existem de verdade.
+     * Só fala se achar problema (ou não conseguir conferir): o que faltar volta para "tentar de novo". Silencioso quando está tudo certo e nunca atrapalha o que a pessoa está fazendo.
+     */
+    async function autoVerify() {
+      const published = (st.publications ?? []).filter((p) => p.status === 'published');
+      if (autoVerified || !targets || !st.id || !published.length || published.length > AUTO_VERIFY_MAX) return;
+      autoVerified = true;
+      try {
+        const results = await verifyPublished({ campaignId: st.id });
+        if (results.every((r) => r.state === 'ok')) return;
+        for (const { message, tone } of verifyToasts(results).filter((t) => t.tone !== 'success')) toast(message, tone);
+        const fresh = (await get(`/campaigns/${st.id}`)).campaign;
+        st.publish = fresh.publish;
+        st.publications = fresh.publications;
+        st.changed = true;
+        for (const r of results.filter((x) => x.state === 'missing')) targets.setResult(r.advertiserId, null);
+        if (!st.busy) draw();
+      } catch {
+        /* a conferência automática é só um extra: o botão "Conferir no TikTok" continua disponível */
+      }
     }
 
     function goTo(index) {
@@ -404,7 +451,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
         }
       }
 
-      const { succeeded, failed, renamed, created } = await publishToAccounts({ campaignIds, ids, targets, activate });
+      const { succeeded, failed, renamed, created, unverified } = await publishToAccounts({ campaignIds, ids, targets, activate });
       st.changed = true;
       try {
         const fresh = (await get(`/campaigns/${st.id}`)).campaign;
@@ -416,7 +463,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
       targets.deselect(succeeded);
       st.busy = null;
       targets.setBusy(false);
-      for (const { message, tone } of resultToasts({ requested: ids.length, succeeded: succeeded.length, failed, created, copies, activate, renamed })) toast(message, tone);
+      for (const { message, tone } of resultToasts({ requested: ids.length, succeeded: succeeded.length, failed, created, copies, activate, renamed, unverified })) toast(message, tone);
       draw();
     }
 

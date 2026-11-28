@@ -314,7 +314,7 @@ describe('API de campanhas em formato assistente', () => {
       const edit = await client.put(`/api/campaigns/${id}`, body(await mk(client)));
       assert.equal(edit.status, 409);
       assert.equal(edit.json.error.code, 'already_published');
-      assert.equal(fake.state.calls.length, 0);
+      assert.deepEqual(fake.state.calls.map((c) => c.path), ['/campaign/get/', '/adgroup/get/', '/ad/get/'], 'só consultas de leitura (conferir que o publicado ainda existe): nada é criado de novo');
       assert.equal((await client.delete(`/api/campaigns/${id}`)).status, 204, 'pode remover o registro local');
     });
 

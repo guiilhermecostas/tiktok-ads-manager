@@ -7,6 +7,7 @@ import { PIXEL_EVENT_NAME_MAX, isPixelEvent, pixelEventLabel } from '../../../sh
 import { MAX_LINK_ADVERTISERS, PIXEL_LINK_ACTIONS, normalizePixelCode } from '../../../shared/pixel-link.js';
 import { isUniqueViolation } from '../../db/helpers.js';
 import { HttpError, badRequest, forbidden, notFound } from '../../lib/http-error.js';
+import { dropMissing } from '../../lib/created-levels.js';
 import { imageInfo } from '../../lib/image-size.js';
 import { TtlCache } from '../../lib/ttl-cache.js';
 import { sumTotals } from './tiktok.client.js';
@@ -100,6 +101,28 @@ async function assertPixelEvent(api, token, advertiserId, config) {
   throw new HttpError(422, `O pixel ${pixel.name || pixelId} ainda não tem o evento “${pixelEventLabel(optimizationEvent)}” (ele tem: ${has}). Crie o evento no pixel (“Criar evento no pixel”, no passo “Meta e conversão”) ou escolha um que ele já tenha. Nada foi criado no TikTok.`, 'pixel_event_missing');
 }
 
+/**
+ * Depois de criar, CONFERE no TikTok se campanha, grupo de anúncios e anúncio existem de verdade (nunca se confia só na resposta de "criado"). O TikTok pode demorar um instante para listar o
+ * que acabou de criar, então tenta algumas vezes (com `backoffMs`) antes de dizer que falta. Devolve { missing: ['campaign'|'adGroup'|'ad'…], unverified } — `unverified` quando a consulta em
+ * si falhou (sem permissão de leitura, limite…): aí não dá para afirmar nada e a publicação NÃO é bloqueada (a pessoa é avisada de que não foi conferida).
+ */
+const LEVEL_LABEL = { campaign: 'a campanha', adGroup: 'o conjunto de anúncios', ad: 'o anúncio' };
+async function confirmCreated(api, token, advertiserId, ids, backoffMs) {
+  let missing = [];
+  for (let attempt = 0; attempt <= backoffMs.length; attempt += 1) {
+    if (attempt > 0 && backoffMs[attempt - 1] > 0) await new Promise((resolve) => { setTimeout(resolve, backoffMs[attempt - 1]); });
+    let found;
+    try {
+      found = await api.findCreated(token, advertiserId, ids);
+    } catch {
+      return { missing: [], unverified: true };
+    }
+    missing = Object.entries(found).filter(([, exists]) => !exists).map(([level]) => level);
+    if (!missing.length) return { missing: [], unverified: false };
+  }
+  return { missing, unverified: false };
+}
+
 /** O TikTok não aceita duas campanhas com o mesmo nome na mesma conta de anúncio. */
 const CAMPAIGN_NAME_TAKEN = /campaign name (already )?exists?/i;
 const CAMPAIGN_NAME_MAX = 100; // limite do nome da campanha na especificação
@@ -142,6 +165,7 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
   // `statusLog` (opcional): guarda a situação das contas (ativa, encerrada, punida…) lida do TikTok a cada leitura das contas; sem ele a tela só mostra o que a coleta por hora já anotou.
   // `guards`: ganchos ligados depois da montagem (assinaturas): `beforeConnect(ownerId, { bcIds, advertiserIds })` pode recusar a conexão;
   // `beforeRemove(connection)` roda antes de apagar uma conexão. Sem ganchos, nada acontece (a integração com o TikTok não depende deles).
+  const verifyBackoffMs = Array.isArray(config.tiktok?.verifyBackoffMs) ? config.tiktok.verifyBackoffMs : [400, 1200, 3000]; // esperas entre as tentativas de conferir o que acabou de ser criado
   const creating = new Set(); // conexões com criação de contas em andamento (evita clique duplo / pedidos simultâneos)
   const linking = new Set(); // conexões com vínculo de pixel em andamento (mesma proteção contra clique duplo)
   const dataCache = new TtlCache({ ttlMs: 60_000 });
@@ -667,10 +691,16 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
     async publishCampaign({ actor, advertiserId, config: campaignConfig, assets = {}, existing = {}, activate = false, onCreated }) {
       const advertiser = await requireAdvertiser(actor, advertiserId);
       const ids = { campaignId: existing.campaignId ?? null, adGroupId: existing.adGroupId ?? null, adId: existing.adId ?? null };
-      const reused = { campaigns: ids.campaignId, adgroups: ids.adGroupId, ads: ids.adId }; // níveis que já existiam (tentativa anterior)
       const wanted = activate === true ? 'ENABLE' : 'DISABLE';
       return withBusinessCenterToken(advertiser.businessCenterId, async (token, api) => {
+        let reused; // níveis que já existiam (tentativa anterior) e foram confirmados no TikTok
         try {
+          // IDs guardados de uma tentativa anterior só valem se AINDA existem no TikTok (podem ter sido excluídos lá): confere antes de retomar; o que sumiu é recriado (nunca "pula" um nível que não existe).
+          if (ids.campaignId || ids.adGroupId || ids.adId) {
+            const before = await confirmCreated(api, token, advertiserId, { campaignId: ids.campaignId, adGroupId: ids.adGroupId, adId: ids.adId }, verifyBackoffMs);
+            if (before.missing.length) Object.assign(ids, dropMissing(ids, before.missing));
+          }
+          reused = { campaigns: ids.campaignId, adgroups: ids.adGroupId, ads: ids.adId };
           // Antes de criar QUALQUER coisa: o evento de conversão precisa existir no pixel (senão o grupo de anúncios é recusado depois da campanha criada).
           if (!ids.campaignId && !ids.adGroupId) await assertPixelEvent(api, token, advertiserId, campaignConfig);
           if (!ids.campaignId) {
@@ -689,6 +719,13 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
           }
           // Níveis criados numa tentativa ANTERIOR (retomada ou campanha reaproveitada) nasceram com a situação de lá: acerta para a que foi pedida agora.
           for (const [level, id] of Object.entries(reused)) if (id) await api.updateStatus(token, advertiserId, level, [id], wanted);
+          // Só é "publicada" se os TRÊS existirem no TikTok: confere por ID. Se algum não existe, solta o ID dele (e dos que dependem dele) para a próxima tentativa recriar só o que falta.
+          const check = await confirmCreated(api, token, advertiserId, { campaignId: ids.campaignId, adGroupId: ids.adGroupId, adId: ids.adId }, verifyBackoffMs);
+          if (check.missing.length) {
+            Object.assign(ids, dropMissing(ids, check.missing)); // sem campanha o grupo e o anúncio também não valem; sem grupo, o anúncio não vale
+            throw new HttpError(502, `O TikTok respondeu que criou, mas não encontramos ${check.missing.map((m) => LEVEL_LABEL[m]).join(' nem ')} na conta ao conferir. Nada foi dado como publicado: tente publicar de novo e o sistema recria só o que faltou.`, 'tiktok_not_found');
+          }
+          ids.verified = !check.unverified;
         } catch (err) {
           err.createdIds = { ...ids }; // o chamador registra o que já foi criado
           throw explainPublishError(err);
@@ -696,6 +733,15 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
         invalidate();
         return ids;
       });
+    },
+
+    /**
+     * Confere no TikTok se uma publicação JÁ registrada como concluída ainda existe de verdade (campanha, grupo e anúncio por ID). Devolve { missing, unverified }: `missing` lista o que
+     * não foi encontrado; `unverified` quando a consulta falhou (não dá para afirmar nada).
+     */
+    async verifyPublication({ actor, advertiserId, ids }) {
+      const advertiser = await requireAdvertiser(actor, advertiserId);
+      return withBusinessCenterToken(advertiser.businessCenterId, (token, api) => confirmCreated(api, token, advertiserId, ids, verifyBackoffMs));
     },
 
     /** Confirma que a conta de anúncio é de uma BC ativa e visível ao usuário (senão 404). */
