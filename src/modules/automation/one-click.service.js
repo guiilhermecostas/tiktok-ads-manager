@@ -1,7 +1,8 @@
 import { summarize, validateConfig } from '../../../shared/campaign-spec.js';
+import { copyNames, normalizeCopies } from '../../../shared/campaign-copies.js';
 import { MAX_TEMPLATES, TEMPLATE_NAME_MAX, TEMPLATE_NAME_MIN } from '../../../shared/one-click.js';
 import { isUniqueViolation } from '../../db/helpers.js';
-import { HttpError, notFound, validationError } from '../../lib/http-error.js';
+import { HttpError, badRequest, notFound, validationError } from '../../lib/http-error.js';
 import { asObject, parseText } from '../../lib/validation.js';
 
 export { MAX_TEMPLATES };
@@ -61,17 +62,26 @@ export function createOneClickService({ repo, campaigns, creatives }) {
     },
 
     /**
-     * Prepara uma publicação: cria uma campanha nova (rascunho) a partir do modelo e a devolve. A tela então publica essa campanha, conta por conta.
+     * Prepara uma publicação: cria as campanhas novas (rascunhos) a partir do modelo e as devolve. Com `count` > 1 são cópias IGUAIS com nome numerado ("Nome 01", "Nome 02"…),
+     * para publicar várias campanhas idênticas de uma vez. A tela então publica cada uma, conta por conta, em /api/campaigns/:id/publish.
      * A configuração é conferida DE NOVO aqui (a especificação ou os criativos podem ter mudado desde que o modelo foi salvo).
      */
-    async launch(actor, id) {
+    async launch(actor, id, { count = 1 } = {}) {
+      const copies = normalizeCopies(count);
+      if (copies === null) throw badRequest('Escolha de 1 a 10 campanhas por conta.', 'copies_invalid');
       const template = await this.get(actor, id);
       const { config, errors } = validateConfig(template.config, { requireComplete: true });
       if (errors.length) throw validationError(errors);
       const missing = await creatives.verifyReferences(actor, config);
       if (missing.length) throw validationError(missing);
-      const summary = summarize(config);
-      return campaigns.createWizard(actor.id, { name: summary.name ?? template.name, objective: summary.objective, dailyBudget: summary.dailyBudget, config });
+      const base = summarize(config).name ?? template.name;
+      const created = [];
+      for (const name of copyNames(base, copies)) {
+        const copy = copies === 1 ? config : { ...config, campaign: { ...config.campaign, name } };
+        const summary = summarize(copy);
+        created.push(await campaigns.createWizard(actor.id, { name: summary.name ?? name, objective: summary.objective, dailyBudget: summary.dailyBudget, config: copy }));
+      }
+      return created;
     },
   };
 }

@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { applyAccountOverrides, validateConfig } from '../../../shared/campaign-spec.js';
+import { applyAccountOverrides, summarize, validateConfig } from '../../../shared/campaign-spec.js';
+import { copyNames, normalizeCopies } from '../../../shared/campaign-copies.js';
 import { CAMPAIGN_OBJECTIVES, CAMPAIGN_STATUSES } from '../../db/constants.js';
 import { HttpError, badRequest, notFound, tooMany, validationError } from '../../lib/http-error.js';
 import { RateLimiter } from '../../lib/rate-limit.js';
@@ -43,6 +44,8 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
   const router = Router();
   // Cada conta de anúncio é uma chamada de publicação: o limite comporta lotes de várias contas.
   const publishLimiter = new RateLimiter({ max: limits.campaignPublish ?? 30, windowMs: 60 * 1000 });
+  // Criar as cópias de uma campanha (rascunhos) é barato, mas cada pedido cria até MAX_COPIES campanhas: limite próprio.
+  const copiesLimiter = new RateLimiter({ max: limits.campaignCopies ?? 20, windowMs: 60 * 1000 });
   // Campanhas com publicação em andamento (instância única). Evita criar itens duplicados no TikTok quando chegam
   // duas publicações simultâneas (duplo clique, duas abas) e impede editar/excluir no meio do processo.
   const publishing = new Set();
@@ -113,7 +116,32 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
   });
 
   /**
-   * Publica a campanha no TikTok em UMA conta de anúncio (Campanha → Grupo de anúncios → Anúncio), sempre PAUSADA.
+   * Cria `count` cópias IGUAIS (2 a MAX_COPIES) de uma campanha do assistente, cada uma um rascunho próprio com nome numerado ("Nome 01", "Nome 02"…), para publicar
+   * várias campanhas idênticas de uma vez (ex.: testar fatias de público). A campanha original não muda. Corpo: { count }. Devolve { campaigns: [{ id, name }] }.
+   */
+  router.post('/:id/copies', async (req, res) => {
+    const result = copiesLimiter.consume(String(req.actor.id));
+    if (!result.allowed) throw tooMany(result.retryAfterSec);
+    const count = normalizeCopies(asObject(req.body).count);
+    if (count === null || count < 2) throw badRequest('Escolha de 2 a 10 cópias.', 'copies_invalid');
+    const current = await campaigns.get(req.actor.id, parseId(req.params.id));
+    if (!current) throw notFound('Campanha não encontrada.');
+    if (!current.wizard) throw badRequest('Somente campanhas criadas pelo assistente podem ser copiadas.', 'legacy_campaign');
+    const { config, errors } = validateConfig(current.config, { requireComplete: true });
+    if (errors.length) throw validationError(errors);
+    await assertCreativesOwned(req.actor, config);
+    const created = [];
+    for (const name of copyNames(config.campaign.name, count)) {
+      const copy = { ...config, campaign: { ...config.campaign, name } };
+      const summary = summarize(copy);
+      const saved = await campaigns.createWizard(req.actor.id, { name, objective: summary.objective, dailyBudget: summary.dailyBudget, config: copy });
+      created.push({ id: saved.id, name: saved.name });
+    }
+    res.status(201).json({ campaigns: created });
+  });
+
+  /**
+   * Publica a campanha no TikTok em UMA conta de anúncio (Campanha → Grupo de anúncios → Anúncio): PAUSADA por padrão, ou já ATIVA com `activate: true`.
    * Para várias contas, o cliente chama esta rota uma vez por conta: cada uma tem progresso, erro e retomada próprios,
    * e a falha de uma não impede as outras. Corpo: { confirm: true, advertiserId, overrides? } — `overrides` são os IDs
    * próprios daquela conta (pixel, app, catálogo, formulário, identidade).
@@ -125,6 +153,9 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
     if (body.confirm !== true) throw badRequest('Confirme a publicação.', 'confirmation_required');
     const advertiserId = typeof body.advertiserId === 'string' ? body.advertiserId.trim() : '';
     if (!ADVERTISER_ID_RE.test(advertiserId)) throw badRequest('Escolha a conta de anúncio onde publicar.', 'advertiser_required');
+
+    if (body.activate !== undefined && typeof body.activate !== 'boolean') throw badRequest('Escolha se a campanha entra ativa ou pausada.', 'activate_invalid');
+    const activate = body.activate === true; // sem a escolha, o padrão da API continua sendo PAUSADA
 
     const id = parseId(req.params.id);
     // A trava é adquirida ANTES de qualquer await (verificar + registrar no mesmo "tick"): o acesso ao banco é
@@ -179,6 +210,7 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
           config,
           assets,
           existing: { campaignId: progress.tiktokCampaignId, adGroupId: progress.tiktokAdGroupId, adId: progress.tiktokAdId },
+          activate,
           onCreated: async (level, createdId) => {
             progress[{ campaign: 'tiktokCampaignId', adGroup: 'tiktokAdGroupId', ad: 'tiktokAdId' }[level]] = createdId;
             await persist({ error: null }); // grava a cada nível para não perder o que já foi criado
@@ -193,14 +225,14 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
         throw err;
       }
 
-      // Tudo criado nesta conta: a campanha local passa a "pausada" (é assim que nasce no TikTok).
+      // Tudo criado nesta conta: a campanha local passa a "ativa" (publicada já ativa) ou "pausada" (é assim que nasce no TikTok por padrão).
       const publication = await persist({ error: null, publishedAt: new Date().toISOString() });
-      res.json({ campaign: await campaigns.setStatus(req.actor.id, id, 'paused'), publication, ...(created?.campaignName ? { renamedTo: created.campaignName } : {}) });
+      res.json({ activated: activate, campaign: await campaigns.setStatus(req.actor.id, id, activate ? 'active' : 'paused'), publication, ...(created?.campaignName ? { renamedTo: created.campaignName } : {}) });
     } finally {
       publishing.delete(key);
     }
   });
 
-  router.stop = () => publishLimiter.stop();
+  router.stop = () => [publishLimiter, copiesLimiter].forEach((l) => l.stop());
   return router;
 }

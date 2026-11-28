@@ -10,7 +10,7 @@ import { parseId } from '../../lib/validation.js';
  *  - GET    /api/automation/one-click/:id        uma configuração
  *  - PUT    /api/automation/one-click/:id        { name, config } altera
  *  - DELETE /api/automation/one-click/:id        apaga a configuração (campanhas já publicadas a partir dela continuam)
- *  - POST   /api/automation/one-click/:id/launch cria a campanha (rascunho) a partir da configuração; a tela a publica conta por conta em /api/campaigns/:id/publish
+ *  - POST   /api/automation/one-click/:id/launch { count? } cria a(s) campanha(s) (rascunho) a partir da configuração; a tela as publica conta por conta em /api/campaigns/:id/publish
  */
 export function createOneClickRouter({ service, limits = {} }) {
   const router = Router();
@@ -44,8 +44,11 @@ export function createOneClickRouter({ service, limits = {} }) {
     res.status(204).end();
   });
 
+  // { count? }: de 1 a 10 campanhas iguais por conta (cada uma é um rascunho com nome numerado). `campaign` é a primeira (compatibilidade); `campaigns` são todas.
   router.post('/:id/launch', write, async (req, res) => {
-    res.status(201).json({ campaign: await service.launch(req.actor, parseId(req.params.id)) });
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const campaigns = await service.launch(req.actor, parseId(req.params.id), body.count === undefined ? {} : { count: body.count });
+    res.status(201).json({ campaign: campaigns[0], campaigns });
   });
 
   router.stop = () => [readLimiter, writeLimiter].forEach((l) => l.stop());

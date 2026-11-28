@@ -115,12 +115,12 @@ export function numberedName(base, n) {
  * Cria a campanha; se o nome já existe na conta (outra campanha, de outra rodada), tenta "Nome (2)", "Nome (3)"… em vez de falhar: rodar a mesma
  * configuração duas vezes na mesma conta é normal. Devolve { id, name } (o nome que ficou no TikTok). Outros erros passam como vieram.
  */
-async function createCampaignUnique(api, token, advertiserId, config) {
+async function createCampaignUnique(api, token, advertiserId, config, { activate = false } = {}) {
   const base = config.campaign.name;
   for (let attempt = 1; ; attempt += 1) {
     const name = attempt === 1 ? base : numberedName(base, attempt);
     try {
-      const id = await api.createCampaign(token, buildCampaignPayload(advertiserId, { ...config, campaign: { ...config.campaign, name } }));
+      const id = await api.createCampaign(token, buildCampaignPayload(advertiserId, { ...config, campaign: { ...config.campaign, name } }, { activate }));
       return { id, name };
     } catch (err) {
       if (!(err instanceof HttpError && err.code === 'tiktok_error' && CAMPAIGN_NAME_TAKEN.test(err.message)) || attempt >= MAX_NAME_TRIES) throw err;
@@ -660,31 +660,35 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
     },
 
     /**
-     * Publica a campanha no TikTok em 3 níveis (campanha → grupo → anúncio), SEMPRE pausada.
-     * `existing` permite retomar uma publicação parcial sem recriar o que já existe.
+     * Publica a campanha no TikTok em 3 níveis (campanha → grupo → anúncio): PAUSADA por padrão; com `activate`, já ATIVA (começa a gastar quando o TikTok aprovar o anúncio).
+     * `existing` permite retomar uma publicação parcial sem recriar o que já existe (os níveis que já existiam ganham a situação pedida agora).
      * `onCreated(level, id)` é chamado a cada nível criado para persistir o andamento.
      */
-    async publishCampaign({ actor, advertiserId, config: campaignConfig, assets = {}, existing = {}, onCreated }) {
+    async publishCampaign({ actor, advertiserId, config: campaignConfig, assets = {}, existing = {}, activate = false, onCreated }) {
       const advertiser = await requireAdvertiser(actor, advertiserId);
       const ids = { campaignId: existing.campaignId ?? null, adGroupId: existing.adGroupId ?? null, adId: existing.adId ?? null };
+      const reused = { campaigns: ids.campaignId, adgroups: ids.adGroupId, ads: ids.adId }; // níveis que já existiam (tentativa anterior)
+      const wanted = activate === true ? 'ENABLE' : 'DISABLE';
       return withBusinessCenterToken(advertiser.businessCenterId, async (token, api) => {
         try {
           // Antes de criar QUALQUER coisa: o evento de conversão precisa existir no pixel (senão o grupo de anúncios é recusado depois da campanha criada).
           if (!ids.campaignId && !ids.adGroupId) await assertPixelEvent(api, token, advertiserId, campaignConfig);
           if (!ids.campaignId) {
-            const created = await createCampaignUnique(api, token, advertiserId, campaignConfig);
+            const created = await createCampaignUnique(api, token, advertiserId, campaignConfig, { activate });
             ids.campaignId = created.id;
             if (created.name !== campaignConfig.campaign.name) ids.campaignName = created.name; // já existia uma campanha com o nome pedido: o sistema numerou
             await onCreated?.('campaign', ids.campaignId);
           }
           if (!ids.adGroupId) {
-            ids.adGroupId = await api.createAdGroup(token, buildAdGroupPayload(advertiserId, ids.campaignId, campaignConfig, { timezone: advertiser.timezone }));
+            ids.adGroupId = await api.createAdGroup(token, buildAdGroupPayload(advertiserId, ids.campaignId, campaignConfig, { timezone: advertiser.timezone, activate }));
             await onCreated?.('adGroup', ids.adGroupId);
           }
           if (!ids.adId) {
-            ids.adId = await api.createAd(token, buildAdPayload(advertiserId, ids.adGroupId, campaignConfig, assets));
+            ids.adId = await api.createAd(token, buildAdPayload(advertiserId, ids.adGroupId, campaignConfig, assets, { activate }));
             await onCreated?.('ad', ids.adId);
           }
+          // Níveis criados numa tentativa ANTERIOR (retomada ou campanha reaproveitada) nasceram com a situação de lá: acerta para a que foi pedida agora.
+          for (const [level, id] of Object.entries(reused)) if (id) await api.updateStatus(token, advertiserId, level, [id], wanted);
         } catch (err) {
           err.createdIds = { ...ids }; // o chamador registra o que já foi criado
           throw explainPublishError(err);

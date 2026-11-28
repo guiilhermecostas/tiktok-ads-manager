@@ -71,7 +71,7 @@ export function renderReview({ config, creatives, errors, publish, readOnly, goT
       : h(
           'div',
           { class: `alert ${publish.status === 'published' ? 'alert--success' : 'alert--danger'}` },
-          h('strong', null, publish.status === 'published' ? `Publicada no TikTok (pausada) em ${count === 1 ? '1 conta' : `${count} contas`}.` : 'Publicação parcial: alguns níveis já foram criados no TikTok.'),
+          h('strong', null, publish.status === 'published' ? `Publicada no TikTok em ${count === 1 ? '1 conta' : `${count} contas`}.` : 'Publicação parcial: alguns níveis já foram criados no TikTok.'),
           publish.status === 'published' ? h('p', null, 'A configuração da campanha não muda mais, mas você pode publicar em outras contas logo abaixo.') : h('p', null, 'Ao publicar de novo nessa conta, só os níveis que faltam serão criados.'),
         );
 

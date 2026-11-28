@@ -2,13 +2,16 @@ import { COUNTRIES, findField, isVisible } from '../../../shared/campaign-spec.j
 
 /**
  * Converte a configuração validada do assistente nos corpos de requisição da Marketing API v1.3.
- * Funções puras (fáceis de testar). TUDO é criado pausado (operation_status = DISABLE), inclusive o
- * criativo (o padrão do TikTok para anúncios seria ENABLE): nada gasta até o usuário ativar no TikTok.
+ * Funções puras (fáceis de testar). Por padrão TUDO é criado pausado (operation_status = DISABLE), inclusive o
+ * criativo (o padrão do TikTok para anúncios seria ENABLE): nada gasta até o usuário ativar no TikTok. Com `activate`, a
+ * pessoa pediu para publicar JÁ ATIVA: os três níveis nascem ENABLE (o anúncio ainda passa pela análise do TikTok antes de rodar).
  *
  * Os nomes dos campos seguem os modelos do SDK oficial (tiktok/tiktok-business-api-sdk).
  * Valores monetários são guardados em centavos e enviados em unidades da moeda da conta.
  */
 const FROM_NOW_LEAD_MS = 5 * 60 * 1000; // "começar agora" = daqui a 5 min (o TikTok recusa início no passado)
+/** Situação com que o nível nasce no TikTok: pausado (padrão) ou, a pedido da pessoa, já ativo. */
+const operationStatus = (activate) => (activate === true ? 'ENABLE' : 'DISABLE');
 const toUnits = (cents) => Number((cents / 100).toFixed(2));
 const toTikTokTime = (local) => `${local.replace('T', ' ')}:00`; // "2026-11-20T09:30" -> "2026-11-20 09:30:00"
 const COUNTRY_ID = Object.fromEntries(COUNTRIES.map((c) => [c.value, c.locationId]));
@@ -48,7 +51,7 @@ function promotionType(config) {
   return 'WEBSITE';
 }
 
-export function buildCampaignPayload(advertiserId, config) {
+export function buildCampaignPayload(advertiserId, config, { activate = false } = {}) {
   const c = config.campaign;
   const hasBudget = c.budgetMode !== 'BUDGET_MODE_INFINITE';
   return compact({
@@ -63,14 +66,14 @@ export function buildCampaignPayload(advertiserId, config) {
     budget_optimize_on: hasBudget && !isCatalog(config) ? true : undefined,
     app_promotion_type: c.objective === 'APP_PROMOTION' ? c.appPromotionType : undefined,
     special_industries: c.specialIndustries,
-    operation_status: 'DISABLE',
+    operation_status: operationStatus(activate),
   });
 }
 
 /**
  * @param {{ timezone?: string|null, now?: Date }} [context] fuso da conta de anúncio e relógio (injetável em testes)
  */
-export function buildAdGroupPayload(advertiserId, campaignId, config, { timezone = null, now = new Date() } = {}) {
+export function buildAdGroupPayload(advertiserId, campaignId, config, { timezone = null, now = new Date(), activate = false } = {}) {
   const g = config.adGroup;
   const has = (key) => visible(config, 'adGroup', key);
   const budgetOnGroup = has('budget');
@@ -118,7 +121,7 @@ export function buildAdGroupPayload(advertiserId, campaignId, config, { timezone
     shopping_ads_retargeting_type: catalog ? 'OFF' : undefined,
     frequency: has('frequency') ? g.frequency : undefined,
     frequency_schedule: has('frequencyDays') ? g.frequencyDays : undefined,
-    operation_status: 'DISABLE',
+    operation_status: operationStatus(activate),
   });
 }
 
@@ -135,7 +138,7 @@ export function withUtm(landingPageUrl, utmParams) {
  *   IDs que o TikTok devolveu ao receber os criativos da biblioteca para esta conta de anúncio
  *   (resolvidos pelo servidor antes de criar qualquer coisa no TikTok).
  */
-export function buildAdPayload(advertiserId, adGroupId, config, assets = {}) {
+export function buildAdPayload(advertiserId, adGroupId, config, assets = {}, { activate = false } = {}) {
   const a = config.ad;
   const has = (key) => visible(config, 'ad', key);
   const hasGroup = (key) => visible(config, 'adGroup', key);
@@ -169,8 +172,8 @@ export function buildAdPayload(advertiserId, adGroupId, config, assets = {}) {
     shopping_ads_fallback_type: catalog ? 'CUSTOM' : undefined,
     // Leads por formulário instantâneo: o ID da página/formulário vai no criativo (page_id numérico).
     page_id: hasGroup('leadFormId') ? Number(config.adGroup.leadFormId) : undefined,
-    // O padrão do TikTok para criativos é ENABLE: forçamos pausado, como campanha e grupo.
-    operation_status: 'DISABLE',
+    // O padrão do TikTok para criativos é ENABLE: sem `activate`, forçamos pausado, como campanha e grupo.
+    operation_status: operationStatus(activate),
   });
   if (a.format === 'SINGLE_VIDEO' && assets.coverImageId) creative.image_ids = [assets.coverImageId];
   return { advertiser_id: advertiserId, adgroup_id: adGroupId, creatives: [creative] };

@@ -537,7 +537,7 @@ Menu **Automação → Campanha one-click** (exige a área “Campanhas”). A p
 (“Campanha para os Estados Unidos”, “Campanha para o Brasil”) e ela vira um **cartão** com dois botões: **Apagar** e **Publicar**. O **+** cria uma configuração nova; **Duplicar** abre uma cópia já no passo do anúncio (para trocar os criativos sem montar tudo de novo; o nome sugerido é “… (cópia)” e só vira cartão quando você salva); clicar no título do cartão a edita.
 
 - **Publicar** abre um pop-up com **todas as contas de anúncio** em lista, agrupadas por Business Center, com **busca por nome ou ID da conta**, filtro por **Business Center**, por **tipo** (comuns/agência), por **situação** (ativas/inativas)
-  e por moeda (quando há mais de uma), mais "marcar todas as listadas". O botão **Publicar** fica sempre visível. Cada conta tem andamento, erro e retomada próprios e **tudo é criado PAUSADO**. Os IDs próprios de cada conta (pixel, identidade…) podem ser ajustados ali.
+  e por moeda (quando há mais de uma), mais "marcar todas as listadas". O botão **Publicar** fica sempre visível. Cada conta tem andamento, erro e retomada próprios e **entra já ATIVA ou PAUSADA, como você escolher** (veja “Publicar já ativa e várias campanhas por conta”). Os IDs próprios de cada conta (pixel, identidade…) podem ser ajustados ali.
 - **Como funciona (reaproveita o que já existe):** a configuração é guardada em `campaign_templates` (migração 26, RLS, nome único por dono, até 50 por dono, sempre **completa**). Publicar chama `POST /api/automation/one-click/:id/launch`, que
   cria uma **campanha nova** a partir da configuração (re-validada no servidor, criativos conferidos) e a tela publica essa campanha conta por conta em `POST /api/campaigns/:id/publish` (mesmas travas, limites, criativos refeitos por conta e registro de atividades).
   A configuração **nunca é “gasta”**: serve para quantas publicações a pessoa quiser; apagar o cartão não apaga campanhas já publicadas. Se algumas contas falharem, tentar de novo na mesma janela retoma só as que faltam.
@@ -570,7 +570,7 @@ Menu **Automação → Campanha one-click** (exige a área “Campanhas”). A p
 - Os campos, opções por objetivo e regras ficam em **um único arquivo**, `shared/campaign-spec.js`, usado pelo navegador (para montar
   o formulário e validar na hora) e pelo servidor (que valida de novo e é a autoridade). Para suportar uma nova opção, edite só esse arquivo.
 - **Rascunhos:** salve em qualquer etapa (basta ter escolhido o objetivo). Campos obrigatórios só são exigidos para publicar.
-- **Publicar no TikTok:** cria campanha, grupo e anúncio **sempre pausados** (nada gasta até ativar no TikTok), exige confirmação,
+- **Publicar no TikTok:** cria campanha, grupo e anúncio **pausados ou já ativos, como você escolher** (veja abaixo), exige confirmação,
   só aceita contas de anúncio das suas Business Centers (ou das compartilhadas) e, se um nível falhar, **retoma** de onde parou sem duplicar.
   O que já foi criado no TikTok (em qualquer conta) não pode mais ser alterado na configuração.
 - **Criativos:** o vídeo, a capa e as imagens do anúncio são escolhidos da sua **biblioteca de criativos** (menu Criativos).
@@ -581,6 +581,20 @@ Menu **Automação → Campanha one-click** (exige a área “Campanhas”). A p
 - **Publicação segura:** uma trava por campanha impede publicações simultâneas (sem itens duplicados no TikTok) e bloqueia editar/excluir
   enquanto publica. O início do grupo de anúncios é sempre enviado (obrigatório no TikTok), no fuso da conta.
 - O banco evolui por **migrações** (`src/db/migrations.js`), sem perder dados.
+
+### Publicar já ativa e várias campanhas por conta
+
+No painel “Publicar em” (assistente de campanha e Automação → Campanha one-click) há duas opções, valendo para todas as contas marcadas:
+- **Publicar já ativa** (ligada por padrão): campanha, grupo de anúncios e anúncio nascem `ENABLE`. **Começa a gastar o orçamento assim que o TikTok aprovar o anúncio** (a análise do TikTok continua valendo). A confirmação diz isso com todas as
+  letras e o botão mostra “(ativa)”/“(pausada)”. Desmarcada, tudo nasce `DISABLE` como antes. A API (`POST /api/campaigns/:id/publish`) aceita `activate` (booleano; **sem ele o padrão da API continua PAUSADA**; outro tipo é 400) e responde `activated`;
+  a campanha local fica “ativa” ou “pausada” e o registro de atividades guarda “Publicada já ativa/pausada”. Se uma tentativa anterior criou níveis pausados (publicação retomada ou campanha reaproveitada), eles recebem a situação
+  pedida agora (`/campaign|adgroup|ad/status/update/`).
+- **Campanhas iguais por conta (1 a 10):** cria N campanhas idênticas em cada conta marcada (ex.: 5 campanhas para testar fatias de público; depois você ajusta o público de cada uma no TikTok). Cada cópia é um rascunho próprio com nome numerado
+  (“Nome 01”, “Nome 02”…; com 1 só, o nome fica como está), com o mesmo grupo de anúncios e anúncio. **Teto de 60 campanhas por rodada** (cópias × contas): ao marcar mais contas, a quantidade máxima encolhe (`maxCopiesFor`). O servidor cria as
+  cópias em `POST /api/campaigns/:id/copies` (`{ count: 2 a 10 }`, a campanha original não muda) e `POST /api/automation/one-click/:id/launch` aceita `{ count }`. As publicações vão uma conta de cada vez e, em cada conta, uma cópia de cada vez; se uma cópia
+  falha as seguintes daquela conta não são tentadas e, ao publicar de novo na mesma tela, as que já existem são puladas. Ao bater o limite de pedidos por minuto (429), a tela **espera sozinha** e continua (“aguardando o limite de pedidos…”).
+- Os textos (confirmação, resumo, avisos) ficam em `shared/publish-messages.js` e as regras das cópias em `shared/campaign-copies.js`, ambos testados. Isso também corrigiu um aviso enganoso no assistente (mostrava “Nenhuma conta foi publicada”
+  mesmo quando a publicação dava certo).
 
 ### Nome de campanha repetido (erro “Campaign name already exists”)
 

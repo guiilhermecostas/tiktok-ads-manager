@@ -1,4 +1,5 @@
 import { accountHealth, countByKind } from '/shared/account-labels.js';
+import { MAX_COPIES, copyNames, maxCopiesFor } from '/shared/campaign-copies.js';
 import { countByCurrency, currencySymbol, distinctCurrencies, isMainCurrency } from '/shared/currency.js';
 import { ACCOUNT_FIELDS, applyAccountOverrides, getPath, validateConfig } from '/shared/campaign-spec.js';
 import { h, setChildren } from '../../dom.js';
@@ -70,6 +71,55 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     else overrides.delete(id);
   }
 
+  // ---------- opções da publicação: quantas campanhas por conta e se entram ativas ----------
+  let copies = 1;
+  let activate = true; // a pessoa pediu campanhas já ativas: é o padrão; a chave permite publicar pausada
+  const copiesInput = h('input', { id: 'targets-copies', class: 'input targets__copies-input', type: 'number', min: '1', max: String(MAX_COPIES), step: '1', value: '1', inputmode: 'numeric', 'aria-label': 'Campanhas iguais por conta' });
+  const copiesMinus = h('button', { type: 'button', class: 'btn btn--secondary btn--sm', 'aria-label': 'Diminuir a quantidade de campanhas por conta' }, '−');
+  const copiesPlus = h('button', { type: 'button', class: 'btn btn--secondary btn--sm', 'aria-label': 'Aumentar a quantidade de campanhas por conta' }, '+');
+  const activateBox = h('input', { type: 'checkbox', checked: true, id: 'targets-activate' });
+  const optionsHint = h('p', { class: 'field__hint targets__options-hint', 'aria-live': 'polite' });
+  const accountsPicked = () => advertisers.filter((a) => selected.has(a.id)).length;
+  const maxCopies = () => maxCopiesFor(accountsPicked());
+  function setCopies(value) {
+    const n = Math.trunc(Number(value));
+    copies = Number.isFinite(n) ? Math.min(maxCopies(), Math.max(1, n)) : 1;
+    copiesInput.value = String(copies);
+    renderOptions();
+    onChange?.();
+  }
+  /** Mostra o que vai acontecer ("5 campanhas em cada uma das 3 contas = 15, com os nomes…") e mantém a quantidade dentro do teto da rodada. */
+  function renderOptions() {
+    if (copies > maxCopies()) copies = maxCopies(); // marcou mais contas: o teto de campanhas por rodada encolhe a quantidade
+    copiesInput.value = String(copies);
+    copiesInput.max = String(maxCopies());
+    copiesMinus.disabled = busy || copies <= 1;
+    copiesPlus.disabled = busy || copies >= maxCopies();
+    copiesInput.disabled = busy;
+    activateBox.disabled = busy;
+    const accounts = accountsPicked();
+    const name = getConfig().campaign?.name ?? 'Nome';
+    const names = copyNames(name, copies);
+    optionsHint.textContent = copies === 1
+      ? (activate ? 'Entra ATIVA: começa a gastar assim que o TikTok aprovar o anúncio.' : 'Entra PAUSADA: nada gasta até você ativar no TikTok.')
+      : `${copies} campanhas iguais em cada conta${accounts ? ` (${accounts} ${accounts === 1 ? 'conta' : 'contas'} = ${copies * accounts} campanhas no total)` : ''}, com os nomes “${names[0]}” até “${names[names.length - 1]}”. ${activate ? 'Entram ATIVAS e começam a gastar assim que o TikTok aprovar.' : 'Entram PAUSADAS.'} Máximo de ${maxCopies()} por conta nesta rodada (limite de ${MAX_COPIES} por conta e de 60 campanhas no total).`;
+  }
+  copiesInput.addEventListener('change', () => setCopies(copiesInput.value));
+  copiesMinus.addEventListener('click', () => setCopies(copies - 1));
+  copiesPlus.addEventListener('click', () => setCopies(copies + 1));
+  activateBox.addEventListener('change', () => {
+    activate = activateBox.checked;
+    renderOptions();
+    onChange?.();
+  });
+  const optionsRow = h(
+    'div',
+    { class: 'targets__options' },
+    h('div', { class: 'targets__copies' }, h('label', { for: 'targets-copies', class: 'field__label' }, 'Campanhas iguais por conta'), h('div', { class: 'targets__copies-control' }, copiesMinus, copiesInput, copiesPlus)),
+    h('label', { class: 'check targets__activate', for: 'targets-activate' }, activateBox, h('span', null, h('strong', null, 'Publicar já ativa'), h('span', { class: 'muted' }, ' · começa a gastar quando o TikTok aprovar. Desmarque para criar pausada.'))),
+    optionsHint,
+  );
+
   // ---------- desenho ----------
   const list = h('div', { class: 'targets__list' });
   const summary = h('p', { class: 'targets__summary', 'aria-live': 'polite' });
@@ -131,8 +181,8 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
 
   function statusChip(account) {
     const result = results.get(account.id);
-    if (result?.state === 'running') return h('span', { class: 'targets__state targets__state--running' }, loader({ small: true }), 'Preparando criativos e publicando…');
-    if (result?.state === 'done') return h('span', { class: 'targets__state targets__state--done' }, '✓ Publicada (pausada)');
+    if (result?.state === 'running') return h('span', { class: 'targets__state targets__state--running' }, loader({ small: true }), result.note ?? 'Preparando criativos e publicando…');
+    if (result?.state === 'done') return h('span', { class: 'targets__state targets__state--done' }, result.label ?? '✓ Publicada');
     if (result?.state === 'failed') return h('span', { class: 'targets__state targets__state--failed' }, '✗ Falhou');
     const publication = publicationOf(account.id);
     if (publication?.status === 'published') return badge('Já publicada', 'success');
@@ -265,6 +315,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     const allListed = listed.length > 0 && listed.every((a) => selected.has(a.id));
     selectListed.textContent = allListed ? `Desmarcar as ${listed.length} listadas` : `Marcar todas as ${listed.length} listadas`;
     selectListed.disabled = busy || !listed.length;
+    renderOptions();
     const currencies = distinctCurrencies(picked);
     const unusual = currencies.length > 1 || currencies.some((c) => !isMainCurrency(c));
     // O mesmo número vale em cada conta, na moeda dela: mostra o valor digitado em cada moeda para não haver surpresa.
@@ -298,7 +349,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     'section',
     { class: 'card card--pad targets' },
     h('h3', { class: 'card__title' }, 'Publicar em'),
-    h('p', { class: 'muted' }, 'Escolha uma ou mais contas de anúncio, de qualquer Business Center. A campanha é criada PAUSADA em cada uma: nada gasta até você ativar no TikTok.'),
+    h('p', { class: 'muted' }, 'Escolha uma ou mais contas de anúncio, de qualquer Business Center. Abaixo você decide se a campanha já entra ativa e quantas campanhas iguais criar em cada conta (para testar fatias de público, por exemplo).'),
     h(
       'p',
       { class: 'targets__note' },
@@ -308,6 +359,7 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     searchRow,
     filtersRow,
     list,
+    optionsRow,
     summary,
     warning,
   );
@@ -335,6 +387,9 @@ export function createPublishTargets({ advertisers, getConfig, getPublications, 
     refresh,
     /** IDs selecionados, na ordem em que aparecem na tela (Business Centers e contas). */
     selectedIds: () => advertisers.filter((a) => selected.has(a.id)).map((a) => a.id),
+    /** Quantas campanhas iguais criar em cada conta (1 a 10) e se entram já ativas. */
+    copies: () => copies,
+    activate: () => activate,
     /** Ajustes não vazios de uma conta, no formato que a API aceita. */
     overridesFor: (id) => effectiveOverrides(id),
     /** Erros de ID por conta selecionada ({ [id]: [{path,message}] }); liga a exibição dos erros. */

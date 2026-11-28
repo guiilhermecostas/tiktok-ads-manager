@@ -1,7 +1,8 @@
+import { confirmLabel, confirmMessage, resultToasts } from '/shared/publish-messages.js';
 import { get, post } from '../../api.js';
 import { h, icon } from '../../dom.js';
 import { alertBox, button, confirmDialog, openModal, spinner, toast } from '../../ui.js';
-import { publishToAccounts, renamedNotice } from '../campaign-wizard/publish-run.js';
+import { publishToAccounts } from '../campaign-wizard/publish-run.js';
 import { createPublishTargets } from '../campaign-wizard/publish-targets.js';
 
 let active = null; // um pop-up por vez (duplo clique no botão não abre dois)
@@ -9,7 +10,7 @@ let active = null; // um pop-up por vez (duplo clique no botão não abre dois)
 /**
  * Pop-up "Publicar" de uma configuração one-click: lista TODAS as contas de anúncio, com filtro por Business Center, tipo e situação (ativas/inativas)
  * e busca por nome ou ID da conta; a pessoa marca as contas e publica. Cada conta é uma publicação própria (progresso, erro e retomada por conta),
- * sempre PAUSADA. A campanha é criada a partir da configuração no primeiro clique em publicar e reaproveitada se a pessoa tentar de novo as contas que falharam.
+ * pausada ou, se a pessoa quiser, já ATIVA. A pessoa também escolhe quantas campanhas iguais criar em cada conta (para testar fatias de público). As campanhas são criadas a partir da configuração no primeiro clique em publicar e reaproveitadas se a pessoa tentar de novo as contas que falharam.
  * `template`: { id, name, config }. `onDone()`: chamado ao fechar, se algo foi publicado.
  */
 export function openOneClickPublish({ template, onDone }) {
@@ -18,7 +19,7 @@ export function openOneClickPublish({ template, onDone }) {
   let targets = null;
   let busy = false;
   let published = false;
-  let campaignId = null; // criada no primeiro "Publicar"; as tentativas seguintes (contas que falharam) usam a mesma
+  let drafts = []; // campanhas (rascunhos) criadas no primeiro "Publicar" (uma por cópia); as tentativas seguintes (contas que falharam) usam as mesmas
   let publications = [];
   const bannerSlot = h('div', { class: 'oneclick-publish__banner' });
   const footer = h('div', { class: 'oneclick-publish__footer' }); // fora da área que rola: o botão Publicar fica sempre à vista, mesmo com muitas contas
@@ -57,10 +58,12 @@ export function openOneClickPublish({ template, onDone }) {
     if (!ids.length) return showBanner('Escolha ao menos uma conta de anúncio.');
     if (Object.keys(targets.validate()).length) return showBanner('Corrija os IDs destacados nas contas selecionadas.');
     showBanner(null);
+    const copies = targets.copies();
+    const activate = targets.activate();
     const ok = await confirmDialog({
       title: 'Publicar no TikTok',
-      message: `Vamos criar a campanha, o grupo de anúncios e o anúncio de “${template.name}” em ${ids.length === 1 ? '1 conta' : `${ids.length} contas`}. Tudo será criado PAUSADO: nada começa a gastar até você ativar no TikTok.`,
-      confirmLabel: ids.length === 1 ? 'Publicar (pausada)' : `Publicar em ${ids.length} contas (pausadas)`,
+      message: confirmMessage({ what: `a campanha, o grupo de anúncios e o anúncio de “${template.name}”`, where: `em ${ids.length === 1 ? '1 conta' : `${ids.length} contas`}`, accounts: ids.length, copies, activate }),
+      confirmLabel: confirmLabel({ accounts: ids.length, copies, activate }),
     });
     if (!ok) return undefined;
 
@@ -69,7 +72,7 @@ export function openOneClickPublish({ template, onDone }) {
     targets.setBusy(true);
     drawFooter();
     try {
-      if (!campaignId) campaignId = (await post(`/automation/one-click/${template.id}/launch`)).campaign.id;
+      if (drafts.length !== copies) drafts = (await post(`/automation/one-click/${template.id}/launch`, { count: copies })).campaigns.map((c) => c.id);
     } catch (err) {
       // Configuração incompleta, criativo apagado, etc.: nada foi criado no TikTok.
       showBanner(Array.isArray(err.details) && err.details.length ? `Esta configuração precisa de ajustes antes de publicar: ${err.details.slice(0, 3).map((d) => d.message).join(' · ')}. Edite o cartão e tente de novo.` : err.message);
@@ -78,27 +81,24 @@ export function openOneClickPublish({ template, onDone }) {
       drawFooter();
       return undefined;
     }
-    const { succeeded, failed, renamed } = await publishToAccounts({ campaignId, ids, targets });
+    const { succeeded, failed, renamed, created } = await publishToAccounts({ campaignIds: drafts, ids, targets, activate });
     if (succeeded.length) published = true;
     try {
-      publications = (await get(`/campaigns/${campaignId}`)).campaign.publications;
+      if (drafts.length === 1) publications = (await get(`/campaigns/${drafts[0]}`)).campaign.publications;
     } catch {
       /* mantém o estado anterior */
     }
     targets.deselect(succeeded);
     busy = false;
     targets.setBusy(false);
-    if (succeeded.length && !failed) toast(succeeded.length === 1 ? 'Publicada no TikTok (pausada).' : `Publicada em ${succeeded.length} contas (pausadas).`);
-    else if (succeeded.length) toast(`Publicada em ${succeeded.length} de ${ids.length} contas. Veja os erros na lista.`, 'danger');
-    else toast('Nenhuma conta foi publicada. Veja os erros na lista.', 'danger');
-    if (renamedNotice(renamed)) toast(renamedNotice(renamed), 'warning');
+    for (const { message, tone } of resultToasts({ requested: ids.length, succeeded: succeeded.length, failed, created, copies, activate, renamed })) toast(message, tone);
     drawFooter();
     return undefined;
   }
 
   get('/tiktok/advertisers')
     .then(({ advertisers }) => {
-      targets = createPublishTargets({ advertisers, getConfig: () => template.config, getPublications: () => publications, onChange: drawFooter, alwaysSearch: true });
+      targets = createPublishTargets({ advertisers, getConfig: () => template.config, getPublications: () => (drafts.length > 1 ? [] : publications), onChange: drawFooter, alwaysSearch: true });
       body.replaceChildren(
         h('p', { class: 'muted oneclick-publish__intro' }, 'Escolha em quais contas de anúncio publicar esta configuração. Use a busca (nome ou ID da conta) e os filtros por Business Center e situação para achar mais rápido.'),
         targets.element,

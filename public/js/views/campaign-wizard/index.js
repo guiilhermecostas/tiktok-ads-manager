@@ -9,7 +9,8 @@ import { parseMoneyToCents } from '../../format.js';
 import { alertBox, button, confirmDialog, field as formField, openModal, spinner, stepper as stepperView, toast } from '../../ui.js';
 import { pickCreatives } from '../creatives/picker.js';
 import { renderStepForm } from './form-fields.js';
-import { publishToAccounts, renamedNotice } from './publish-run.js';
+import { confirmLabel, confirmMessage, resultToasts } from '/shared/publish-messages.js';
+import { publishToAccounts } from './publish-run.js';
 import { createPublishTargets } from './publish-targets.js';
 import { renderReview } from './review.js';
 
@@ -306,7 +307,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
     const nameCard = () => {
       nameError.textContent = st.nameError ?? '';
       nameError.hidden = !st.nameError;
-      return h('section', { class: 'card card--pad targets' }, h('h3', { class: 'card__title' }, 'Nome da configuração'), nameField.element, nameError, h('p', { class: 'muted' }, 'Para publicar, volte ao cartão desta configuração e clique em Publicar: lá você escolhe em quais contas de anúncio ela vai (pausada).'));
+      return h('section', { class: 'card card--pad targets' }, h('h3', { class: 'card__title' }, 'Nome da configuração'), nameField.element, nameError, h('p', { class: 'muted' }, 'Para publicar, volte ao cartão desta configuração e clique em Publicar: lá você escolhe em quais contas de anúncio ela vai, quantas campanhas iguais criar em cada uma e se entram já ativas.'));
     };
 
     async function saveTemplate() {
@@ -340,6 +341,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
     }
 
     /** Publica nas contas escolhidas, UMA de cada vez: cada conta tem progresso, erro e retomada próprios. */
+    let copyDrafts = { of: null, count: 0, ids: [] }; // cópias já criadas nesta sessão (para a nova tentativa reaproveitar)
     async function publishSelected() {
       const ids = targets.selectedIds();
       if (!ids.length) {
@@ -362,10 +364,12 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
       const centers = new Set(chosen.map((a) => a.businessCenterId)).size;
       const kinds = countByKind(chosen);
       const kindText = kinds.agency ? ` (${kinds.agency} de agência${kinds.standard ? ` e ${kinds.standard} ${kinds.standard === 1 ? 'comum' : 'comuns'}` : ''})` : '';
+      const copies = targets.copies();
+      const activate = targets.activate();
       const ok = await confirmDialog({
         title: 'Publicar no TikTok',
-        message: `Vamos criar a campanha, o grupo de anúncios e o anúncio em ${ids.length === 1 ? `1 conta ("${chosen[0].name}")` : `${ids.length} contas${kindText} de ${centers === 1 ? '1 Business Center' : `${centers} Business Centers`}`}. Tudo será criado PAUSADO: nada começa a gastar até você ativar no TikTok.`,
-        confirmLabel: ids.length === 1 ? 'Publicar (pausada)' : `Publicar em ${ids.length} contas (pausadas)`,
+        message: confirmMessage({ what: 'a campanha, o grupo de anúncios e o anúncio', where: `em ${ids.length === 1 ? `1 conta ("${chosen[0].name}")` : `${ids.length} contas${kindText} de ${centers === 1 ? '1 Business Center' : `${centers} Business Centers`}`}`, accounts: ids.length, copies, activate }),
+        confirmLabel: confirmLabel({ accounts: ids.length, copies, activate }),
       });
       if (!ok) return;
 
@@ -374,6 +378,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
       targets.clearResults();
       targets.setBusy(true);
       draw();
+      const wasDirty = st.dirty; // se algo mudou, as cópias criadas antes ficaram velhas
       try {
         if (!readOnlyAll()) await save({ quiet: true }); // campanha já publicada em alguma conta é somente leitura
       } catch (err) {
@@ -384,7 +389,22 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
         return;
       }
 
-      const { succeeded, failed, renamed } = await publishToAccounts({ campaignId: st.id, ids, targets });
+      // Várias campanhas iguais por conta: o servidor cria as cópias (rascunhos com nome numerado) a partir da campanha já salva; as tentativas seguintes (contas que falharam) reaproveitam as mesmas.
+      let campaignIds = [st.id];
+      if (copies > 1) {
+        try {
+          if (copyDrafts.count !== copies || copyDrafts.of !== st.id || wasDirty) copyDrafts = { of: st.id, count: copies, ids: (await post(`/campaigns/${st.id}/copies`, { count: copies })).campaigns.map((c) => c.id) };
+          campaignIds = copyDrafts.ids;
+        } catch (err) {
+          st.banner = err.message;
+          st.busy = null;
+          targets.setBusy(false);
+          draw({ scrollTop: true });
+          return;
+        }
+      }
+
+      const { succeeded, failed, renamed, created } = await publishToAccounts({ campaignIds, ids, targets, activate });
       st.changed = true;
       try {
         const fresh = (await get(`/campaigns/${st.id}`)).campaign;
@@ -396,10 +416,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
       targets.deselect(succeeded);
       st.busy = null;
       targets.setBusy(false);
-      if (succeeded.length && !failed) toast(succeeded.length === 1 ? 'Campanha publicada no TikTok (pausada).' : `Campanha publicada em ${succeeded.length} contas (pausadas).`);
-      else if (succeeded.length) toast(`Publicada em ${succeeded.length} de ${ids.length} contas. Veja os erros abaixo.`, 'danger');
-      if (renamedNotice(renamed)) toast(renamedNotice(renamed), 'warning');
-      else toast('Nenhuma conta foi publicada. Veja os erros abaixo.', 'danger');
+      for (const { message, tone } of resultToasts({ requested: ids.length, succeeded: succeeded.length, failed, created, copies, activate, renamed })) toast(message, tone);
       draw();
     }
 

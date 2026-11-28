@@ -53,6 +53,7 @@ export function createActivityRules() {
             creatives: creatives.map((c) => c.name),
             catalog: catalogId ? `ID ${catalogId}` : undefined,
             objective: OBJECTIVE_LABEL[campaign?.objective] ?? campaign?.objective,
+            status: body?.activate === true ? 'Publicada já ativa' : 'Publicada pausada', // a pessoa escolhe: ativa gasta assim que o TikTok aprovar
           },
         };
       },

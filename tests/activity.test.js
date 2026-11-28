@@ -118,7 +118,11 @@ describe('Registro de atividades: regras de cada rota (sem servidor)', () => {
     const rule = find('POST', '/api/campaigns/3/publish');
     const out = await rule.describe(ctx({ match: rule.pattern.exec('/api/campaigns/3/publish'), body: { confirm: true, advertiserId: '9001' }, result: {} }));
     assert.equal(out.target, 'Campanha X');
-    assert.deepEqual(out.details, { account: 'Loja Um (ID 9001)', link: 'https://loja.com/p?utm=a', creatives: ['criativo-7.mp4', 'criativo-8.mp4', 'criativo-9.mp4'], catalog: 'ID 555', objective: 'Tráfego' });
+    assert.deepEqual(out.details, { account: 'Loja Um (ID 9001)', link: 'https://loja.com/p?utm=a', creatives: ['criativo-7.mp4', 'criativo-8.mp4', 'criativo-9.mp4'], catalog: 'ID 555', objective: 'Tráfego', status: 'Publicada pausada' }, 'sem a escolha, o padrão é pausada');
+    const active = await rule.describe(ctx({ match: rule.pattern.exec('/api/campaigns/3/publish'), body: { confirm: true, advertiserId: '9001', activate: true }, result: {} }));
+    assert.equal(active.details.status, 'Publicada já ativa', 'publicar já ativa fica registrado');
+    const stringy = await rule.describe(ctx({ match: rule.pattern.exec('/api/campaigns/3/publish'), body: { confirm: true, advertiserId: '9001', activate: 'true' }, result: {} }));
+    assert.equal(stringy.details.status, 'Publicada pausada', 'só o booleano verdadeiro conta como ativa');
   });
 
   it('transferência: valor, sentido e conta; repetição de uma operação já feita não vira ação nova', () => {
