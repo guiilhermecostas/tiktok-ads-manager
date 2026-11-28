@@ -52,6 +52,9 @@ export function createFakeTiktok() {
     identityCreates: [], // corpos recebidos em /identity/create/
     failIdentityCreate: '', // texto: /identity/create/ responde este erro do TikTok
     failIdentityList: false, // true: /identity/get/ responde erro do TikTok
+    failCampaignMessage: '', // texto: a falha de criação da campanha (failCreate 'campaign') usa este erro em vez de "Campaign name already exists"
+    uniqueCampaignNames: false, // true: /campaign/create/ recusa nome repetido na mesma conta, como o TikTok ("Campaign name already exists")
+    campaignNamesByAdvertiser: {}, // conta -> nomes de campanha já criados
     pixelEventCreates: [], // corpos recebidos em /pixel/event/create/
     failPixelEventCreate: '', // texto: /pixel/event/create/ responde este erro do TikTok
     pixelLinks: {}, // "bcId:códigoDoPixel" -> contas vinculadas ([advertiserId, …]), como em /bc/pixel/link/*
@@ -796,8 +799,13 @@ export function createFakeTiktok() {
 
       case '/campaign/create/':
         if (state.failForAdvertiser.get(body?.advertiser_id) === 'campaign') return reply({}, 40002, 'Campaign name already exists');
-        if (state.failCreate.has('campaign')) return reply({}, 40002, 'Campaign name already exists');
+        if (state.failCreate.has('campaign')) return reply({}, 40002, state.failCampaignMessage || 'Campaign name already exists');
         if (state.strictCatalog && catalogCampaignError(body)) return reply({}, 40002, catalogCampaignError(body));
+        if (state.uniqueCampaignNames) {
+          const used = (state.campaignNamesByAdvertiser[body?.advertiser_id] ??= new Set());
+          if (used.has(body?.campaign_name)) return reply({}, 40002, 'Campaign name already exists. Please try another one.');
+          used.add(body?.campaign_name);
+        }
         state.campaignsById[String(state.nextId + 1)] = body;
         return reply({ campaign_id: String(++state.nextId) });
       case '/adgroup/create/':

@@ -15,24 +15,29 @@ export function failureMessage(err) {
 
 /**
  * Publica a campanha nas contas escolhidas, UMA de cada vez: cada conta tem progresso, erro e retomada próprios, e a falha de uma não impede as outras.
- * `targets` é o painel "Publicar em" (mostra o andamento de cada conta). Devolve { succeeded: [ids], failed: número }.
+ * `targets` é o painel "Publicar em" (mostra o andamento de cada conta). Devolve { succeeded: [ids], failed: número, renamed: [{ id, name }] }.
  * Se a sessão cair (401) para: o resto falharia do mesmo jeito.
  */
 export async function publishToAccounts({ campaignId, ids, targets }) {
   const succeeded = [];
+  const renamed = []; // contas onde o TikTok já tinha uma campanha com o mesmo nome: o sistema numerou ("Nome (2)")
   let failed = 0;
   for (const id of ids) {
     targets.setResult(id, { state: 'running' });
     try {
       const overrides = targets.overridesFor(id);
-      await post(`/campaigns/${campaignId}/publish`, { confirm: true, advertiserId: id, ...(Object.keys(overrides).length ? { overrides } : {}) });
+      const result = await post(`/campaigns/${campaignId}/publish`, { confirm: true, advertiserId: id, ...(Object.keys(overrides).length ? { overrides } : {}) });
       targets.setResult(id, { state: 'done' });
       succeeded.push(id);
+      if (result.renamedTo) renamed.push({ id, name: result.renamedTo });
     } catch (err) {
       failed += 1;
       targets.setResult(id, { state: 'failed', message: failureMessage(err) });
       if (err.status === 401) break;
     }
   }
-  return { succeeded, failed };
+  return { succeeded, failed, renamed };
 }
+
+/** Aviso (ou nada) para as contas em que o nome da campanha já existia no TikTok e foi numerado. */
+export const renamedNotice = (renamed) => (renamed.length ? `${renamed.length === 1 ? 'Já existia uma campanha com esse nome na conta' : `Já existia uma campanha com esse nome em ${renamed.length} contas`}: a nova ficou como “${renamed[0].name}”${renamed.length > 1 ? ' (e parecidas)' : ''}.` : null);

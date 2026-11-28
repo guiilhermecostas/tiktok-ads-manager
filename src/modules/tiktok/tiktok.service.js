@@ -76,6 +76,34 @@ async function assertPixelEvent(api, token, advertiserId, config) {
   throw new HttpError(422, `O pixel ${pixel.name || pixelId} ainda não tem o evento “${pixelEventLabel(optimizationEvent)}” (ele tem: ${has}). Crie o evento no pixel (“Criar evento no pixel”, no passo “Meta e conversão”) ou escolha um que ele já tenha. Nada foi criado no TikTok.`, 'pixel_event_missing');
 }
 
+/** O TikTok não aceita duas campanhas com o mesmo nome na mesma conta de anúncio. */
+const CAMPAIGN_NAME_TAKEN = /campaign name (already )?exists?/i;
+const CAMPAIGN_NAME_MAX = 100; // limite do nome da campanha na especificação
+const MAX_NAME_TRIES = 20;
+
+/** "Nome" -> "Nome (2)", cabendo no limite do nome (corta o começo se precisar). */
+export function numberedName(base, n) {
+  const suffix = ` (${n})`;
+  return `${String(base).slice(0, CAMPAIGN_NAME_MAX - suffix.length).trimEnd()}${suffix}`;
+}
+
+/**
+ * Cria a campanha; se o nome já existe na conta (outra campanha, de outra rodada), tenta "Nome (2)", "Nome (3)"… em vez de falhar: rodar a mesma
+ * configuração duas vezes na mesma conta é normal. Devolve { id, name } (o nome que ficou no TikTok). Outros erros passam como vieram.
+ */
+async function createCampaignUnique(api, token, advertiserId, config) {
+  const base = config.campaign.name;
+  for (let attempt = 1; ; attempt += 1) {
+    const name = attempt === 1 ? base : numberedName(base, attempt);
+    try {
+      const id = await api.createCampaign(token, buildCampaignPayload(advertiserId, { ...config, campaign: { ...config.campaign, name } }));
+      return { id, name };
+    } catch (err) {
+      if (!(err instanceof HttpError && err.code === 'tiktok_error' && CAMPAIGN_NAME_TAKEN.test(err.message)) || attempt >= MAX_NAME_TRIES) throw err;
+    }
+  }
+}
+
 const isoDate = (date) => date.toISOString().slice(0, 10);
 
 /**
@@ -620,7 +648,9 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
           // Antes de criar QUALQUER coisa: o evento de conversão precisa existir no pixel (senão o grupo de anúncios é recusado depois da campanha criada).
           if (!ids.campaignId && !ids.adGroupId) await assertPixelEvent(api, token, advertiserId, campaignConfig);
           if (!ids.campaignId) {
-            ids.campaignId = await api.createCampaign(token, buildCampaignPayload(advertiserId, campaignConfig));
+            const created = await createCampaignUnique(api, token, advertiserId, campaignConfig);
+            ids.campaignId = created.id;
+            if (created.name !== campaignConfig.campaign.name) ids.campaignName = created.name; // já existia uma campanha com o nome pedido: o sistema numerou
             await onCreated?.('campaign', ids.campaignId);
           }
           if (!ids.adGroupId) {

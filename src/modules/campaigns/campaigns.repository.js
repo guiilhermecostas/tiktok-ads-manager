@@ -189,6 +189,30 @@ export function createCampaignsRepository(db) {
       );
       return rows[0] ? toPublication(rows[0]) : null;
     },
+    /**
+     * Campanha que uma tentativa ANTERIOR deste usuário criou no TikTok nesta conta e que ficou sem grupo de anúncios (a publicação parou no meio), de OUTRO rascunho com o mesmo nome.
+     * Serve para uma nova tentativa (ex.: a mesma configuração one-click rodada de novo) reaproveitar a campanha em vez de esbarrar em "Campaign name already exists".
+     * Devolve { publicationId, tiktokCampaignId, config } ou null. Só enxerga publicações do próprio usuário.
+     */
+    async findOrphanCampaign(userId, advertiserId, { name, excludeId }) {
+      const { rows } = await db.query(
+        `SELECT p.id AS publication_id, p.tiktok_campaign_id, c.config
+           FROM campaign_publications p JOIN campaigns c ON c.id = p.campaign_id
+          WHERE c.user_id = $1 AND p.advertiser_id = $2 AND p.campaign_id <> $3 AND lower(c.name) = lower($4)
+            AND p.tiktok_campaign_id IS NOT NULL AND p.tiktok_adgroup_id IS NULL AND p.published_at IS NULL
+          ORDER BY p.updated_at DESC, p.id DESC LIMIT 1`,
+        [userId, advertiserId, excludeId, name],
+      );
+      return rows[0] ? { publicationId: rows[0].publication_id, tiktokCampaignId: rows[0].tiktok_campaign_id, config: rows[0].config } : null;
+    },
+    /** Solta a campanha do TikTok de uma publicação (ela foi reaproveitada por outra): a linha antiga não a reivindica de novo. */
+    async releaseOrphanCampaign(userId, publicationId) {
+      await db.query(
+        `UPDATE campaign_publications p SET tiktok_campaign_id = NULL, error = 'A campanha criada aqui foi reaproveitada por uma publicação mais nova.', updated_at = now()
+           FROM campaigns c WHERE p.id = $1 AND c.id = p.campaign_id AND c.user_id = $2`,
+        [publicationId, userId],
+      );
+    },
     /** Status local da campanha (passa a "pausada" quando alguma publicação conclui: é assim que nasce no TikTok). */
     async setStatus(userId, id, status) {
       const { rows } = await db.query('UPDATE campaigns SET status = $1, updated_at = now() WHERE id = $2 AND user_id = $3 RETURNING *', [status, id, userId]);

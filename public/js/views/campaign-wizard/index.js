@@ -9,7 +9,7 @@ import { parseMoneyToCents } from '../../format.js';
 import { alertBox, button, confirmDialog, field as formField, openModal, spinner, stepper as stepperView, toast } from '../../ui.js';
 import { pickCreatives } from '../creatives/picker.js';
 import { renderStepForm } from './form-fields.js';
-import { publishToAccounts } from './publish-run.js';
+import { publishToAccounts, renamedNotice } from './publish-run.js';
 import { createPublishTargets } from './publish-targets.js';
 import { renderReview } from './review.js';
 
@@ -384,7 +384,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
         return;
       }
 
-      const { succeeded, failed } = await publishToAccounts({ campaignId: st.id, ids, targets });
+      const { succeeded, failed, renamed } = await publishToAccounts({ campaignId: st.id, ids, targets });
       st.changed = true;
       try {
         const fresh = (await get(`/campaigns/${st.id}`)).campaign;
@@ -398,6 +398,7 @@ export function openCampaignWizard(ctx, { campaignId = null, catalog = null, def
       targets.setBusy(false);
       if (succeeded.length && !failed) toast(succeeded.length === 1 ? 'Campanha publicada no TikTok (pausada).' : `Campanha publicada em ${succeeded.length} contas (pausadas).`);
       else if (succeeded.length) toast(`Publicada em ${succeeded.length} de ${ids.length} contas. Veja os erros abaixo.`, 'danger');
+      if (renamedNotice(renamed)) toast(renamedNotice(renamed), 'warning');
       else toast('Nenhuma conta foi publicada. Veja os erros abaixo.', 'danger');
       draw();
     }

@@ -582,6 +582,17 @@ Menu **Automação → Campanha one-click** (exige a área “Campanhas”). A p
   enquanto publica. O início do grupo de anúncios é sempre enviado (obrigatório no TikTok), no fuso da conta.
 - O banco evolui por **migrações** (`src/db/migrations.js`), sem perder dados.
 
+### Nome de campanha repetido (erro “Campaign name already exists”)
+
+O TikTok não aceita duas campanhas com o mesmo nome na mesma conta de anúncio. Rodar a mesma configuração one-click de novo cria um rascunho NOVO com o mesmo nome, então isso acontecia quando
+uma tentativa anterior tinha parado no meio (campanha criada no TikTok, grupo recusado) ou quando a configuração já tinha sido publicada naquela conta. Agora:
+- **Campanha que sobrou de uma tentativa que falhou é reaproveitada:** se este usuário já criou, NESTA conta, uma campanha de outro rascunho com o mesmo nome e ela ficou sem grupo de anúncios, e a parte
+  da campanha (objetivo, orçamento…) é idêntica, a nova publicação continua dela (sem criar outra) e a publicação antiga solta o ID (`campaign_publications.tiktok_campaign_id` nulo) para ninguém reivindicá-la
+  duas vezes. Nunca adota campanha de outra conta de anúncio nem de outra pessoa.
+- **Nome já usado por outra campanha:** o sistema tenta “Nome (2)”, “Nome (3)”… (até 20 tentativas, sempre dentro dos 100 caracteres) em vez de falhar; o rascunho local mantém o nome original, a resposta de
+  `POST /api/campaigns/:id/publish` traz `renamedTo` e a tela avisa (“Já existia uma campanha com esse nome na conta: a nova ficou como …”). Se todos os números estiverem ocupados, volta o erro do TikTok.
+- Qualquer outro erro do TikTok na criação da campanha segue como antes (uma única tentativa).
+
 ### Evento de conversão do pixel (erro “This pixel event type does not exist”)
 
 Em campanha de **conversões**, o grupo de anúncios otimiza por um **evento do pixel** (Compra, Início de pedido…) e o TikTok só aceita se o evento **já existir no pixel**; vincular o pixel

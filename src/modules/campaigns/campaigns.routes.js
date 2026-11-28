@@ -19,6 +19,10 @@ function parseLegacyCampaign(body) {
 
 const ADVERTISER_ID_RE = /^\d{1,24}$/;
 
+/** JSON com as chaves em ordem fixa: para comparar duas configurações sem depender da ordem em que foram gravadas. */
+const stable = (value) => JSON.stringify(value, (_key, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v));
+
+
 /**
  * Ajustes por conta: o que vale para o grupo de anúncios fica travado depois que o grupo existe no TikTok
  * (o servidor mantém o que foi usado na criação); o nível do anúncio ainda pode ser corrigido.
@@ -153,11 +157,23 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
       const persist = (extra) =>
         campaigns.saveProgress(req.actor.id, id, advertiserId, { overrides: Object.keys(overrides).length ? overrides : null, ...progress, ...extra });
 
+      // Esta conta ainda não tem campanha NESTE rascunho: uma tentativa anterior (outro rascunho com o mesmo nome, ex.: a mesma configuração one-click rodada de novo) pode ter
+      // criado a campanha no TikTok e parado antes do grupo de anúncios. Se a parte da campanha for idêntica, reaproveita em vez de esbarrar em "Campaign name already exists".
+      if (!progress.tiktokCampaignId) {
+        const orphan = await campaigns.findOrphanCampaign(req.actor.id, advertiserId, { name: current.name, excludeId: id });
+        if (orphan && stable(validateConfig(orphan.config).config.campaign) === stable(config.campaign)) {
+          progress.tiktokCampaignId = orphan.tiktokCampaignId;
+          await campaigns.releaseOrphanCampaign(req.actor.id, orphan.publicationId);
+          await persist({ error: null });
+        }
+      }
+
+      let created = null;
       try {
         // Criativos primeiro: se o envio de algum arquivo falhar, NADA foi criado no TikTok ainda.
         await assertCreativesOwned(req.actor, config);
         const assets = await creatives.resolveForPublish({ actor: req.actor, campaignId: id, advertiserId, config });
-        await tiktok.publishCampaign({
+        created = await tiktok.publishCampaign({
           actor: req.actor,
           advertiserId,
           config,
@@ -169,17 +185,17 @@ export function createCampaignsRouter({ campaigns, tiktok, creatives, limits = {
           },
         });
       } catch (err) {
-        const created = err.createdIds ?? {};
-        progress.tiktokCampaignId = created.campaignId ?? progress.tiktokCampaignId;
-        progress.tiktokAdGroupId = created.adGroupId ?? progress.tiktokAdGroupId;
-        progress.tiktokAdId = created.adId ?? progress.tiktokAdId;
+        const partial = err.createdIds ?? {};
+        progress.tiktokCampaignId = partial.campaignId ?? progress.tiktokCampaignId;
+        progress.tiktokAdGroupId = partial.adGroupId ?? progress.tiktokAdGroupId;
+        progress.tiktokAdId = partial.adId ?? progress.tiktokAdId;
         await persist({ error: (err instanceof HttpError ? err.message : 'Falha inesperada ao publicar.').slice(0, 300) });
         throw err;
       }
 
       // Tudo criado nesta conta: a campanha local passa a "pausada" (é assim que nasce no TikTok).
       const publication = await persist({ error: null, publishedAt: new Date().toISOString() });
-      res.json({ campaign: await campaigns.setStatus(req.actor.id, id, 'paused'), publication });
+      res.json({ campaign: await campaigns.setStatus(req.actor.id, id, 'paused'), publication, ...(created?.campaignName ? { renamedTo: created.campaignName } : {}) });
     } finally {
       publishing.delete(key);
     }

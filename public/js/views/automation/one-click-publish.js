@@ -1,7 +1,7 @@
 import { get, post } from '../../api.js';
 import { h, icon } from '../../dom.js';
 import { alertBox, button, confirmDialog, openModal, spinner, toast } from '../../ui.js';
-import { publishToAccounts } from '../campaign-wizard/publish-run.js';
+import { publishToAccounts, renamedNotice } from '../campaign-wizard/publish-run.js';
 import { createPublishTargets } from '../campaign-wizard/publish-targets.js';
 
 let active = null; // um pop-up por vez (duplo clique no botão não abre dois)
@@ -78,7 +78,7 @@ export function openOneClickPublish({ template, onDone }) {
       drawFooter();
       return undefined;
     }
-    const { succeeded, failed } = await publishToAccounts({ campaignId, ids, targets });
+    const { succeeded, failed, renamed } = await publishToAccounts({ campaignId, ids, targets });
     if (succeeded.length) published = true;
     try {
       publications = (await get(`/campaigns/${campaignId}`)).campaign.publications;
@@ -91,6 +91,7 @@ export function openOneClickPublish({ template, onDone }) {
     if (succeeded.length && !failed) toast(succeeded.length === 1 ? 'Publicada no TikTok (pausada).' : `Publicada em ${succeeded.length} contas (pausadas).`);
     else if (succeeded.length) toast(`Publicada em ${succeeded.length} de ${ids.length} contas. Veja os erros na lista.`, 'danger');
     else toast('Nenhuma conta foi publicada. Veja os erros na lista.', 'danger');
+    if (renamedNotice(renamed)) toast(renamedNotice(renamed), 'warning');
     drawFooter();
     return undefined;
   }
