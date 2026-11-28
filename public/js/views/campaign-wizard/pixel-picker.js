@@ -75,6 +75,7 @@ export function createPixelPicker({ id, value, disabled = false, error = false, 
       eventsBox,
       h('p', { class: 'field__hint' }, pixel.events.length ? 'Eventos que este pixel já tem:' : 'Este pixel ainda não tem eventos registrados (o TikTok atualiza essa lista a cada 2 a 4 horas).'),
       chips.length ? h('div', { class: 'pixel-picker__chips' }, chips) : null,
+      pixel.ownership === false ? h('p', { class: 'field__hint' }, 'Este pixel foi só compartilhado com esta conta (não foi criado nela): o TikTok pode não deixar criar eventos por aqui. Se isso acontecer, crie o evento no Gerenciador de Eventos da conta que criou o pixel.') : null,
       missing ? alertBox(`O evento de conversão da campanha, “${pixelEventLabel(wanted)}”, ainda não existe neste pixel: o TikTok recusa a campanha sem ele. Crie o evento ou escolha outro evento de conversão.`, 'warning') : null,
       create,
     );

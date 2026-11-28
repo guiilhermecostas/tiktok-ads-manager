@@ -48,6 +48,23 @@ function explainPixelLinkError(err) {
   return hint ? new HttpError(err.status, `${hint} (${err.message})`, err.code) : err;
 }
 
+/**
+ * Entre as contas da conexão, a que é DONA do pixel (a lista de pixels dela traz `ownership` verdadeiro para ele). Só procura quando a conta consultada não é a dona.
+ * Melhor esforço: conta com erro na consulta é pulada; no máximo MAX_OWNER_LOOKUPS contas são consultadas (cada consulta é uma chamada ao TikTok).
+ */
+const MAX_OWNER_LOOKUPS = 40;
+async function findOwningAdvertiser(api, token, advertiserIds, skipId, pixelId) {
+  for (const id of advertiserIds.filter((a) => a !== skipId).slice(0, MAX_OWNER_LOOKUPS)) {
+    try {
+      const pixel = (await api.listPixels(token, id)).find((p) => p.id === pixelId);
+      if (pixel?.ownership === true) return id;
+    } catch {
+      /* esta conta não deixou listar: tenta a próxima */
+    }
+  }
+  return null;
+}
+
 /** O TikTok recusa o grupo de anúncios quando o evento de conversão não existe no pixel: explica em português e diz o que fazer. */
 const PIXEL_EVENT_REJECTED = /pixel event (type )?does not exist|create(d)? the pixel event/i;
 function explainPublishError(err) {
@@ -55,6 +72,13 @@ function explainPublishError(err) {
   const explained = new HttpError(422, `O pixel escolhido não tem o evento de conversão da campanha. Crie o evento no pixel (no passo “Meta e conversão”, em “Criar evento no pixel”, ou no Gerenciador de Eventos do TikTok) ou escolha um evento que o pixel já tenha. O pixel precisa ter recebido ou configurado o evento; o TikTok atualiza essa lista a cada 2 a 4 horas. (${err.message})`, 'pixel_event_missing');
   explained.createdIds = err.createdIds;
   return explained;
+}
+
+/** O TikTok recusa alterar um pixel que a conta não pode modificar: explica as causas prováveis e os caminhos que funcionam (a mensagem original segue entre parênteses). */
+const PIXEL_NOT_MODIFIABLE = /pixel cannot be modified|cannot (be )?modif/i;
+function explainPixelEventError(err) {
+  if (!(err instanceof HttpError) || err.code !== 'tiktok_error' || !PIXEL_NOT_MODIFIABLE.test(err.message)) return err;
+  return new HttpError(422, `O TikTok não deixou alterar este pixel por esta conta (ele só foi compartilhado com ela, ou o usuário do acesso não tem permissão de edição no pixel). O que fazer: crie o evento direto no Gerenciador de Eventos do TikTok, na conta que criou o pixel (Pixel → Configurar eventos), ou escolha um evento que o pixel já tenha, ou use um pixel criado nesta conta. (${err.message})`, 'pixel_not_modifiable');
 }
 
 /**
@@ -768,7 +792,14 @@ export function createTiktokService({ client, repo, attempts, users, proxies = n
         const pixel = (await api.listPixels(token, advertiserId)).find((p) => p.id === pixelId);
         if (!pixel) throw notFound('Este pixel não aparece na lista da conta de anúncio. Vincule o pixel à conta primeiro.');
         if (pixel.events.some((e) => e.optimizationEvent === eventType)) return { created: false };
-        await api.createPixelEvent(token, { advertiserId, pixelId, eventType, eventName: clean });
+        // Pixel só compartilhado com esta conta: tenta pela conta DONA dele nesta conexão (quando houver); senão, tenta por esta mesma e o erro vem explicado.
+        let actingAdvertiser = advertiserId;
+        if (pixel.ownership === false) actingAdvertiser = (await findOwningAdvertiser(api, token, await repo.advertiserIds(advertiser.businessCenterId), advertiserId, pixelId)) ?? advertiserId;
+        try {
+          await api.createPixelEvent(token, { advertiserId: actingAdvertiser, pixelId, eventType, eventName: clean });
+        } catch (err) {
+          throw explainPixelEventError(err);
+        }
         return { created: true };
       });
       invalidate(); // a lista de pixels (com os eventos) da conta passa a mostrar o evento novo

@@ -60,6 +60,7 @@ describe('Eventos do pixel: listar, criar e avisar antes de publicar (API)', () 
     fake.state.pixels = {};
     fake.state.pixelEventCreates = [];
     fake.state.failPixelEventCreate = '';
+    fake.state.pixelEventDenied = new Set();
     fake.state.calls.length = 0;
     await user.client.post('/api/tiktok/business-centers', { name: 'BC 111', bcId: '111', accessToken: GOOD_TOKEN });
     return user;
@@ -134,6 +135,54 @@ describe('Eventos do pixel: listar, criar e avisar antes de publicar (API)', () 
     assert.match(res.json.error.message, /No permission to update this pixel/);
     fake.state.failPixelEventCreate = '';
     assert.equal((await createEvent(user, { pixelId: '123456', eventType: 'SHOPPING' })).status, 201, 'depois do erro tudo volta a funcionar');
+  });
+
+  // ---------- pixel só compartilhado ("Pixel cannot be modified.") ----------
+  const shared = (events = []) => pixelWith(events, { asset_ownership: { asset_relation_status: 'SHARED', ownership_status: false } });
+  const owned = (events = []) => pixelWith(events, { asset_ownership: { asset_relation_status: null, ownership_status: true } });
+
+  it('a lista informa se a conta é a DONA do pixel ou se ele foi só compartilhado com ela', async () => {
+    const user = await owner();
+    fake.state.pixels = { 9001: [shared(), pixelWith([], { pixel_id: '123457', asset_ownership: { asset_relation_status: null, ownership_status: true } }), pixelWith([], { pixel_id: '123458', asset_ownership: { asset_relation_status: 'TRANSFERRED', ownership_status: true } }), pixelWith([], { pixel_id: '123459', asset_ownership: { asset_relation_status: 'X<script>', ownership_status: 'sim' } })] };
+    const list = await pixels(user);
+    assert.deepEqual(list.map((p) => [p.ownership, p.relation]), [[false, 'SHARED'], [true, null], [true, 'TRANSFERRED'], [null, null]], 'valor estranho nunca é aceito');
+  });
+
+  it('pixel só compartilhado com a conta: o evento é criado pela conta DONA do pixel (quando há uma na conexão) e aparece para as duas', async () => {
+    const user = await owner();
+    fake.state.pixels = { 9001: [shared()], 9002: [owned()] };
+    fake.state.pixelEventDenied = new Set(['9001']); // por 9001 o TikTok responde "Pixel cannot be modified."
+    const res = await createEvent(user, { pixelId: '123456', eventType: 'SHOPPING' }); // pedido feito pela 9001
+    assert.equal(res.status, 201, res.text);
+    assert.deepEqual(res.json, { eventType: 'SHOPPING', created: true });
+    assert.deepEqual(fake.state.pixelEventCreates.map((c) => c.advertiser_id), ['9002'], 'quem criou foi a conta dona');
+    assert.deepEqual((await pixels(user, '9001'))[0].events.map((e) => e.optimizationEvent), ['SHOPPING'], 'a conta compartilhada também enxerga o evento');
+    fake.state.pixelEventDenied = new Set();
+  });
+
+  it('pixel compartilhado e nenhuma conta da conexão é a dona: tenta pela própria conta e, se o TikTok recusar, explica o motivo e o que fazer (com a mensagem original)', async () => {
+    const user = await owner();
+    fake.state.pixels = { 9001: [shared()], 9002: [shared()] };
+    fake.state.pixelEventDenied = new Set(['9001', '9002']);
+    const res = await createEvent(user, { pixelId: '123456', eventType: 'SHOPPING' });
+    fake.state.pixelEventDenied = new Set();
+    assert.equal(res.status, 422, res.text);
+    assert.equal(res.json.error.code, 'pixel_not_modifiable');
+    assert.match(res.json.error.message, /só foi compartilhado com ela|não tem permissão de edição/);
+    assert.match(res.json.error.message, /Gerenciador de Eventos do TikTok/);
+    assert.match(res.json.error.message, /Pixel cannot be modified/, 'a mensagem original segue entre parênteses');
+    assert.equal(fake.state.pixelEventCreates.length, 1, 'uma única tentativa de criar (a busca pela conta dona só lista pixels)');
+  });
+
+  it('a própria conta é a dona mas o TikTok recusa (sem permissão): mesmo erro explicado, sem procurar outra conta', async () => {
+    const user = await owner();
+    fake.state.pixels = { 9001: [owned()], 9002: [owned()] };
+    fake.state.pixelEventDenied = new Set(['9001']);
+    const res = await createEvent(user, { pixelId: '123456', eventType: 'SHOPPING' });
+    fake.state.pixelEventDenied = new Set();
+    assert.equal(res.status, 422);
+    assert.equal(res.json.error.code, 'pixel_not_modifiable');
+    assert.deepEqual(fake.state.pixelEventCreates.map((c) => c.advertiser_id), ['9001']);
   });
 
   // ---------- publicar ----------

@@ -607,6 +607,10 @@ Em campanha de **conversões**, o grupo de anúncios otimiza por um **evento do 
 - **Antes de publicar:** se o pixel aparece na lista da conta COM eventos e o escolhido não está entre eles, a publicação é recusada **antes de criar qualquer coisa** (422 `pixel_event_missing`, dizendo o que o pixel
   tem e o que fazer). Pixel novo (lista vazia: o TikTok atualiza essa lista a cada 2 a 4 horas), pixel que não aparece ou falha na consulta **não bloqueiam**; se o TikTok recusar mesmo assim, o erro vem
   **explicado em português** (mantendo a mensagem original entre parênteses) e a campanha retoma de onde parou depois de criar o evento.
+- **“Pixel cannot be modified.”** O TikTok recusa criar o evento quando a conta não pode alterar o pixel (ele só foi compartilhado com ela, ou o usuário do acesso não tem permissão de edição). `/pixel/list/`
+  informa `asset_ownership` (`ownership` verdadeiro = a conta é a dona; `SHARED`/`UNBOUND` = só compartilhado), que o seletor mostra como aviso. Ao criar o evento de um pixel só compartilhado, o servidor procura, entre as
+  contas da mesma conexão (até 40), a que é DONA do pixel e cria o evento por ela; se não houver dona na conexão (ou o TikTok recusar mesmo assim), o erro vem explicado (422 `pixel_not_modifiable`: causas prováveis e o que
+  fazer, com a mensagem original entre parênteses). O caminho que sempre funciona é criar o evento no Gerenciador de Eventos do TikTok, na conta que criou o pixel (Pixel → Configurar eventos).
 **Pendente de conferência com o TikTok real:** se `/pixel/event/create/` sem regras registra o evento em todos os tipos de pixel (a documentação não detalha) e a permissão do token para alterar o pixel.
 
 ### Identidade do anúncio (identidade personalizada com nome e foto)

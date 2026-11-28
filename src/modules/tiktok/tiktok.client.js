@@ -158,6 +158,16 @@ export function numericFields(object) {
 
 /** ID numérico do TikTok (só dígitos) ou null: nunca guardamos texto livre vindo da resposta. */
 /**
+ * Quem é o dono do pixel em relação à conta consultada (`asset_ownership` de /pixel/list/): `ownership` true = a conta é a dona; false = o pixel foi só COMPARTILHADO
+ * com ela (ou desvinculado); null = o TikTok não informou. `relation`: null (dona, sem BC), TRANSFERRED, SHARED ou UNBOUND (nulo se não informado).
+ */
+function ownershipOf(raw) {
+  const relation = /^[A-Z_]{3,20}$/.test(String(raw?.asset_relation_status ?? '')) ? raw.asset_relation_status : null;
+  const ownership = typeof raw?.ownership_status === 'boolean' ? raw.ownership_status : null;
+  return { ownership, relation };
+}
+
+/**
  * Eventos que o pixel já tem (`events` de /pixel/list/): [{ optimizationEvent, name }]. Só os eventos padrão com `optimization_event` no formato do TikTok
  * (o valor que o grupo de anúncios usa); eventos personalizados e valores estranhos ficam de fora. Sem repetição.
  */
@@ -498,7 +508,7 @@ export function createTiktokClient({ config, fetchFn = fetch, route = null }) {
         const list = Array.isArray(data.pixels) ? data.pixels : Array.isArray(data.list) ? data.list : [];
         for (const item of list) {
           const id = digitsOrNull(item?.pixel_id);
-          if (id && !found.has(id)) found.set(id, { id, code: String(item?.pixel_code ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64), name: String(item?.pixel_name ?? '').slice(0, 120), ownerBcId: digitsOrNull(item?.owner_bc_id), events: pixelEventsOf(item?.events) }); // owner_bc_id: BC dona do pixel (precisa dela para vincular); events: o que o pixel já tem
+          if (id && !found.has(id)) found.set(id, { id, code: String(item?.pixel_code ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64), name: String(item?.pixel_name ?? '').slice(0, 120), ownerBcId: digitsOrNull(item?.owner_bc_id), events: pixelEventsOf(item?.events), ...ownershipOf(item?.asset_ownership) }); // owner_bc_id: BC dona do pixel (precisa dela para vincular); events: o que o pixel já tem; ownership: se ESTA conta é a dona
         }
         if (!list.length || page >= (num(data.page_info?.total_page) || 1)) break;
       }

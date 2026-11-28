@@ -56,6 +56,7 @@ export function createFakeTiktok() {
     uniqueCampaignNames: false, // true: /campaign/create/ recusa nome repetido na mesma conta, como o TikTok ("Campaign name already exists")
     campaignNamesByAdvertiser: {}, // conta -> nomes de campanha já criados
     pixelEventCreates: [], // corpos recebidos em /pixel/event/create/
+    pixelEventDenied: new Set(), // contas de anúncio por onde /pixel/event/create/ responde "Pixel cannot be modified." (pixel só compartilhado / sem permissão)
     failPixelEventCreate: '', // texto: /pixel/event/create/ responde este erro do TikTok
     pixelLinks: {}, // "bcId:códigoDoPixel" -> contas vinculadas ([advertiserId, …]), como em /bc/pixel/link/*
     pixelLinkCalls: [], // corpos recebidos em /bc/pixel/link/update/
@@ -515,12 +516,15 @@ export function createFakeTiktok() {
       case '/pixel/event/create/': {
         state.pixelEventCreates.push(body);
         if (state.failPixelEventCreate) return reply({}, 40002, state.failPixelEventCreate);
+        if (state.pixelEventDenied.has(body?.advertiser_id)) return reply({}, 40002, 'Pixel cannot be modified.');
         const pixel = (state.pixels[body?.advertiser_id] ?? []).find((p) => p.pixel_id === body?.pixel_id);
         if (!pixel) return reply({}, 40002, 'Pixel not found');
         const VALID = ['SHOPPING', 'INITIATE_ORDER', 'ON_WEB_CART', 'ADD_BILLING', 'ON_WEB_DETAIL', 'FORM', 'ON_WEB_REGISTER', 'ON_WEB_SUBSCRIBE', 'ON_WEB_SEARCH', 'ON_WEB_ADD_TO_WISHLIST', 'CONSULT', 'DOWNLOAD_START'];
         for (const event of body.pixel_events ?? []) {
           if (!VALID.includes(event.event_type)) return reply({}, 40002, 'event_type is invalid');
-          pixel.events = [...(pixel.events ?? []), { event_type: event.event_type, optimization_event: event.event_type, event_name: event.event_name ?? '', event_id: String(++state.nextId) }];
+          const created = { event_type: event.event_type, optimization_event: event.event_type, event_name: event.event_name ?? '', event_id: String(++state.nextId) };
+          // o evento fica no PIXEL: aparece na lista de todas as contas que enxergam esse pixel
+          for (const list of Object.values(state.pixels)) for (const p of list) if (p.pixel_id === body.pixel_id) p.events = [...(p.events ?? []), created];
         }
         return reply({});
       }
